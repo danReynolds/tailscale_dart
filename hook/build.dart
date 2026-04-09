@@ -36,7 +36,7 @@ void main(List<String> args) async {
 
     final targetOS = input.config.code.targetOS;
     final targetArch = input.config.code.targetArchitecture;
-    final packageRoot = input.packageRoot.path;
+    final packageRoot = input.packageRoot.toFilePath();
     final outDir = input.outputDirectory;
 
     final goos = _toGOOS(targetOS);
@@ -45,7 +45,7 @@ void main(List<String> args) async {
 
     // Output filename
     final libName = targetOS.dylibFileName('tailscale');
-    final libPath = outDir.resolve(libName).path;
+    final libPath = outDir.resolve(libName).toFilePath();
 
     // Go source entry point
     final mainGo = p.join(packageRoot, 'go', 'cmd', 'dylib', 'main.go');
@@ -81,7 +81,7 @@ void main(List<String> args) async {
     // using clang. All other platforms use c-shared directly.
     final buildMode = isIOS ? 'c-archive' : 'c-shared';
     final goOutput = isIOS
-        ? outDir.resolve('libtailscale.a').path
+        ? outDir.resolve('libtailscale.a').toFilePath()
         : libPath;
 
     // Run go build

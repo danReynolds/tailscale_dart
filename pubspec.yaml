@@ -1,13 +1,13 @@
 name: tailscale
-description: A custom Tailscale Userspace Networking bridge for Dune.
-publish_to: none
-version: 0.0.3
+description: Embed Tailscale userspace networking in any Dart or Flutter app. Join a tailnet, discover peers, and communicate over encrypted WireGuard tunnels — no Tailscale app required.
+version: 0.1.0
+repository: https://github.com/dan/tailscale_dart
+
 environment:
   sdk: ^3.10.4
 
 dependencies:
   ffi: ^2.1.0
-  meta: ^1.9.0
 
 hooks:
   hooks: ^1.0.0

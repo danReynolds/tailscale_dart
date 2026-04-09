@@ -1,0 +1,8 @@
+.dart_tool/
+build/
+pubspec.lock
+
+# Go build artifacts (the build hook generates these)
+go/libdune_tsnet.*
+go/libtailscale.*
+go/build/

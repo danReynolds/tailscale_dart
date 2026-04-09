@@ -4,8 +4,6 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
-import 'package:meta/meta.dart' show visibleForTesting;
-
 import 'src/ffi_bindings.dart' as native;
 import 'src/status.dart';
 
@@ -32,7 +30,6 @@ class DuneTsnet {
   Timer? _statusPoller;
   TailscaleStatus? _lastStatus;
 
-  @visibleForTesting
   set proxyPortForTesting(int port) => _proxyPort = port;
 
   /// The local proxy port (0 if not started).

@@ -24,7 +24,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Windows excluded: cgo requires MinGW/gcc which isn't on the runner.
+        # Windows is tested via Go unit tests (no cgo needed for pure Go tests).
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1

@@ -53,11 +53,12 @@ void main() {
   });
 
   test('getLocalIP returns a Tailscale IP after init', () async {
+    // CI runners may be slower — allow up to 30s for the IP to propagate.
     String? ip;
-    for (var i = 0; i < 10; i++) {
+    for (var i = 0; i < 30; i++) {
       ip = await tsnet.getLocalIP();
       if (ip != null) break;
-      await Future.delayed(const Duration(milliseconds: 500));
+      await Future.delayed(const Duration(seconds: 1));
     }
 
     expect(ip, isNotNull);

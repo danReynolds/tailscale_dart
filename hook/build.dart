@@ -147,7 +147,7 @@ Future<String> _findGo() async {
   final whichCmd = Platform.isWindows ? 'where' : 'which';
   final whichResult = await Process.run(whichCmd, ['go']);
   if (whichResult.exitCode == 0) {
-    return (whichResult.stdout as String).trim().split('\n').first;
+    return (whichResult.stdout as String).trim().split(RegExp(r'[\r\n]+')).first;
   }
 
   // Check GOROOT if set

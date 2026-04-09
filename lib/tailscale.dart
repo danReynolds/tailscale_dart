@@ -186,12 +186,14 @@ class DuneTsnet {
 
   /// Clears authentication state and stops the server.
   ///
-  /// No-op if not initialized. Runs on a background isolate.
+  /// Always deletes the state directory, even if the engine is already stopped.
+  /// Runs on a background isolate.
   Future<void> logout(String stateDir) async {
-    if (!_initialized) return;
-    _stopStatusPoller();
-    _initialized = false;
-    _proxyPort = 0;
+    if (_initialized) {
+      _stopStatusPoller();
+      _initialized = false;
+      _proxyPort = 0;
+    }
     await Isolate.run(() {
       final dirPtr = stateDir.toNativeUtf8();
       native.duneLogout(dirPtr);

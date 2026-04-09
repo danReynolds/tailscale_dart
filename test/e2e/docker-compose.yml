@@ -1,0 +1,12 @@
+services:
+  headscale:
+    image: headscale/headscale:0.25
+    command: serve
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./headscale-config.yaml:/etc/headscale/config.yaml
+      - headscale-data:/var/lib/headscale
+
+volumes:
+  headscale-data:

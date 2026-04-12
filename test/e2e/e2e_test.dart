@@ -66,9 +66,15 @@ void main() {
   });
 
   test('status returns valid status with our node', () async {
-    final s = await tsnet.status();
+    // CI runners may need time for the node to reach Running state.
+    TailscaleStatus? s;
+    for (var i = 0; i < 30; i++) {
+      s = await tsnet.status();
+      if (s.isRunning) break;
+      await Future.delayed(const Duration(seconds: 1));
+    }
 
-    expect(s.isRunning, isTrue);
+    expect(s!.isRunning, isTrue);
   });
 
   test('status().onlinePeers returns a list (may be empty with one node)',

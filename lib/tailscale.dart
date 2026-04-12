@@ -58,20 +58,24 @@ class Tailscale {
 
   static String? _stateDir;
   static bool _initialized = false;
+  static void Function(TailscaleStatus status)? _onStatusChange;
+  static void Function(String error)? _onError;
 
   bool _starting = false;
   bool _started = false;
   int _proxyPort = 0;
   _TailscaleHttpClient? _http;
+  ReceivePort? _receivePort;
+  bool _dartApiInitialized = false;
 
   /// Whether the Tailscale node is currently running.
   bool get isRunning => _started;
 
   /// An HTTP client that routes requests through the Tailscale tunnel.
   ///
-  /// Created lazily on first access. Use like any [pkg_http.Client]:
+  /// Created lazily on first access. Use like any `http.Client`:
   /// ```dart
-  /// await tsnet.client.get(Uri.parse('http://100.64.0.5/api/data'));
+  /// await tsnet.http.get(Uri.parse('http://100.64.0.5/api/data'));
   /// ```
   ///
   /// Throws [StateError] if [start] hasn't been called.
@@ -83,13 +87,14 @@ class Tailscale {
   }
 
   /// The local proxy port. Exposed for advanced use cases — most callers
-  /// should use [client] instead.
+  /// should use [http] instead.
   int get proxyPort => _proxyPort;
 
   /// Creates an HTTP client that routes requests through a proxy on [port].
   ///
   /// Useful for testing or when you need a client for a specific proxy port.
-  static pkg_http.Client createProxyClient(int port) => _TailscaleHttpClient(port);
+  static pkg_http.Client createProxyClient(int port) =>
+      _TailscaleHttpClient(port);
 
   /// Configures the Tailscale library. Call this once at app startup,
   /// alongside other library initializers (Firebase, Supabase, etc.).
@@ -101,20 +106,28 @@ class Tailscale {
   /// - 0 = silent (default)
   /// - 1 = errors only
   /// - 2 = info + errors (verbose)
+  ///
+  /// [onStatusChange] fires whenever the Tailscale backend state changes
+  /// (e.g. connecting, running, needs login). Pushed from Go — no polling.
+  ///
+  /// [onError] fires when the Go engine encounters an error.
   static void init({
     required String stateDir,
     int logLevel = 0,
+    void Function(TailscaleStatus status)? onStatusChange,
+    void Function(String error)? onError,
   }) {
     _stateDir = stateDir;
     _initialized = true;
+    _onStatusChange = onStatusChange;
+    _onError = onError;
     native.duneSetLogLevel(logLevel);
   }
 
   /// Checks if the configured state directory contains a valid machine key
   /// from a previous session.
   ///
-  /// Call [init] first. Use this to decide whether to reconnect automatically
-  /// or prompt for an auth key.
+  /// Call [init] first.
   Future<bool> isProvisioned() {
     _ensureInitialized();
     final dir = _stateDir!;
@@ -132,21 +145,18 @@ class Tailscale {
 
   /// Starts the Tailscale node and connects to the control plane.
   ///
-  /// After start, use [client] to make HTTP requests to peers on the tailnet.
+  /// Returns when the node is in the "Running" state (connected and ready
+  /// to send/receive traffic), or throws [TimeoutException] if the node
+  /// doesn't reach Running within [timeout].
   ///
-  /// On first use, provide [authKey] and [controlUrl] to register the node.
-  /// On subsequent launches, the node reconnects using stored credentials —
-  /// these parameters can be omitted. To switch tailnets, delete the
-  /// state directory and call [start] with new credentials.
+  /// After start, use [http] to make requests to peers.
+  ///
+  /// On first use, provide [authKey] to register the node. On subsequent
+  /// launches, the node reconnects using stored credentials — [authKey]
+  /// can be omitted. To switch tailnets, delete the state directory and
+  /// call [start] with new credentials.
   ///
   /// To accept incoming traffic, call [listen] after start.
-  ///
-  /// Runs on a background isolate — does not block the calling isolate.
-  ///
-  /// Throws [StateError] if [init] hasn't been called, if already started,
-  /// or if another start is in progress.
-  ///
-  /// Throws [TimeoutException] if the operation takes longer than [timeout].
   Future<void> start({
     String nodeName = '',
     String authKey = '',
@@ -165,6 +175,7 @@ class Tailscale {
     final stateDir = _stateDir!;
 
     try {
+      // Boot the Go engine on a background isolate.
       final proxyPort = await Isolate.run(() {
         final p1 = nodeName.toNativeUtf8();
         final p2 = authKey.toNativeUtf8();
@@ -187,21 +198,25 @@ class Tailscale {
           calloc.free(p3);
           calloc.free(p4);
         }
-      }).timeout(
-        timeout,
-        onTimeout: () => throw TimeoutException(
-          'Tailscale start timed out after $timeout. '
-          'Check that the control server at $controlUrl is reachable.',
-          timeout,
-        ),
-      );
+      });
 
       if (proxyPort == 0) {
         throw Exception('Failed to start Tailscale (proxy port 0)');
       }
 
       _proxyPort = proxyPort;
+
+      // Set up the push channel and wait for Running state.
+      _setupPushChannel();
+
+      await _waitForRunning(timeout);
+
       _started = true;
+    } catch (e) {
+      // Clean up on failure.
+      _teardownPushChannel();
+      _proxyPort = 0;
+      rethrow;
     } finally {
       _starting = false;
     }
@@ -212,9 +227,6 @@ class Tailscale {
   /// Tailnet peers can reach this node on port 80. Traffic is forwarded to
   /// `localhost:<port>`. If [port] is 0 (default), an ephemeral port is
   /// allocated — bind your server to the returned port.
-  ///
-  /// If [port] is provided, traffic is forwarded to that port (your server
-  /// should already be listening there).
   ///
   /// Can be called multiple times to change the target port.
   ///
@@ -266,9 +278,88 @@ class Tailscale {
     _proxyPort = 0;
     _http?.close();
     _http = null;
+    _teardownPushChannel();
     await Isolate.run(() {
       native.duneStop();
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Push channel (Go → Dart via NativePort)
+  // ---------------------------------------------------------------------------
+
+  Completer<void>? _runningCompleter;
+
+  void _setupPushChannel() {
+    // Initialize the Dart native API (idempotent — safe to call multiple times
+    // but only the first call does anything).
+    if (!_dartApiInitialized) {
+      native.duneInitDartAPI(ffi.NativeApi.initializeApiDLData);
+      _dartApiInitialized = true;
+    }
+
+    // Create a receive port for Go to push messages to.
+    _receivePort = ReceivePort();
+    native.duneSetDartPort(_receivePort!.sendPort.nativePort);
+
+    _receivePort!.listen(_handlePushMessage);
+
+    // Start the Go-side state watcher.
+    native.duneStartWatch();
+  }
+
+  void _teardownPushChannel() {
+    native.duneStopWatch();
+    native.duneSetDartPort(0);
+    _receivePort?.close();
+    _receivePort = null;
+  }
+
+  void _handlePushMessage(dynamic message) {
+    if (message is! String) return;
+
+    try {
+      final parsed = jsonDecode(message) as Map<String, dynamic>;
+
+      if (parsed['type'] == 'error') {
+        final error = parsed['error'] as String? ?? 'Unknown error';
+        _onError?.call(error);
+        return;
+      }
+
+      if (parsed['type'] == 'status') {
+        final state = parsed['state'] as String?;
+
+        // Resolve the Running completer if we're waiting for it.
+        if (state == 'Running' && _runningCompleter != null && !_runningCompleter!.isCompleted) {
+          _runningCompleter!.complete();
+        }
+
+        // Fire the onStatusChange callback with a full status snapshot.
+        if (_onStatusChange != null) {
+          status().then((s) => _onStatusChange?.call(s));
+        }
+      }
+    } catch (_) {
+      // Malformed message from Go — ignore.
+    }
+  }
+
+  Future<void> _waitForRunning(Duration timeout) async {
+    _runningCompleter = Completer<void>();
+
+    try {
+      await _runningCompleter!.future.timeout(
+        timeout,
+        onTimeout: () => throw TimeoutException(
+          'Tailscale did not reach Running state within $timeout. '
+          'Check that the control server is reachable.',
+          timeout,
+        ),
+      );
+    } finally {
+      _runningCompleter = null;
+    }
   }
 
   void _ensureInitialized() {

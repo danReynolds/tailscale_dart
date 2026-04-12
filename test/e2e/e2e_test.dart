@@ -42,65 +42,46 @@ void main() {
     } catch (_) {}
   });
 
-  test('start connects to Headscale', () async {
+  test('start connects and reaches Running state', () async {
+    // start() returns only when the node is Running — no polling needed.
     await tsnet.start(
       nodeName: 'dune-e2e-test',
       authKey: authKey,
       controlUrl: controlUrl,
+      timeout: const Duration(seconds: 60),
     );
 
+    expect(tsnet.isRunning, isTrue);
     expect(tsnet.proxyPort, greaterThan(0));
   });
 
-  test('status returns our Tailscale IP after init', () async {
-    // CI runners may be slower — allow up to 30s for the IP to propagate.
-    TailscaleStatus? s;
-    for (var i = 0; i < 30; i++) {
-      s = await tsnet.status();
-      if (s.ipv4 != null) break;
-      await Future.delayed(const Duration(seconds: 1));
-    }
+  test('status returns our Tailscale IP', () async {
+    final s = await tsnet.status();
 
-    expect(s, isNotNull);
-    expect(s!.ipv4, startsWith('100.'));
+    expect(s.isRunning, isTrue);
+    expect(s.ipv4, startsWith('100.'));
   });
 
-  test('status returns valid status with our node', () async {
-    // CI runners may need time for the node to reach Running state.
-    TailscaleStatus? s;
-    for (var i = 0; i < 30; i++) {
-      s = await tsnet.status();
-      if (s.isRunning) break;
-      await Future.delayed(const Duration(seconds: 1));
-    }
-
-    expect(s!.isRunning, isTrue);
-  });
-
-  test('status().onlinePeers returns a list (may be empty with one node)',
-      () async {
+  test('status.onlinePeers returns a list', () async {
     final s = await tsnet.status();
     expect(s.onlinePeers, isA<List<PeerStatus>>());
   });
 
-  test('tsnet.http can make requests through the tunnel', () async {
-    // We can't easily test a full HTTP request without a second peer,
-    // but we verify the client is wired to the correct proxy port.
+  test('http client is available', () async {
     expect(tsnet.http, isA<http.Client>());
-    expect(tsnet.proxyPort, greaterThan(0));
   });
 
-  test('stop shuts down cleanly', () async {
+  test('close shuts down cleanly', () async {
     await tsnet.close();
     expect(tsnet.isRunning, isFalse);
   });
 
-  test('stop + delete stateDir clears state', () async {
-    // Restart so we have a running node to stop.
+  test('restart and close + delete stateDir clears state', () async {
     await tsnet.start(
       nodeName: 'dune-e2e-test',
       authKey: authKey,
       controlUrl: controlUrl,
+      timeout: const Duration(seconds: 60),
     );
 
     await tsnet.close();

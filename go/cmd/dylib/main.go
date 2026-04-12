@@ -84,4 +84,27 @@ func DuneSetLogLevel(level C.int) {
 	atomic.StoreInt32(&tailscale.LogLevel, int32(level))
 }
 
+//export DuneInitDartAPI
+func DuneInitDartAPI(data unsafe.Pointer) C.int {
+	if tailscale.InitializeDartAPI(data) {
+		return 0
+	}
+	return -1
+}
+
+//export DuneSetDartPort
+func DuneSetDartPort(port C.int64_t) {
+	tailscale.SetDartPort(int64(port))
+}
+
+//export DuneStartWatch
+func DuneStartWatch() {
+	tailscale.StartWatch()
+}
+
+//export DuneStopWatch
+func DuneStopWatch() {
+	tailscale.StopWatch()
+}
+
 func main() {}

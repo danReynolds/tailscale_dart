@@ -62,3 +62,22 @@ external void duneFree(ffi.Pointer<Utf8> ptr);
 /// Sets the Go log level. 0=silent (default), 1=errors, 2=info.
 @ffi.Native<ffi.Void Function(ffi.Int32)>(symbol: 'DuneSetLogLevel')
 external void duneSetLogLevel(int level);
+
+/// Initializes the Dart DL API for native push notifications.
+/// Must be called once with NativeApi.initializeApiDLData.
+/// Returns 0 on success, -1 on version mismatch.
+@ffi.Native<ffi.Int Function(ffi.Pointer<ffi.Void>)>(symbol: 'DuneInitDartAPI')
+external int duneInitDartAPI(ffi.Pointer<ffi.Void> data);
+
+/// Sets the Dart ReceivePort ID for receiving push notifications from Go.
+@ffi.Native<ffi.Void Function(ffi.Int64)>(symbol: 'DuneSetDartPort')
+external void duneSetDartPort(int portId);
+
+/// Starts watching tsnet state changes and posting to the Dart port.
+/// Must be called after DuneStart and DuneSetDartPort.
+@ffi.Native<ffi.Void Function()>(symbol: 'DuneStartWatch')
+external void duneStartWatch();
+
+/// Stops the state watcher.
+@ffi.Native<ffi.Void Function()>(symbol: 'DuneStopWatch')
+external void duneStopWatch();

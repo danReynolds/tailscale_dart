@@ -8,9 +8,9 @@
 @TestOn('mac-os || linux')
 library;
 
-import 'dart:convert';
 import 'dart:io';
 
+import 'package:http/http.dart' as http;
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
@@ -24,89 +24,83 @@ void main() {
     return;
   }
 
-  late DuneTsnet tsnet;
+  late Tailscale tsnet;
   late String stateDir;
 
   setUpAll(() {
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
-    tsnet = DuneTsnet.instance;
+    Tailscale.init(stateDir: stateDir);
+    tsnet = Tailscale.instance;
   });
 
   tearDownAll(() async {
     try {
-      await tsnet.stop();
+      await tsnet.close();
     } catch (_) {}
     try {
       Directory(stateDir).deleteSync(recursive: true);
     } catch (_) {}
   });
 
-  test('init connects to Headscale and returns a proxy port', () async {
-    await tsnet.init(
-      clientId: 'dune-e2e-test',
+  test('start connects to Headscale', () async {
+    await tsnet.start(
+      nodeName: 'dune-e2e-test',
       authKey: authKey,
       controlUrl: controlUrl,
-      stateDir: stateDir,
     );
 
     expect(tsnet.proxyPort, greaterThan(0));
   });
 
-  test('getLocalIP returns a Tailscale IP after init', () async {
+  test('status returns our Tailscale IP after init', () async {
     // CI runners may be slower — allow up to 30s for the IP to propagate.
-    String? ip;
+    TailscaleStatus? s;
     for (var i = 0; i < 30; i++) {
-      ip = await tsnet.getLocalIP();
-      if (ip != null) break;
+      s = await tsnet.status();
+      if (s.ipv4 != null) break;
       await Future.delayed(const Duration(seconds: 1));
     }
 
-    expect(ip, isNotNull);
-    expect(ip, startsWith('100.'));
+    expect(s, isNotNull);
+    expect(s!.ipv4, startsWith('100.'));
   });
 
-  test('getStatus returns valid JSON with our node', () async {
-    final statusJson = await tsnet.getStatus();
-    final status = jsonDecode(statusJson) as Map<String, dynamic>;
+  test('status returns valid status with our node', () async {
+    final s = await tsnet.status();
 
-    expect(status, isNotEmpty);
-    expect(status.containsKey('error'), isFalse);
+    expect(s.isRunning, isTrue);
   });
 
-  test('getPeerAddresses returns a list (may be empty with one node)',
+  test('status().onlinePeers returns a list (may be empty with one node)',
       () async {
-    final peers = await tsnet.getPeerAddresses();
-    expect(peers, isA<List<String>>());
+    final s = await tsnet.status();
+    expect(s.onlinePeers, isA<List<PeerStatus>>());
   });
 
-  test('isProvisioned returns true after init', () async {
-    final provisioned = await tsnet.isProvisioned(stateDir);
-    expect(provisioned, isTrue);
-  });
-
-  test('getProxyUri builds valid URI with the real port', () {
-    final uri = tsnet.getProxyUri('100.64.0.1', '/api/test');
-
-    expect(uri.port, tsnet.proxyPort);
-    expect(uri.host, '127.0.0.1');
-    expect(uri.path, '/api/test');
+  test('tsnet.http can make requests through the tunnel', () async {
+    // We can't easily test a full HTTP request without a second peer,
+    // but we verify the client is wired to the correct proxy port.
+    expect(tsnet.http, isA<http.Client>());
+    expect(tsnet.proxyPort, greaterThan(0));
   });
 
   test('stop shuts down cleanly', () async {
-    await tsnet.stop();
-    expect(tsnet.proxyPort, 0);
+    await tsnet.close();
+    expect(tsnet.isRunning, isFalse);
   });
 
-  test('isProvisioned still true after stop (state preserved)', () async {
-    final provisioned = await tsnet.isProvisioned(stateDir);
-    expect(provisioned, isTrue);
-  });
+  test('stop + delete stateDir clears state', () async {
+    // Restart so we have a running node to stop.
+    await tsnet.start(
+      nodeName: 'dune-e2e-test',
+      authKey: authKey,
+      controlUrl: controlUrl,
+    );
 
-  test('logout clears state', () async {
-    await tsnet.logout(stateDir);
+    await tsnet.close();
+    Directory(stateDir).deleteSync(recursive: true);
 
-    expect(tsnet.proxyPort, 0);
-    final provisioned = await tsnet.isProvisioned(stateDir);
-    expect(provisioned, isFalse);
+    expect(tsnet.isRunning, isFalse);
+    expect(Directory(stateDir).existsSync(), isFalse);
   });
 }

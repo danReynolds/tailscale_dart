@@ -125,9 +125,10 @@ void main() {
       calloc.free(stateDir);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
-      expect(parsed.containsKey('port') || parsed.containsKey('error'), isTrue,
+      expect(
+          parsed.containsKey('proxyPort') || parsed.containsKey('error'), isTrue,
           reason:
-              'Expected {"port": N} or {"error": "..."}, got: $resultJson');
+              'Expected {"proxyPort": N, "listenPort": M} or {"error": "..."}, got: $resultJson');
     });
   });
 }

@@ -79,9 +79,6 @@ void main() async {
   results.add(
       await _bench('getPeerAddresses()', () => tsnet.getPeerAddresses()));
   results.add(await _bench('getStatus()', () => tsnet.getStatus()));
-  results.add(
-      await _bench('isProvisioned()', () => tsnet.isProvisioned(stateDir)));
-
   // --- getProxyUri() is sync ---
   {
     final wallUs = <int>[];
@@ -96,22 +93,6 @@ void main() async {
 
   // --- stop() ---
   results.add(await _benchOnce('stop()', () => tsnet.stop()));
-
-  // --- isProvisioned() after stop ---
-  results.add(await _bench(
-      'isProvisioned() (stopped)', () => tsnet.isProvisioned(stateDir)));
-
-  // --- logout() ---
-  {
-    await tsnet.init(
-      clientId: 'bench-node',
-      authKey: authKey,
-      controlUrl: controlUrl,
-      stateDir: stateDir,
-    );
-    await Future.delayed(const Duration(seconds: 1));
-    results.add(await _benchOnce('logout()', () => tsnet.logout(stateDir)));
-  }
 
   // --- Also benchmark raw Isolate.run() overhead with no-op ---
   results.add(await _bench('Isolate.run() baseline', () => Isolate.run(() => 42)));

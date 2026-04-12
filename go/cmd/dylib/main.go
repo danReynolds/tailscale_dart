@@ -25,7 +25,18 @@ func DuneStart(hostname *C.char, authKey *C.char, controlURL *C.char, stateDir *
 		b, _ := json.Marshal(m)
 		return C.CString(string(b))
 	}
-	return C.CString(fmt.Sprintf(`{"port": %d}`, port))
+	return C.CString(fmt.Sprintf(`{"proxyPort": %d}`, port))
+}
+
+//export DuneListen
+func DuneListen(localPort C.int) *C.char {
+	port, err := tailscale.Listen(int(localPort))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(fmt.Sprintf(`{"listenPort": %d}`, port))
 }
 
 //export DuneGetPeers
@@ -56,11 +67,6 @@ func DuneLogout(stateDir *C.char) {
 //export DuneStop
 func DuneStop() {
 	tailscale.Stop()
-}
-
-//export DuneListen
-func DuneListen(port C.int) {
-	tailscale.DuneListen(int(port))
 }
 
 //export DuneStatus

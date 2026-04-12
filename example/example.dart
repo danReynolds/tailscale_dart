@@ -1,39 +1,46 @@
 import 'package:tailscale/tailscale.dart';
 
 void main() async {
-  final tsnet = DuneTsnet.instance;
+  // 1. Configure once at app startup (before any other Tailscale calls).
+  Tailscale.init(
+    stateDir: '/path/to/persistent/state',
+    logLevel: 2, // 0 = silent, 1 = errors, 2 = verbose
+  );
 
-  // Optional: enable verbose logging for debugging
-  DuneTsnet.setLogLevel(2);
+  final tsnet = Tailscale.instance;
 
-  // Connect to a Tailscale (or Headscale) network
-  await tsnet.init(
-    clientId: 'my-app',
+  // 2. Start the Tailscale node.
+  await tsnet.start(
+    nodeName: 'my-app',
     authKey: 'tskey-auth-...',
     controlUrl: 'https://controlplane.tailscale.com',
-    stateDir: '/path/to/persistent/state',
   );
 
   // Your app is now a node on the tailnet
-  print('Local IP: ${await tsnet.getLocalIP()}');
-  print('Online peers: ${await tsnet.getPeerAddresses()}');
+  final status = await tsnet.status();
+  print('Local IP: ${status.ipv4}');
+  print('Online peers: ${status.onlinePeers.length}');
 
-  // Reach a peer via the built-in HTTP proxy
-  final uri = tsnet.getProxyUri('100.64.0.5', '/api/data');
-  print('Proxy URI: $uri');
+  // 3. Make requests to peers using the built-in HTTP client.
+  //    It transparently routes through the Tailscale tunnel.
+  final response = await tsnet.http.get(
+    Uri.parse('http://100.64.0.5/api/data'),
+  );
+  print('Response: ${response.body}');
+
+  // The raw proxy port is also available for advanced use cases:
+  print('Proxy port: ${tsnet.proxyPort}');
 
   // Accept incoming traffic from the tailnet
-  await tsnet.startReverseProxy(8080);
+  await tsnet.listen(port: 8080);
 
-  // React to status changes
-  tsnet.statusStream.listen((status) {
-    print('State: ${status.backendState}, peers: ${status.onlinePeers.length}');
-  });
+  // Check if we can reconnect on next launch
+  final provisioned = await tsnet.isProvisioned();
+  print('Has stored credentials: $provisioned');
 
-  // Get typed status
-  final status = await tsnet.getTypedStatus();
+  // Check status
   print('Running: ${status.isRunning}, healthy: ${status.isHealthy}');
 
   // Clean shutdown
-  await tsnet.stop();
+  await tsnet.close();
 }

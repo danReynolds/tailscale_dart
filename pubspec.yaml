@@ -8,6 +8,7 @@ environment:
 
 dependencies:
   ffi: ^2.1.0
+  http: ^1.2.0
 
 hooks:
   hooks: ^1.0.0

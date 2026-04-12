@@ -30,12 +30,9 @@ var (
 	proxyPort int
 	proxyLn   net.Listener // outgoing proxy listener
 
-	// reverseProxyLn is the listener for incoming Tailscale traffic (port 80).
-	// We keep track of it so we don't try to listen twice on the same tsnet.Server.
 	reverseProxyLn net.Listener
 
 	// targetPort is the local Dart port we forward to.
-	// It changes on every Hot Restart, so we protect it with its own mutex.
 	targetPort   int
 	targetPortMu sync.Mutex
 
@@ -94,8 +91,8 @@ func Stop() {
 	}
 }
 
-// Start initializes the Tailscale node and the HTTP proxy (for outgoing requests).
-// It returns the port number of the local HTTP proxy and any error.
+// Start initializes the Tailscale node and starts the outgoing HTTP proxy.
+// It returns the proxy port number. Call Listen() separately to accept incoming traffic.
 func Start(hostname, authKey, controlURL, stateDir string) (int, error) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -104,8 +101,6 @@ func Start(hostname, authKey, controlURL, stateDir string) (int, error) {
 		return proxyPort, nil
 	}
 
-	// Disable raw disco on Android/Linux to avoid permission errors
-	// when running without root.
 	os.Setenv("TS_ENABLE_RAW_DISCO", "false")
 
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
@@ -132,8 +127,6 @@ func Start(hostname, authKey, controlURL, stateDir string) (int, error) {
 	}
 
 	if err := srv.Start(); err != nil {
-		// On Android, we lack permissions to access netlink (for route monitoring).
-		// tsnet fails because of this, but it usually continues working fine in userspace mode.
 		if strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "netlink") {
 			logInfo("Ignoring expected Android permission error: %v", err)
 		} else {
@@ -143,17 +136,68 @@ func Start(hostname, authKey, controlURL, stateDir string) (int, error) {
 		}
 	}
 
-	// Start a local HTTP proxy to allow Dart to tunnel traffic (outgoing)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Start the outgoing HTTP proxy (Dart → tailnet peers)
+	outLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, fmt.Errorf("failed to listen for proxy: %v", err)
+		return 0, fmt.Errorf("failed to listen for outgoing proxy: %v", err)
 	}
-	proxyLn = listener
-	proxyPort = listener.Addr().(*net.TCPAddr).Port
-
-	go http.Serve(listener, http.HandlerFunc(handleOutgoingProxy))
+	proxyLn = outLn
+	proxyPort = outLn.Addr().(*net.TCPAddr).Port
+	go http.Serve(outLn, http.HandlerFunc(handleOutgoingProxy))
 
 	return proxyPort, nil
+}
+
+// Listen starts the reverse proxy that accepts incoming tailnet traffic on port 80
+// and forwards it to a local port. If localPort > 0, traffic is forwarded there.
+// If localPort == 0, an ephemeral port is allocated. Returns the local port.
+func Listen(localPort int) (int, error) {
+	mu.Lock()
+	s := srv
+	alreadyListening := reverseProxyLn != nil
+	mu.Unlock()
+
+	if s == nil {
+		return 0, fmt.Errorf("Listen called before Start")
+	}
+
+	// Allocate ephemeral port if needed
+	if localPort == 0 {
+		tmpLn, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return 0, fmt.Errorf("failed to allocate listen port: %v", err)
+		}
+		localPort = tmpLn.Addr().(*net.TCPAddr).Port
+		tmpLn.Close()
+	}
+
+	// Update the target port
+	targetPortMu.Lock()
+	targetPort = localPort
+	targetPortMu.Unlock()
+
+	// If already listening, the handler picks up the new targetPort
+	if alreadyListening {
+		return localPort, nil
+	}
+
+	ln, err := s.Listen("tcp", ":80")
+	if err != nil {
+		return 0, fmt.Errorf("failed to listen on tsnet:80: %v", err)
+	}
+
+	mu.Lock()
+	if reverseProxyLn != nil {
+		mu.Unlock()
+		ln.Close()
+		return localPort, nil
+	}
+	reverseProxyLn = ln
+	mu.Unlock()
+
+	go http.Serve(ln, http.HandlerFunc(handleReverseProxy))
+
+	return localPort, nil
 }
 
 // handleOutgoingProxy proxies HTTP requests from Dart to Tailscale peers.
@@ -168,7 +212,7 @@ func handleOutgoingProxy(w http.ResponseWriter, r *http.Request) {
 
 	client := s.HTTPClient()
 
-	targetHost := r.URL.Query().Get("target") // e.g. 100.x.y.z:8080
+	targetHost := r.URL.Query().Get("target")
 	realPath := r.URL.Path
 
 	if targetHost == "" {
@@ -204,54 +248,6 @@ func handleOutgoingProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
-}
-
-// DuneListen starts a reverse proxy that listens on the Tailscale network (port 80)
-// and forwards traffic to the specified local port (where Dart is listening).
-func DuneListen(localPort int) {
-	// Update the target port safely. The handler reads this dynamically,
-	// so existing connections pick up the change immediately.
-	targetPortMu.Lock()
-	targetPort = localPort
-	targetPortMu.Unlock()
-
-	mu.Lock()
-	s := srv
-	alreadyListening := reverseProxyLn != nil
-	mu.Unlock()
-
-	if s == nil {
-		logInfo("DuneListen called before Start")
-		return
-	}
-
-	logInfo("DuneListen: Updated forwarding target to local port %d", localPort)
-
-	// If we are already listening, the handler picks up the new targetPort.
-	if alreadyListening {
-		return
-	}
-
-	ln, err := s.Listen("tcp", ":80")
-	if err != nil {
-		logError("Failed to listen on tsnet:80: %v", err)
-		return
-	}
-
-	mu.Lock()
-	// Double-check: another goroutine may have started listening while we
-	// were blocked on s.Listen(). If so, close our duplicate.
-	if reverseProxyLn != nil {
-		mu.Unlock()
-		ln.Close()
-		return
-	}
-	reverseProxyLn = ln
-	mu.Unlock()
-
-	logInfo("DuneListen: Started listening on :80")
-
-	go http.Serve(ln, http.HandlerFunc(handleReverseProxy))
 }
 
 // handleReverseProxy forwards incoming Tailscale traffic to the local Dart server.
@@ -390,7 +386,6 @@ func DuneStatus() string {
 	return string(jsonBytes)
 }
 
-// jsonError returns a JSON object with a safely-encoded error string.
 func jsonError(err error) string {
 	m := map[string]string{"error": err.Error()}
 	b, _ := json.Marshal(m)

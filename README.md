@@ -1,66 +1,169 @@
 # tailscale
 
-A pure Dart package that embeds [Tailscale](https://tailscale.com) userspace networking via Go's `tsnet` library. It lets any Dart or Flutter application join a Tailscale network, reach peers over an encrypted WireGuard tunnel, and accept incoming connections — all without requiring a system-level Tailscale client (No Tailscale app required!).
+Embed a full [Tailscale](https://tailscale.com) node in any Dart or Flutter app. Your app joins the tailnet, gets its own IP, reaches peers, and accepts incoming connections — all over encrypted WireGuard tunnels. No Tailscale app required.
 
+Works with [Tailscale](https://tailscale.com) and self-hosted [Headscale](https://github.com/juanfont/headscale).
+
+```dart
+Tailscale.init(stateDir: '/path/to/state');
+
+final tsnet = Tailscale.instance;
+
+// Join a tailnet
+await tsnet.start(authKey: 'tskey-auth-...');
+
+// Discover peers
+final status = await tsnet.status();
+final peer = status.onlinePeers.first;
+
+// Make requests — just a standard http.Client
+final response = await tsnet.http.get(Uri.parse('http://${peer.ipv4}/api/data'));
+
+// Accept incoming traffic
+await tsnet.listen(port: 8080);
+```
+
+## Platform support
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| iOS | Full support | No VPN entitlement needed |
+| Android | Full support | Userspace mode, no root required |
+| macOS | Full support | |
+| Linux | Full support | |
+| Windows | Full support | |
+
+All platforms build automatically via a Dart [build hook](hook/build.dart) — no manual compilation, no pre-built binaries to manage.
 
 ## Features
 
-- **Outgoing HTTP proxy** — reach any peer via a local proxy. Standard `http.Client` just works.
-- **Reverse proxy** — expose a local Dart server to the tailnet. Peer IP forwarded in the `X-Dune-Peer-Ip` header.
-- **Peer discovery** — list online peers and their IPs.
-- **Persistent auth** — machine keys stored in SQLite. Reconnection is instant after first login.
+**Networking**
+- **Outgoing requests** — `tsnet.http` is a standard `http.Client` that routes through the WireGuard tunnel. Use it like any HTTP client.
+- **Incoming requests** — `tsnet.listen()` forwards tailnet traffic to your local server. Peer IP forwarded via `X-Dune-Peer-Ip` header.
+- **Peer discovery** — `tsnet.status()` returns typed status with online peers, local IP, health, and backend state.
+
+**Developer experience**
 - **Pure Dart** — no Flutter dependency. Works in Flutter apps, CLI tools, and server-side Dart.
-- **Non-blocking** — all FFI calls run on background isolates. Main isolate is never blocked.
-- **All platforms** — iOS, Android, macOS, Linux, Windows.
-- **Automatic native build** — a Dart build hook compiles the Go library automatically. No manual build steps.
+- **Zero jank** — every FFI call runs on a background isolate. The main isolate is never blocked.
+- **Automatic builds** — a Dart build hook compiles Go from source for the target platform. Add the dependency, have Go installed, done.
+- **Headscale support** — configurable control URL. Tested end-to-end against Headscale in CI.
 
-Your app becomes a first-class node on the Tailscale network. It gets its own IP, can reach other nodes, and other nodes can reach it — with full WireGuard encryption and Tailscale ACLs. Works with Tailscale's hosted control plane or self-hosted [Headscale](https://github.com/juanfont/headscale).
-
-## API
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `init(clientId, authKey, controlUrl, stateDir, {timeout})` | `Future<void>` | Connect to a Tailscale/Headscale network |
-| `getProxyUri(targetIp, path, {targetPort})` | `Uri` | Build a proxy URL to reach a peer (sync, pure Dart) |
-| `startReverseProxy(localPort)` | `Future<void>` | Listen on tailnet port 80, forward to local port |
-| `getPeerAddresses()` | `Future<List<String>>` | Online peer IPv4 addresses |
-| `getLocalIP()` | `Future<String?>` | This node's Tailscale IPv4 address |
-| `getStatus()` | `Future<String>` | Full Tailscale status as raw JSON |
-| `getTypedStatus()` | `Future<TailscaleStatus>` | Parsed status with typed fields |
-| `statusStream` | `Stream<TailscaleStatus>` | Reactive stream of status changes |
-| `isProvisioned(stateDir)` | `Future<bool>` | Whether a valid machine key exists |
-| `stop()` | `Future<void>` | Disconnect, preserve state |
-| `logout(stateDir)` | `Future<void>` | Disconnect and delete all state |
-| `setLogLevel(level)` | `void` | Set native log verbosity (0=silent, 1=errors, 2=info) |
-
-All methods except `getProxyUri` and `setLogLevel` run on background isolates and return Futures.
+**Reliability**
+- **Persistent auth** — machine keys stored in SQLite. Reconnects instantly on subsequent launches without an auth key.
+- **Start timeout** — configurable timeout prevents hanging if the control server is unreachable.
+- **Log control** — configure via `Tailscale.init(logLevel: 2)` for verbose output, or `0` (default) for silence.
+- **Tested** — unit, FFI integration, and full E2E tests against a real Headscale server, all running in CI.
 
 ## Usage
 
 ```dart
 import 'package:tailscale/tailscale.dart';
 
-final tsnet = DuneTsnet.instance;
+// 1. Configure once at app startup
+Tailscale.init(stateDir: '/path/to/state');
 
-// Join a Tailscale network from your app
-await tsnet.init(
-  clientId: 'my-app',
-  authKey: 'tskey-auth-...',
-  controlUrl: 'https://controlplane.tailscale.com',
-  stateDir: '/path/to/state',
-);
+final tsnet = Tailscale.instance;
 
-// Reach any device on your tailnet
-final uri = tsnet.getProxyUri('100.64.0.5', '/api/data');
-final response = await http.get(uri);
+// 2. Connect to the tailnet
+//    First launch: provide an auth key to register
+await tsnet.start(authKey: 'tskey-auth-...');
 
-// Accept incoming traffic from the tailnet
-await tsnet.startReverseProxy(8080);  // tailnet:80 → localhost:8080
+//    Subsequent launches: just start — reconnects from stored state
+await tsnet.start();
 
-// Discover peers on the network
-final peers = await tsnet.getPeerAddresses();  // ['100.64.0.5', '100.64.0.6']
-final myIp = await tsnet.getLocalIP();         // '100.64.0.2'
+// 3. Make requests to peers
+final response = await tsnet.http.get(Uri.parse('http://100.64.0.5/api/data'));
+
+// 4. Accept incoming requests from peers
+await tsnet.listen(port: 8080);  // tailnet:80 → localhost:8080
+
+// 5. Check status
+final status = await tsnet.status();
+print('IP: ${status.ipv4}');
+print('Peers: ${status.onlinePeers.length}');
+print('Running: ${status.isRunning}');
+print('Healthy: ${status.isHealthy}');
+
+// 6. Disconnect
+await tsnet.close();
+// To fully reset (switch tailnets), delete the stateDir after closing.
 ```
+
+## API
+
+### `Tailscale`
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `init({stateDir, logLevel})` | `static void` | Configure once at startup |
+| `instance` | `static Tailscale` | Singleton accessor |
+| `start({nodeName, authKey, controlUrl, timeout})` | `Future<void>` | Connect to the tailnet |
+| `listen({port})` | `Future<int>` | Accept incoming traffic from peers |
+| `status()` | `Future<TailscaleStatus>` | Current status (peers, IPs, health) |
+| `isProvisioned()` | `Future<bool>` | Whether stored credentials exist |
+| `close()` | `Future<void>` | Disconnect (preserves state) |
+| `http` | `http.Client` | HTTP client routed through the tunnel |
+| `proxyPort` | `int` | Local proxy port (for advanced use) |
+| `isRunning` | `bool` | Whether the node is connected |
+
+### `TailscaleStatus`
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `backendState` | `String` | "Running", "NeedsLogin", "Stopped", etc. |
+| `tailscaleIPs` | `List<String>` | This node's assigned IPs |
+| `ipv4` | `String?` | This node's IPv4 address |
+| `peers` | `List<PeerStatus>` | All peers on the tailnet |
+| `onlinePeers` | `List<PeerStatus>` | Online peers only |
+| `health` | `List<String>` | Health warnings (empty = healthy) |
+| `isRunning` | `bool` | Whether backend state is "Running" |
+| `isHealthy` | `bool` | Whether health is clean |
+
+### `PeerStatus`
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `publicKey` | `String` | Peer's public key |
+| `hostName` | `String` | Peer's hostname |
+| `ipv4` | `String?` | Peer's IPv4 address |
+| `online` | `bool` | Whether the peer is online |
+| `rxBytes` / `txBytes` | `int` | Traffic counters |
+| `lastSeen` | `DateTime?` | When the peer was last seen |
+| `relay` | `String?` | DERP relay region (null if direct) |
+| `curAddr` | `String?` | Direct address (null if relayed) |
+
+## Installation
+
+### Prerequisites
+
+- **Dart SDK** 3.10.4+ (or Flutter 3.41+)
+- **[Go](https://go.dev/dl/)** 1.25+
+
+For mobile targets:
+- **Android**: Android NDK (`sdkmanager --install "ndk;<version>"`)
+- **iOS**: Xcode with command-line tools
+
+### Setup
+
+```yaml
+dependencies:
+  tailscale:
+    git: https://github.com/danReynolds/tailscale_dart
+```
+
+The first `dart run`, `dart test`, or `flutter build` triggers the build hook which compiles Go for the target platform automatically. Subsequent builds are cached and only recompile when Go source files change.
+
+### Android
+
+Your app's `AndroidManifest.xml` must include:
+
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+```
+
+### iOS
+
+Deployment target must be iOS 13.0+.
 
 ## How it works
 
@@ -71,104 +174,22 @@ final myIp = await tsnet.getLocalIP();         // '100.64.0.2'
 └─────────────┘                  └──────────────┘                       └─────────────┘
 ```
 
-The Go layer compiles to a platform-specific native library (`.dylib`, `.so`, `.dll`, or static `.a` for iOS). A Dart [build hook](hook/build.dart) compiles the Go code automatically during `dart run` or `flutter build` — no manual build steps needed. Dart loads the result via `@Native` FFI annotations and runs every call on a background isolate so the main isolate is never blocked.
-
-## Installation
-
-### Prerequisites
-
-- **Dart SDK** 3.10.4+ (or Flutter 3.41+)
-- **[Go](https://go.dev/dl/)** 1.25+ — the build hook compiles Go automatically but needs the toolchain installed
-- For **Android**: Android NDK (install via `sdkmanager --install "ndk;<version>"`)
-- For **iOS**: Xcode with command-line tools
-
-### Setup
-
-Add to your `pubspec.yaml`:
-
-```yaml
-dependencies:
-  tailscale:
-    path: packages/tailscale  # or your path
-```
-
-That's it. The first `dart run`, `dart test`, or `flutter build` triggers the build hook which:
-
-1. Finds Go on your system (PATH, GOROOT, or common install locations)
-2. Verifies Go 1.25+
-3. Cross-compiles for the target platform and architecture
-4. Registers the native library as a code asset
-5. Caches the result — rebuilds only when Go source files change
-
-### Android
-
-Your app's `AndroidManifest.xml` must include the network permission:
-
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-```
-
-### iOS
-
-The native library targets iOS 13.0+. Ensure your app's deployment target in Xcode is set to 13.0 or higher.
+The Go layer wraps `tailscale.com/tsnet` and compiles to a platform-specific native library. A Dart [build hook](hook/build.dart) handles compilation automatically — detecting the target OS and architecture, finding the Go toolchain, cross-compiling with the appropriate flags (NDK for Android, Xcode for iOS), and registering the result as a native code asset. Dart communicates with Go via `@Native` FFI annotations and runs every call on a short-lived background isolate so the main isolate is never blocked.
 
 ## Testing
 
-### Unit tests
-
-Tests pure Dart logic — URI generation, JSON parsing, state management:
-
 ```bash
-cd packages/tailscale
+# Unit tests (pure Dart logic)
 dart test test/tailscale_test.dart
-```
 
-### Go tests
+# Go tests (SQLite store, proxy handlers, concurrency)
+cd go && go test -v ./...
 
-Tests the Go layer — SQLite state store, proxy handlers, error formatting, concurrency:
-
-```bash
-cd packages/tailscale/go
-go test -v ./...
-```
-
-### FFI integration tests
-
-Tests the real FFI boundary — symbol resolution, HasState against SQLite, error paths. The build hook compiles the native library automatically:
-
-```bash
-cd packages/tailscale
+# FFI integration tests (real native library, no network)
 dart test test/ffi_integration_test.dart
-```
 
-### End-to-end tests
-
-Full lifecycle test against a [Headscale](https://github.com/juanfont/headscale) control server running in Docker. Tests init, authentication, IP assignment, peer discovery, status, stop, and logout:
-
-```bash
-cd packages/tailscale
+# End-to-end tests (full lifecycle against Headscale in Docker)
 test/e2e/run_e2e.sh
 ```
 
-This script starts a Headscale container, creates a test user and ephemeral auth key, runs the Dart E2E test suite, and tears down the container on exit. No Tailscale account needed.
-
-### All tests
-
-| Suite | Command | Requirements |
-|-------|---------|-------------|
-| Dart unit | `dart test test/tailscale_test.dart` | Dart SDK + Go |
-| Go unit | `cd go && go test ./...` | Go |
-| FFI integration | `dart test test/ffi_integration_test.dart` | Dart SDK + Go |
-| E2E | `test/e2e/run_e2e.sh` | Dart SDK + Go + Docker |
-
-## Platform support
-
-| Platform | Build mode | Library format |
-|----------|-----------|---------------|
-| macOS | c-shared | `libtailscale.dylib` |
-| Linux | c-shared | `libtailscale.so` |
-| Windows | c-shared | `tailscale.dll` |
-| Android | c-shared | `libtailscale.so` (per ABI) |
-| iOS | c-archive | `libtailscale.a` (static) |
-
-All platforms are handled automatically by the build hook. Android cross-compilation uses the NDK toolchain, iOS uses the Xcode toolchain.
+The E2E tests start a [Headscale](https://github.com/juanfont/headscale) control server in Docker, create an ephemeral auth key, connect a real tsnet node, verify IP assignment and peer discovery, then clean up. No Tailscale account needed.

@@ -4,13 +4,12 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
+import 'package:http/http.dart' as pkg_http;
 import 'src/ffi_bindings.dart' as native;
 import 'src/status.dart';
 
 export 'src/status.dart';
 
-/// Calls a native function that returns a C string, converts to Dart string,
-/// and frees the native pointer.
 String _callNativeString(ffi.Pointer<Utf8> Function() fn) {
   final ptr = fn();
   final result = ptr.toDartString();
@@ -18,73 +17,156 @@ String _callNativeString(ffi.Pointer<Utf8> Function() fn) {
   return result;
 }
 
-class DuneTsnet {
-  DuneTsnet._();
-  static DuneTsnet instance = DuneTsnet._();
+/// An HTTP client that routes requests through the Tailscale proxy.
+class _TailscaleHttpClient extends pkg_http.BaseClient {
+  _TailscaleHttpClient(this._proxyPort);
+  final int _proxyPort;
+  final _inner = pkg_http.Client();
 
+  @override
+  Future<pkg_http.StreamedResponse> send(pkg_http.BaseRequest request) {
+    final target = '${request.url.host}:${request.url.port}';
+    final proxyUri = Uri.parse(
+        'http://127.0.0.1:$_proxyPort${request.url.path}?target=$target'
+        '${request.url.query.isNotEmpty ? "&${request.url.query}" : ""}');
+
+    final proxied = pkg_http.StreamedRequest(request.method, proxyUri);
+    proxied.headers.addAll(request.headers);
+
+    if (request is pkg_http.Request) {
+      proxied.contentLength = request.bodyBytes.length;
+      proxied.sink.add(request.bodyBytes);
+      proxied.sink.close();
+    } else if (request is pkg_http.StreamedRequest) {
+      request.finalize().listen(
+        proxied.sink.add,
+        onDone: proxied.sink.close,
+        onError: proxied.sink.addError,
+      );
+    }
+
+    return _inner.send(proxied);
+  }
+
+  @override
+  void close() => _inner.close();
+}
+
+class Tailscale {
+  Tailscale._();
+  static Tailscale instance = Tailscale._();
+
+  static String? _stateDir;
+  static bool _initialized = false;
+
+  bool _starting = false;
+  bool _started = false;
   int _proxyPort = 0;
-  bool _initializing = false;
-  bool _initialized = false;
-
-  final _statusController = StreamController<TailscaleStatus>.broadcast();
-  Timer? _statusPoller;
-  TailscaleStatus? _lastStatus;
-
-  set proxyPortForTesting(int port) => _proxyPort = port;
-
-  /// The local proxy port (0 if not started).
-  int get proxyPort => _proxyPort;
+  _TailscaleHttpClient? _http;
 
   /// Whether the Tailscale node is currently running.
-  bool get isRunning => _initialized && _proxyPort > 0;
+  bool get isRunning => _started;
 
-  /// A broadcast stream of [TailscaleStatus] updates.
+  /// An HTTP client that routes requests through the Tailscale tunnel.
   ///
-  /// Emits whenever the backend state, peer list, or local IP changes.
-  /// Starts polling when [init] succeeds, stops on [stop] or [logout].
-  Stream<TailscaleStatus> get statusStream => _statusController.stream;
+  /// Created lazily on first access. Use like any [pkg_http.Client]:
+  /// ```dart
+  /// await tsnet.client.get(Uri.parse('http://100.64.0.5/api/data'));
+  /// ```
+  ///
+  /// Throws [StateError] if [start] hasn't been called.
+  pkg_http.Client get http {
+    if (!_started) {
+      throw StateError('Call start() before accessing http.');
+    }
+    return _http ??= _TailscaleHttpClient(_proxyPort);
+  }
 
-  /// Sets the native logging level.
+  /// The local proxy port. Exposed for advanced use cases — most callers
+  /// should use [client] instead.
+  int get proxyPort => _proxyPort;
+
+  /// Creates an HTTP client that routes requests through a proxy on [port].
   ///
+  /// Useful for testing or when you need a client for a specific proxy port.
+  static pkg_http.Client createProxyClient(int port) => _TailscaleHttpClient(port);
+
+  /// Configures the Tailscale library. Call this once at app startup,
+  /// alongside other library initializers (Firebase, Supabase, etc.).
+  ///
+  /// [stateDir] is the directory where Tailscale persists authentication
+  /// state across app sessions.
+  ///
+  /// [logLevel] controls native log verbosity:
   /// - 0 = silent (default)
   /// - 1 = errors only
   /// - 2 = info + errors (verbose)
-  ///
-  /// Can be called at any time, including before [init].
-  static void setLogLevel(int level) {
-    native.duneSetLogLevel(level);
+  static void init({
+    required String stateDir,
+    int logLevel = 0,
+  }) {
+    _stateDir = stateDir;
+    _initialized = true;
+    native.duneSetLogLevel(logLevel);
   }
 
-  /// Initializes the Tailscale node and starts the local HTTP proxy.
+  /// Checks if the configured state directory contains a valid machine key
+  /// from a previous session.
+  ///
+  /// Call [init] first. Use this to decide whether to reconnect automatically
+  /// or prompt for an auth key.
+  Future<bool> isProvisioned() {
+    _ensureInitialized();
+    final dir = _stateDir!;
+
+    return Isolate.run(() {
+      if (!Directory(dir).existsSync()) return false;
+
+      final dirPtr = dir.toNativeUtf8();
+      final result = native.duneHasState(dirPtr);
+      calloc.free(dirPtr);
+
+      return result == 1;
+    });
+  }
+
+  /// Starts the Tailscale node and connects to the control plane.
+  ///
+  /// After start, use [client] to make HTTP requests to peers on the tailnet.
+  ///
+  /// On first use, provide [authKey] and [controlUrl] to register the node.
+  /// On subsequent launches, the node reconnects using stored credentials —
+  /// these parameters can be omitted. To switch tailnets, delete the
+  /// state directory and call [start] with new credentials.
+  ///
+  /// To accept incoming traffic, call [listen] after start.
   ///
   /// Runs on a background isolate — does not block the calling isolate.
   ///
-  /// Throws [StateError] if already initialized or if another init is in progress.
-  /// Call [stop] or [logout] first to re-initialize.
+  /// Throws [StateError] if [init] hasn't been called, if already started,
+  /// or if another start is in progress.
   ///
   /// Throws [TimeoutException] if the operation takes longer than [timeout].
-  ///
-  /// [stateDir] is the directory where Tailscale persists authentication state.
-  /// The caller provides this (Flutter apps use path_provider, CLI apps use any path).
-  Future<void> init({
-    required String clientId,
-    required String authKey,
-    required String controlUrl,
-    required String stateDir,
+  Future<void> start({
+    String nodeName = '',
+    String authKey = '',
+    String controlUrl = 'https://controlplane.tailscale.com',
     Duration timeout = const Duration(seconds: 30),
   }) async {
-    if (_initialized) {
-      throw StateError(
-          'Already initialized. Call stop() or logout() before re-initializing.');
+    _ensureInitialized();
+    if (_started) {
+      throw StateError('Already started. Call close() before restarting.');
     }
-    if (_initializing) {
-      throw StateError('init() is already in progress.');
+    if (_starting) {
+      throw StateError('start() is already in progress.');
     }
-    _initializing = true;
+    _starting = true;
+
+    final stateDir = _stateDir!;
 
     try {
-      final port = await Isolate.run(() {
-        final p1 = clientId.toNativeUtf8();
+      final proxyPort = await Isolate.run(() {
+        final p1 = nodeName.toNativeUtf8();
         final p2 = authKey.toNativeUtf8();
         final p3 = controlUrl.toNativeUtf8();
         final p4 = stateDir.toNativeUtf8();
@@ -98,7 +180,7 @@ class DuneTsnet {
           if (parsed.containsKey('error')) {
             throw Exception(parsed['error']);
           }
-          return parsed['port'] as int;
+          return parsed['proxyPort'] as int;
         } finally {
           calloc.free(p1);
           calloc.free(p2);
@@ -108,129 +190,60 @@ class DuneTsnet {
       }).timeout(
         timeout,
         onTimeout: () => throw TimeoutException(
-          'Tailscale init timed out after $timeout. '
+          'Tailscale start timed out after $timeout. '
           'Check that the control server at $controlUrl is reachable.',
           timeout,
         ),
       );
 
-      _proxyPort = port;
-      if (_proxyPort == 0) {
-        throw Exception('Failed to start Tsnet (port 0)');
+      if (proxyPort == 0) {
+        throw Exception('Failed to start Tailscale (proxy port 0)');
       }
-      _initialized = true;
-      _startStatusPoller();
+
+      _proxyPort = proxyPort;
+      _started = true;
     } finally {
-      _initializing = false;
+      _starting = false;
     }
   }
 
-  /// Starts the reverse proxy that listens on the Tailscale network (port 80)
-  /// and forwards traffic to [localPort].
+  /// Starts accepting incoming traffic from the tailnet.
   ///
-  /// Runs on a background isolate.
-  Future<void> startReverseProxy(int localPort) async {
-    await Isolate.run(() {
-      native.duneListen(localPort);
-    });
-  }
+  /// Tailnet peers can reach this node on port 80. Traffic is forwarded to
+  /// `localhost:<port>`. If [port] is 0 (default), an ephemeral port is
+  /// allocated — bind your server to the returned port.
+  ///
+  /// If [port] is provided, traffic is forwarded to that port (your server
+  /// should already be listening there).
+  ///
+  /// Can be called multiple times to change the target port.
+  ///
+  /// Returns the local port that receives incoming traffic.
+  Future<int> listen({int port = 0}) async {
+    if (!_started) {
+      throw StateError('Call start() before listen().');
+    }
 
-  /// Returns the proxy URI to reach a Tailscale peer.
-  ///
-  /// Pure Dart — safe to call from the main isolate.
-  Uri getProxyUri(String targetIp, String path, {int targetPort = 80}) {
-    if (_proxyPort == 0) throw Exception('Not running');
-    return Uri.parse(
-        'http://127.0.0.1:$_proxyPort$path?target=$targetIp:$targetPort');
-  }
-
-  /// Returns the list of online peer IPv4 addresses.
-  ///
-  /// Runs on a background isolate.
-  Future<List<String>> getPeerAddresses() async {
     return Isolate.run(() {
-      final jsonStr = _callNativeString(native.duneGetPeers);
-      try {
-        final List<dynamic> list = jsonDecode(jsonStr);
-        return list.cast<String>();
-      } catch (_) {
-        return <String>[];
+      final resultPtr = native.duneListen(port);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+
+      final Map<String, dynamic> parsed = jsonDecode(resultJson);
+      if (parsed.containsKey('error')) {
+        throw Exception(parsed['error']);
       }
+      return parsed['listenPort'] as int;
     });
   }
 
-  /// Returns the local Tailscale IPv4 address, or null if unavailable.
+  /// Returns the current Tailscale status.
   ///
-  /// Runs on a background isolate.
-  Future<String?> getLocalIP() async {
-    return Isolate.run(() {
-      final ip = _callNativeString(native.duneGetLocalIP);
-      return ip.isNotEmpty ? ip : null;
-    });
-  }
-
-  /// Checks if the node has previously authenticated (has a valid machine key).
-  ///
-  /// Runs on a background isolate (opens and queries SQLite).
-  Future<bool> isProvisioned(String stateDir) async {
-    return Isolate.run(() {
-      if (!Directory(stateDir).existsSync()) return false;
-
-      final dirPtr = stateDir.toNativeUtf8();
-      final result = native.duneHasState(dirPtr);
-      calloc.free(dirPtr);
-
-      return result == 1;
-    });
-  }
-
-  /// Clears authentication state and stops the server.
-  ///
-  /// Always deletes the state directory, even if the engine is already stopped.
-  /// Runs on a background isolate.
-  Future<void> logout(String stateDir) async {
-    if (_initialized) {
-      _stopStatusPoller();
-      _initialized = false;
-      _proxyPort = 0;
-    }
-    await Isolate.run(() {
-      final dirPtr = stateDir.toNativeUtf8();
-      native.duneLogout(dirPtr);
-      calloc.free(dirPtr);
-    });
-    _emitStatus(TailscaleStatus.stopped);
-  }
-
-  /// Stops the Tailscale engine (preserves state for reconnection).
-  ///
-  /// No-op if not initialized. Runs on a background isolate.
-  Future<void> stop() async {
-    if (!_initialized) return;
-    _stopStatusPoller();
-    _initialized = false;
-    _proxyPort = 0;
-    await Isolate.run(() {
-      native.duneStop();
-    });
-    _emitStatus(TailscaleStatus.stopped);
-  }
-
-  /// Returns the full Tailscale status as a raw JSON string.
-  ///
-  /// Prefer [getTypedStatus] for typed access.
-  /// Runs on a background isolate.
-  Future<String> getStatus() async {
-    return Isolate.run(() {
+  /// Includes backend state, local IPs, online peers, health, and more.
+  Future<TailscaleStatus> status() async {
+    final json = await Isolate.run(() {
       return _callNativeString(native.duneStatus);
     });
-  }
-
-  /// Returns the current Tailscale status as a typed [TailscaleStatus].
-  ///
-  /// Runs on a background isolate.
-  Future<TailscaleStatus> getTypedStatus() async {
-    final json = await getStatus();
     try {
       return TailscaleStatus.fromJson(jsonDecode(json));
     } catch (_) {
@@ -238,37 +251,30 @@ class DuneTsnet {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Status polling
-  // ---------------------------------------------------------------------------
-
-  void _startStatusPoller() {
-    _statusPoller?.cancel();
-    _statusPoller = Timer.periodic(const Duration(seconds: 2), (_) async {
-      // Don't poll if the engine has been stopped since the timer fired.
-      if (!_initialized) return;
-      try {
-        final status = await getTypedStatus();
-        if (!_initialized) return; // Check again after async gap.
-        if (_lastStatus == null || !status.sameAs(_lastStatus!)) {
-          _emitStatus(status);
-        }
-      } catch (_) {
-        // Ignore errors during polling — engine may be shutting down.
-      }
+  /// Closes the Tailscale engine.
+  ///
+  /// Preserves state in the configured state directory, so the next
+  /// [start] call can reconnect without a fresh auth key.
+  ///
+  /// To fully reset (clear stored state), delete the state directory
+  /// after closing.
+  ///
+  /// No-op if not started.
+  Future<void> close() async {
+    if (!_started) return;
+    _started = false;
+    _proxyPort = 0;
+    _http?.close();
+    _http = null;
+    await Isolate.run(() {
+      native.duneStop();
     });
   }
 
-  void _stopStatusPoller() {
-    _statusPoller?.cancel();
-    _statusPoller = null;
-    _lastStatus = null;
-  }
-
-  void _emitStatus(TailscaleStatus status) {
-    _lastStatus = status;
-    if (!_statusController.isClosed) {
-      _statusController.add(status);
+  void _ensureInitialized() {
+    if (!_initialized) {
+      throw StateError(
+          'Tailscale.init() must be called before using the library.');
     }
   }
 }

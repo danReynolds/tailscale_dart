@@ -16,22 +16,15 @@ final tsnet = Tailscale.instance;
 final status = await tsnet.up(authKey: 'tskey-auth-...');
 
 // Discover peers
-final peer = (await tsnet.peers()).firstWhere((peer) => peer.online);
+final peers = await tsnet.peers(); // List<PeerStatus>
+final peer = peers.firstWhere((peer) => peer.online);
 
 // Make requests — standard http.Client, routed through the tunnel
 await tsnet.httpClient.get(Uri.parse('http://${peer.ipv4}/api/data'));
 
-// Expose a local HTTP server to the tailnet
+// Expose a local HTTP server to receive traffic from the tailnet
 await tsnet.listen(localPort: 8080);
 ```
-
-## Getting Started
-
-### Prerequisites
-
-- **Dart SDK** 3.10.4+ (or Flutter 3.41+)
-- **[Go](https://go.dev/dl/)** 1.25+
-- **Android**: Android NDK &nbsp;|&nbsp; **iOS**: Xcode with command-line tools
 
 ### Install
 
@@ -42,24 +35,6 @@ dependencies:
 ```
 
 The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](hook/build.dart) that compiles Go for the target platform automatically. Subsequent builds are cached and only recompile when Go source changes.
-
-<details>
-<summary><strong>Android</strong></summary>
-
-Add to `AndroidManifest.xml`:
-
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-```
-
-</details>
-
-<details>
-<summary><strong>iOS</strong></summary>
-
-Deployment target must be iOS 13.0+.
-
-</details>
 
 ## Features
 

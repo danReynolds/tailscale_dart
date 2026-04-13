@@ -337,11 +337,25 @@ class Tailscale {
       return _callNativeString(native.dunePeers);
     });
     try {
-      final parsed = jsonDecode(json) as List<dynamic>;
-      return parsed
-          .map((peer) => PeerStatus.fromJson(Map<String, dynamic>.from(peer)))
-          .toList(growable: false);
+      final decoded = jsonDecode(json);
+      if (decoded is Map<String, dynamic>) {
+        final error = decoded['error'] as String?;
+        if (error != null) {
+          throw TailscaleStatusException(error);
+        }
+      }
+
+      if (decoded is! List<dynamic>) {
+        throw const TailscaleStatusException(
+          'Failed to decode native Tailscale peers.',
+        );
+      }
+
+      return PeerStatus.listFromJson(decoded);
     } catch (error) {
+      if (error is TailscaleStatusException) {
+        rethrow;
+      }
       throw TailscaleStatusException(
         'Failed to decode native Tailscale peers.',
         cause: error,

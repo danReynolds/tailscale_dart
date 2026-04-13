@@ -66,7 +66,14 @@ class TailscaleProxyClient extends http.BaseClient {
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final prepared = prepareProxyRequest(_proxyPort, _proxyAuthToken, request);
     final responseFuture = _inner.send(prepared.request);
-    await prepared.bodyDone;
+    try {
+      await prepared.bodyDone;
+    } catch (_) {
+      try {
+        await responseFuture;
+      } catch (_) {}
+      rethrow;
+    }
     return responseFuture;
   }
 

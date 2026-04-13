@@ -11,7 +11,7 @@ enum NodeStatus {
   /// Initial state — the engine has been created but hasn't started connecting.
   noState,
 
-  /// The node needs authentication. Provide an auth key via [Tailscale.up].
+  /// The node needs authentication. Provide an auth key via `Tailscale.up`.
   needsLogin,
 
   /// The node is authenticated but waiting for admin approval on the

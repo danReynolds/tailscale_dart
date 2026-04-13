@@ -11,19 +11,19 @@ Works with [Tailscale](https://tailscale.com) and self-hosted [Headscale](https:
 ```dart
 Tailscale.init(stateDir: '/path/to/state');
 
-final tsnet = Tailscale.instance;
+final tailscale = Tailscale.instance;
 
-final status = await tsnet.up(authKey: 'tskey-auth-...');
+final status = await tailscale.up(authKey: 'tskey-auth-...');
 
 // Discover peers
-final peers = await tsnet.peers(); // List<PeerStatus>
+final peers = await tailscale.peers(); // List<PeerStatus>
 final peer = peers.firstWhere((peer) => peer.online);
 
 // Make requests — standard http.Client, routed through the tunnel
-await tsnet.httpClient.get(Uri.parse('http://${peer.ipv4}/api/data'));
+await tailscale.httpClient.get(Uri.parse('http://${peer.ipv4}/api/data'));
 
 // Expose a local HTTP server to receive traffic from the tailnet
-await tsnet.listen(localPort: 8080);
+await tailscale.listen(localPort: 8080);
 ```
 
 ### Install
@@ -58,32 +58,32 @@ Tailscale.init(
   logLevel: TailscaleLogLevel.info,
 );
 
-final tsnet = Tailscale.instance;
-tsnet.statusChanges.listen((s) => print('Node: ${s.nodeStatus}'));
-tsnet.runtimeErrors.listen((e) => print('Error: ${e.message}'));
+final tailscale = Tailscale.instance;
+tailscale.statusChanges.listen((s) => print('Node: ${s.nodeStatus}'));
+tailscale.runtimeErrors.listen((e) => print('Error: ${e.message}'));
 
 // 2. Bring the node up (first launch needs an auth key)
-final status = await tsnet.up(authKey: 'tskey-auth-...');
+final status = await tailscale.up(authKey: 'tskey-auth-...');
 
 //    Subsequent launches reconnect from stored state
-await tsnet.up();
+await tailscale.up();
 
 // 3. Make requests to peers
-final peers = await tsnet.peers();
+final peers = await tailscale.peers();
 final peer = peers.firstWhere((p) => p.online);
 
-final response = await tsnet.httpClient.get(
+final response = await tailscale.httpClient.get(
   Uri.parse('http://${peer.ipv4}/api/data'),
 );
 
 // 4. Accept incoming HTTP requests from peers
-await tsnet.listen(localPort: 8080); // tailnet:80 -> localhost:8080
+await tailscale.listen(localPort: 8080); // tailnet:80 -> localhost:8080
 
 // 5. Disconnect (keeps identity)
-await tsnet.down();
+await tailscale.down();
 
 // 6. Disconnect and fully remove state
-await tsnet.logout();
+await tailscale.logout();
 ```
 
 ## Platform Support

@@ -69,7 +69,9 @@ final status = await tsnet.up(authKey: 'tskey-auth-...');
 await tsnet.up();
 
 // 3. Make requests to peers
-final peer = (await tsnet.peers()).firstWhere((p) => p.online);
+final peers = await tsnet.peers();
+final peer = peers.firstWhere((p) => p.online);
+
 final response = await tsnet.httpClient.get(
   Uri.parse('http://${peer.ipv4}/api/data'),
 );
@@ -77,8 +79,10 @@ final response = await tsnet.httpClient.get(
 // 4. Accept incoming HTTP requests from peers
 await tsnet.listen(localPort: 8080); // tailnet:80 -> localhost:8080
 
-// 5. Disconnect (keeps identity) or fully remove state
+// 5. Disconnect (keeps identity)
 await tsnet.down();
+
+// 6. Disconnect and fully remove state
 await tsnet.logout();
 ```
 

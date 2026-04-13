@@ -39,13 +39,13 @@ The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](ho
 ## Features
 
 - **App-scoped networking** — your app joins the tailnet itself instead of depending on a separate VPN
-- **Familiar HTTP client** — standard `http.Client` routed through WireGuard
+- **Familiar HTTP client** — standard [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) routed through [WireGuard](https://www.wireguard.com/)
 - **Inbound HTTP publishing** — expose a local server to tailnet peers with `listen()`
 - **Typed runtime state** — observe node status, peers, and errors through Dart models
 - **Persistent identity** — reconnect across launches without re-authenticating
-- **Automatic cross-platform builds** — Go layer compiles for the target via Dart build hooks
+- **Automatic cross-platform builds** — Go layer compiles for the target via Dart [build hooks](https://dart.dev/tools/build-hooks)
 - **Headscale compatible** — point the control plane at Tailscale or your own deployment
-- **Real-time push notifications** — Go pushes state changes to Dart via NativePort, no polling
+- **Real-time push notifications** — Go pushes state changes to Dart via [`NativePort`](https://api.dart.dev/dart-isolate/SendPort/nativePort.html), no polling
 
 ## Usage
 
@@ -110,7 +110,7 @@ await tailscale.logout();
 | `runtimeErrors` | `Stream<TailscaleRuntimeError>` | Pushed asynchronous runtime errors |
 | `down()` | `Future<void>` | Disconnect (preserves state for reconnection) |
 | `logout()` | `Future<void>` | Disconnect and clear persisted state |
-| `httpClient` | `http.Client` | HTTP client routed through the WireGuard tunnel |
+| `httpClient` | [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) | HTTP client routed through the WireGuard tunnel |
 | `isRunning` | `bool` | Whether the node is connected |
 
 <details>
@@ -125,7 +125,7 @@ A snapshot of the local node's current state. Returned by `up()`/`status()` and 
 | `tailscaleIPs` | `List<String>` | Assigned Tailscale IPs |
 | `ipv4` | `String?` | IPv4 address |
 | `health` | `List<String>` | Health warnings (empty = healthy) |
-| `magicDNSSuffix` | `String?` | Tailnet's MagicDNS suffix |
+| `magicDNSSuffix` | `String?` | Tailnet's [MagicDNS](https://tailscale.com/kb/1081/magicdns) suffix |
 | `isRunning` / `needsLogin` / `isHealthy` | `bool` | Convenience getters |
 
 </details>
@@ -133,7 +133,7 @@ A snapshot of the local node's current state. Returned by `up()`/`status()` and 
 <details>
 <summary><strong>NodeStatus</strong></summary>
 
-The node's position in the connection lifecycle. Matches Go's `ipn.State`.
+The node's position in the connection lifecycle. Matches Go's [`ipn.State`](https://pkg.go.dev/tailscale.com/ipn#State).
 
 | Value | Description |
 |-------|-------------|
@@ -149,7 +149,7 @@ The node's position in the connection lifecycle. Matches Go's `ipn.State`.
 <details>
 <summary><strong>PeerStatus</strong></summary>
 
-A peer on the tailnet. Matches Go's `ipnstate.PeerStatus`.
+A peer on the tailnet. Matches Go's [`ipnstate.PeerStatus`](https://pkg.go.dev/tailscale.com/ipnstate#PeerStatus).
 
 | Member | Type | Description |
 |--------|------|-------------|
@@ -161,7 +161,7 @@ A peer on the tailnet. Matches Go's `ipnstate.PeerStatus`.
 | `online` / `active` | `bool` | Online status and traffic heuristic |
 | `rxBytes` / `txBytes` | `int` | Traffic counters |
 | `lastSeen` | `DateTime?` | Last seen timestamp |
-| `relay` / `curAddr` | `String?` | DERP relay or direct address |
+| `relay` / `curAddr` | `String?` | [DERP](https://tailscale.com/kb/1232/derp-servers) relay or direct address |
 
 </details>
 
@@ -195,11 +195,11 @@ A peer on the tailnet. Matches Go's `ipnstate.PeerStatus`.
 └─────────────┘                  └──────────────┘                       └─────────────┘
 ```
 
-The Go layer wraps `tailscale.com/tsnet` and compiles to a platform-specific native library. A Dart [build hook](hook/build.dart) handles compilation — detecting the target OS/architecture, finding the Go toolchain, cross-compiling with the appropriate flags, and registering the result as a native code asset.
+The Go layer wraps [`tailscale.com/tsnet`](https://pkg.go.dev/tailscale.com/tsnet) and compiles to a platform-specific native library. A Dart [build hook](hook/build.dart) handles compilation — detecting the target OS/architecture, finding the Go toolchain, cross-compiling with the appropriate flags, and registering the result as a [native code asset](https://dart.dev/interop/c-interop#native-assets).
 
-**Dart -> Go** calls use `@Native` FFI annotations and run on background isolates so the main isolate is never blocked.
+**Dart -> Go** calls use [`@Native`](https://api.dart.dev/dart-ffi/Native-class.html) FFI annotations and run on background isolates so the main isolate is never blocked.
 
-**Go -> Dart** notifications use NativePort (`Dart_PostCObject_DL`) to push state transitions from Go's `WatchIPNBus` goroutine directly to Dart's event loop.
+**Go -> Dart** notifications use [`NativePort`](https://api.dart.dev/dart-isolate/SendPort/nativePort.html) to push state transitions from Go's `WatchIPNBus` goroutine directly to Dart's event loop.
 
 ## Testing
 

@@ -1,12 +1,50 @@
 /// Typed Tailscale status models.
 ///
-/// Parsed from the JSON returned by `DuneStatus()`. Only includes fields
-/// that are useful at the application level — not the full 50+ field
-/// ipnstate struct.
+/// Parsed from the JSON returned by Go's `ipnstate.Status`. Only includes
+/// fields useful at the application level.
 
+/// The node's position in the connection lifecycle.
+///
+/// Matches Go's `ipn.State` values. See
+/// https://pkg.go.dev/tailscale.com/ipn#State
+enum NodeStatus {
+  /// Initial state — the engine has been created but hasn't started connecting.
+  noState,
+
+  /// The node needs authentication. Provide an auth key via [Tailscale.start].
+  needsLogin,
+
+  /// The node is authenticated but waiting for admin approval on the
+  /// control plane.
+  needsMachineAuth,
+
+  /// The node is connecting to the tailnet (WireGuard tunnel coming up).
+  starting,
+
+  /// The node is connected and ready to send/receive traffic.
+  running,
+
+  /// The node has been explicitly shut down.
+  stopped,
+}
+
+NodeStatus _parseNodeStatus(String? s) => switch (s) {
+      'NoState' => NodeStatus.noState,
+      'NeedsLogin' => NodeStatus.needsLogin,
+      'NeedsMachineAuth' => NodeStatus.needsMachineAuth,
+      'Starting' => NodeStatus.starting,
+      'Running' => NodeStatus.running,
+      'Stopped' => NodeStatus.stopped,
+      _ => NodeStatus.noState,
+    };
+
+/// A snapshot of the Tailscale node's current state.
+///
+/// Includes the node's connection status, assigned IPs, peers on the tailnet,
+/// and health information. Matches Go's `ipnstate.Status`.
 class TailscaleStatus {
   const TailscaleStatus({
-    required this.backendState,
+    required this.nodeStatus,
     this.authUrl,
     required this.tailscaleIPs,
     required this.peers,
@@ -14,9 +52,8 @@ class TailscaleStatus {
     this.magicDNSSuffix,
   });
 
-  /// The Tailscale backend state: "NoState", "NeedsLogin",
-  /// "NeedsMachineAuth", "Stopped", "Starting", "Running".
-  final String backendState;
+  /// Where the node is in the connection lifecycle.
+  final NodeStatus nodeStatus;
 
   /// Auth URL from the control plane, if login is needed.
   final String? authUrl;
@@ -33,8 +70,13 @@ class TailscaleStatus {
   /// The MagicDNS suffix for the tailnet (e.g. "tailnet-name.ts.net").
   final String? magicDNSSuffix;
 
-  bool get isRunning => backendState == 'Running';
-  bool get needsLogin => backendState == 'NeedsLogin';
+  /// Whether the node is connected and ready for traffic.
+  bool get isRunning => nodeStatus == NodeStatus.running;
+
+  /// Whether the node needs authentication credentials.
+  bool get needsLogin => nodeStatus == NodeStatus.needsLogin;
+
+  /// Whether all health checks are passing.
   bool get isHealthy => health.isEmpty;
 
   /// Online peers only.
@@ -51,7 +93,7 @@ class TailscaleStatus {
     final peerMap = json['Peer'] as Map? ?? {};
 
     return TailscaleStatus(
-      backendState: json['BackendState'] as String? ?? 'NoState',
+      nodeStatus: _parseNodeStatus(json['BackendState'] as String?),
       authUrl: json['AuthURL'] as String?,
       tailscaleIPs: _parseIPs(self?['TailscaleIPs']),
       peers: peerMap.values
@@ -64,23 +106,18 @@ class TailscaleStatus {
     );
   }
 
-  /// Returns an empty status representing a stopped/uninitialized engine.
+  /// A status representing a stopped/uninitialized engine.
   static const stopped = TailscaleStatus(
-    backendState: 'Stopped',
+    nodeStatus: NodeStatus.stopped,
     tailscaleIPs: [],
     peers: [],
     health: [],
   );
-
-  /// Two statuses are "same" for stream deduplication if the key fields match.
-  bool sameAs(TailscaleStatus other) =>
-      backendState == other.backendState &&
-      tailscaleIPs.length == other.tailscaleIPs.length &&
-      peers.length == other.peers.length &&
-      onlinePeers.length == other.onlinePeers.length &&
-      ipv4 == other.ipv4;
 }
 
+/// The status of a peer on the tailnet.
+///
+/// Matches Go's `ipnstate.PeerStatus`.
 class PeerStatus {
   const PeerStatus({
     required this.publicKey,
@@ -97,26 +134,43 @@ class PeerStatus {
     this.curAddr,
   });
 
+  /// The peer's public key.
   final String publicKey;
+
+  /// The peer's hostname on the tailnet.
   final String hostName;
+
+  /// The peer's MagicDNS name (e.g. "my-laptop.tailnet.ts.net.").
   final String dnsName;
+
+  /// The peer's operating system.
   final String os;
+
+  /// The peer's assigned Tailscale IP addresses.
   final List<String> tailscaleIPs;
+
+  /// Whether the peer is currently online.
   final bool online;
+
+  /// Whether there is an active connection to this peer.
   final bool active;
+
+  /// Bytes received from this peer.
   final int rxBytes;
+
+  /// Bytes sent to this peer.
   final int txBytes;
 
   /// When this peer was last seen, or null if never.
   final DateTime? lastSeen;
 
-  /// The DERP relay region being used, or null if direct.
+  /// The DERP relay region being used (e.g. "nyc"), or null if direct.
   final String? relay;
 
-  /// The current direct address, or null if relayed.
+  /// The current direct address (e.g. "1.2.3.4:41641"), or null if relayed.
   final String? curAddr;
 
-  /// First IPv4 address, or null.
+  /// This peer's first IPv4 address, or null.
   String? get ipv4 => tailscaleIPs
       .cast<String?>()
       .firstWhere((ip) => ip != null && ip.contains('.'), orElse: () => null);

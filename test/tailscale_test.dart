@@ -44,7 +44,7 @@ void main() {
 
       final status = TailscaleStatus.fromJson(json);
 
-      expect(status.backendState, 'Running');
+      expect(status.nodeStatus, NodeStatus.running);
       expect(status.isRunning, isTrue);
       expect(status.needsLogin, isFalse);
       expect(status.isHealthy, isTrue);
@@ -88,7 +88,7 @@ void main() {
     test('handles empty/minimal JSON', () {
       final status = TailscaleStatus.fromJson({});
 
-      expect(status.backendState, 'NoState');
+      expect(status.nodeStatus, NodeStatus.noState);
       expect(status.isRunning, isFalse);
       expect(status.tailscaleIPs, isEmpty);
       expect(status.peers, isEmpty);
@@ -102,6 +102,7 @@ void main() {
         'AuthURL': 'https://login.tailscale.com/a/abc123',
       });
 
+      expect(status.nodeStatus, NodeStatus.needsLogin);
       expect(status.needsLogin, isTrue);
       expect(status.isRunning, isFalse);
       expect(status.authUrl, contains('login.tailscale.com'));
@@ -118,63 +119,36 @@ void main() {
     });
 
     test('stopped constant', () {
-      expect(TailscaleStatus.stopped.backendState, 'Stopped');
+      expect(TailscaleStatus.stopped.nodeStatus, NodeStatus.stopped);
       expect(TailscaleStatus.stopped.isRunning, isFalse);
       expect(TailscaleStatus.stopped.peers, isEmpty);
     });
 
-    test('sameAs detects equal statuses', () {
-      final a = TailscaleStatus.fromJson({
-        'BackendState': 'Running',
-        'Self': {
-          'TailscaleIPs': ['100.64.0.1'],
-        },
-        'Peer': {
-          'k1': {'Online': true, 'TailscaleIPs': ['100.64.0.2']},
-        },
-      });
-      final b = TailscaleStatus.fromJson({
-        'BackendState': 'Running',
-        'Self': {
-          'TailscaleIPs': ['100.64.0.1'],
-        },
-        'Peer': {
-          'k1': {'Online': true, 'TailscaleIPs': ['100.64.0.2']},
-        },
-      });
-
-      expect(a.sameAs(b), isTrue);
+    test('all NodeStatus values parse correctly', () {
+      for (final entry in {
+        'NoState': NodeStatus.noState,
+        'NeedsLogin': NodeStatus.needsLogin,
+        'NeedsMachineAuth': NodeStatus.needsMachineAuth,
+        'Starting': NodeStatus.starting,
+        'Running': NodeStatus.running,
+        'Stopped': NodeStatus.stopped,
+      }.entries) {
+        final status =
+            TailscaleStatus.fromJson({'BackendState': entry.key});
+        expect(status.nodeStatus, entry.value,
+            reason: '${entry.key} should parse to ${entry.value}');
+      }
     });
 
-    test('sameAs detects state change', () {
-      final a = TailscaleStatus.fromJson({'BackendState': 'Running'});
-      final b = TailscaleStatus.fromJson({'BackendState': 'NeedsLogin'});
-
-      expect(a.sameAs(b), isFalse);
-    });
-
-    test('sameAs detects peer count change', () {
-      final a = TailscaleStatus.fromJson({
-        'BackendState': 'Running',
-        'Peer': {
-          'k1': {'Online': true, 'TailscaleIPs': []},
-        },
-      });
-      final b = TailscaleStatus.fromJson({
-        'BackendState': 'Running',
-        'Peer': {},
-      });
-
-      expect(a.sameAs(b), isFalse);
+    test('unknown state defaults to noState', () {
+      final status =
+          TailscaleStatus.fromJson({'BackendState': 'SomeFutureState'});
+      expect(status.nodeStatus, NodeStatus.noState);
     });
   });
 
   group('start timeout', () {
     test('timeout parameter has a default', () {
-      // We can't actually call start without the native library,
-      // but we can verify the API accepts a timeout parameter
-      // by checking the type signature compiles.
-      // The actual timeout behavior is tested in the E2E tests.
       final tsnet = Tailscale.instance;
       expect(tsnet.start, isA<Function>());
     });

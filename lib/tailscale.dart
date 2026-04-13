@@ -39,10 +39,10 @@ class _TailscaleHttpClient extends pkg_http.BaseClient {
       proxied.sink.close();
     } else if (request is pkg_http.StreamedRequest) {
       request.finalize().listen(
-        proxied.sink.add,
-        onDone: proxied.sink.close,
-        onError: proxied.sink.addError,
-      );
+            proxied.sink.add,
+            onDone: proxied.sink.close,
+            onError: proxied.sink.addError,
+          );
     }
 
     return _inner.send(proxied);
@@ -89,12 +89,6 @@ class Tailscale {
   /// The local proxy port. Exposed for advanced use cases — most callers
   /// should use [http] instead.
   int get proxyPort => _proxyPort;
-
-  /// Creates an HTTP client that routes requests through a proxy on [port].
-  ///
-  /// Useful for testing or when you need a client for a specific proxy port.
-  static pkg_http.Client createProxyClient(int port) =>
-      _TailscaleHttpClient(port);
 
   /// Configures the Tailscale library. Call this once at app startup,
   /// alongside other library initializers (Firebase, Supabase, etc.).
@@ -331,7 +325,9 @@ class Tailscale {
         final state = parsed['state'] as String?;
 
         // Resolve the Running completer if we're waiting for it.
-        if (state == 'Running' && _runningCompleter != null && !_runningCompleter!.isCompleted) {
+        if (state == 'Running' &&
+            _runningCompleter != null &&
+            !_runningCompleter!.isCompleted) {
           _runningCompleter!.complete();
         }
 

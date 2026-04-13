@@ -48,7 +48,11 @@ func StartWatch() {
 
 	lc, err := s.LocalClient()
 	if err != nil {
-		postMessage(map[string]any{"type": "error", "error": err.Error()})
+		postMessage(map[string]any{
+			"type":  "error",
+			"code":  "localClient",
+			"error": err.Error(),
+		})
 		return
 	}
 
@@ -62,7 +66,11 @@ func StartWatch() {
 
 	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
 	if err != nil {
-		postMessage(map[string]any{"type": "error", "error": err.Error()})
+		postMessage(map[string]any{
+			"type":  "error",
+			"code":  "watcher",
+			"error": err.Error(),
+		})
 		cancel()
 		return
 	}
@@ -74,7 +82,11 @@ func StartWatch() {
 			if err != nil {
 				// Context cancelled = normal shutdown, don't report.
 				if ctx.Err() == nil {
-					postMessage(map[string]any{"type": "error", "error": err.Error()})
+					postMessage(map[string]any{
+						"type":  "error",
+						"code":  "watcher",
+						"error": err.Error(),
+					})
 				}
 				return
 			}
@@ -88,6 +100,7 @@ func StartWatch() {
 			}
 			if n.ErrMessage != nil {
 				msg["type"] = "error"
+				msg["code"] = "node"
 				msg["error"] = *n.ErrMessage
 				changed = true
 			}

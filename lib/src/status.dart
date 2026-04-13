@@ -11,7 +11,7 @@ enum NodeStatus {
   /// Initial state — the engine has been created but hasn't started connecting.
   noState,
 
-  /// The node needs authentication. Provide an auth key via [Tailscale.start].
+  /// The node needs authentication. Provide an auth key via `Tailscale.up`.
   needsLogin,
 
   /// The node is authenticated but waiting for admin approval on the
@@ -29,25 +29,24 @@ enum NodeStatus {
 }
 
 NodeStatus _parseNodeStatus(String? s) => switch (s) {
-      'NoState' => NodeStatus.noState,
-      'NeedsLogin' => NodeStatus.needsLogin,
-      'NeedsMachineAuth' => NodeStatus.needsMachineAuth,
-      'Starting' => NodeStatus.starting,
-      'Running' => NodeStatus.running,
-      'Stopped' => NodeStatus.stopped,
-      _ => NodeStatus.noState,
-    };
+  'NoState' => NodeStatus.noState,
+  'NeedsLogin' => NodeStatus.needsLogin,
+  'NeedsMachineAuth' => NodeStatus.needsMachineAuth,
+  'Starting' => NodeStatus.starting,
+  'Running' => NodeStatus.running,
+  'Stopped' => NodeStatus.stopped,
+  _ => NodeStatus.noState,
+};
 
-/// A snapshot of the Tailscale node's current state.
+/// A snapshot of the local node's current state.
 ///
-/// Includes the node's connection status, assigned IPs, peers on the tailnet,
-/// and health information. Matches Go's `ipnstate.Status`.
+/// Includes the node's connection status, assigned IPs, and health
+/// information. Peer inventory is exposed separately through `Tailscale.peers`.
 class TailscaleStatus {
   const TailscaleStatus({
     required this.nodeStatus,
     this.authUrl,
     required this.tailscaleIPs,
-    required this.peers,
     required this.health,
     this.magicDNSSuffix,
   });
@@ -55,19 +54,20 @@ class TailscaleStatus {
   /// Where the node is in the connection lifecycle.
   final NodeStatus nodeStatus;
 
-  /// Auth URL from the control plane, if login is needed.
-  final String? authUrl;
+  /// Login URL from the control plane, if authentication is required.
+  ///
+  /// Open this in a browser or web view when [needsLogin] is true.
+  final Uri? authUrl;
 
   /// This node's assigned Tailscale IP addresses.
   final List<String> tailscaleIPs;
-
-  /// All peers on the tailnet.
-  final List<PeerStatus> peers;
 
   /// Health check warnings. Empty means healthy.
   final List<String> health;
 
   /// The MagicDNS suffix for the tailnet (e.g. "tailnet-name.ts.net").
+  ///
+  /// May be null when tailnet metadata is not yet available.
   final String? magicDNSSuffix;
 
   /// Whether the node is connected and ready for traffic.
@@ -79,30 +79,23 @@ class TailscaleStatus {
   /// Whether all health checks are passing.
   bool get isHealthy => health.isEmpty;
 
-  /// Online peers only.
-  List<PeerStatus> get onlinePeers =>
-      peers.where((p) => p.online).toList(growable: false);
-
   /// This node's first IPv4 address, or null.
-  String? get ipv4 => tailscaleIPs
-      .cast<String?>()
-      .firstWhere((ip) => ip != null && ip.contains('.'), orElse: () => null);
+  String? get ipv4 => tailscaleIPs.cast<String?>().firstWhere(
+    (ip) => ip != null && ip.contains('.'),
+    orElse: () => null,
+  );
 
   factory TailscaleStatus.fromJson(Map<String, dynamic> json) {
     final self = json['Self'] as Map<String, dynamic>?;
-    final peerMap = json['Peer'] as Map? ?? {};
 
     return TailscaleStatus(
       nodeStatus: _parseNodeStatus(json['BackendState'] as String?),
-      authUrl: json['AuthURL'] as String?,
+      authUrl: _parseUri(json['AuthURL']),
       tailscaleIPs: _parseIPs(self?['TailscaleIPs']),
-      peers: peerMap.values
-          .map((p) =>
-              PeerStatus.fromJson(Map<String, dynamic>.from(p as Map)))
-          .toList(growable: false),
       health: (json['Health'] as List?)?.cast<String>() ?? const [],
-      magicDNSSuffix: (json['CurrentTailnet']
-          as Map<String, dynamic>?)?['MagicDNSSuffix'] as String?,
+      magicDNSSuffix:
+          (json['CurrentTailnet'] as Map<String, dynamic>?)?['MagicDNSSuffix']
+              as String?,
     );
   }
 
@@ -110,14 +103,13 @@ class TailscaleStatus {
   static const stopped = TailscaleStatus(
     nodeStatus: NodeStatus.stopped,
     tailscaleIPs: [],
-    peers: [],
     health: [],
   );
 }
 
 /// The status of a peer on the tailnet.
 ///
-/// Matches Go's `ipnstate.PeerStatus`.
+/// Returned by `Tailscale.peers()`. Matches Go's `ipnstate.PeerStatus`.
 class PeerStatus {
   const PeerStatus({
     required this.publicKey,
@@ -134,13 +126,16 @@ class PeerStatus {
     this.curAddr,
   });
 
-  /// The peer's public key.
+  /// The peer's WireGuard public key.
   final String publicKey;
 
   /// The peer's hostname on the tailnet.
   final String hostName;
 
-  /// The peer's MagicDNS name (e.g. "my-laptop.tailnet.ts.net.").
+  /// The peer's MagicDNS name (for example, `my-laptop.tailnet.ts.net.`).
+  ///
+  /// The upstream value may be a fully-qualified domain name with a trailing
+  /// dot.
   final String dnsName;
 
   /// The peer's operating system.
@@ -152,7 +147,10 @@ class PeerStatus {
   /// Whether the peer is currently online.
   final bool online;
 
-  /// Whether there is an active connection to this peer.
+  /// Whether Tailscale currently considers this peer active.
+  ///
+  /// This is a useful hint for UI/diagnostics, but should be treated as a
+  /// heuristic rather than a strict connectivity guarantee.
   final bool active;
 
   /// Bytes received from this peer.
@@ -162,18 +160,30 @@ class PeerStatus {
   final int txBytes;
 
   /// When this peer was last seen, or null if never.
+  ///
+  /// Most useful for offline peers.
   final DateTime? lastSeen;
 
-  /// The DERP relay region being used (e.g. "nyc"), or null if direct.
+  /// The DERP relay region code in use (for example, `nyc`), or null if direct.
   final String? relay;
 
-  /// The current direct address (e.g. "1.2.3.4:41641"), or null if relayed.
+  /// The current direct address in `host:port` form, or null if relayed.
+  ///
+  /// Primarily useful for diagnostics.
   final String? curAddr;
 
   /// This peer's first IPv4 address, or null.
-  String? get ipv4 => tailscaleIPs
-      .cast<String?>()
-      .firstWhere((ip) => ip != null && ip.contains('.'), orElse: () => null);
+  String? get ipv4 => tailscaleIPs.cast<String?>().firstWhere(
+    (ip) => ip != null && ip.contains('.'),
+    orElse: () => null,
+  );
+
+  /// Parses a peer snapshot list returned by `Tailscale.peers()`.
+  static List<PeerStatus> listFromJson(List<dynamic> json) {
+    return json
+        .map((peer) => PeerStatus.fromJson(Map<String, dynamic>.from(peer)))
+        .toList(growable: false);
+  }
 
   factory PeerStatus.fromJson(Map<String, dynamic> json) {
     return PeerStatus(
@@ -201,6 +211,13 @@ List<String> _parseIPs(dynamic value) {
 DateTime? _parseTime(dynamic value) {
   if (value is String && value.isNotEmpty) {
     return DateTime.tryParse(value);
+  }
+  return null;
+}
+
+Uri? _parseUri(dynamic value) {
+  if (value is String && value.isNotEmpty) {
+    return Uri.tryParse(value);
   }
   return null;
 }

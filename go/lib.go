@@ -3,12 +3,15 @@ package tailscale
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -16,6 +19,7 @@ import (
 	"time"
 
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
 
@@ -24,13 +28,15 @@ import (
 var LogLevel int32 // default 0 (silent)
 
 var (
-	mu sync.Mutex // protects srv, proxyPort, proxyLn, reverseProxyLn
+	mu sync.Mutex // protects srv, proxyPort, proxyLn, reverseProxyLn, proxyAuthToken
 
-	srv       *tsnet.Server
-	proxyPort int
-	proxyLn   net.Listener // outgoing proxy listener
+	srv            *tsnet.Server
+	proxyPort      int
+	proxyLn        net.Listener // outgoing proxy listener
+	proxyAuthToken string
 
-	reverseProxyLn net.Listener
+	reverseProxyLn          net.Listener
+	reverseProxyTailnetPort int
 
 	// targetPort is the local Dart port we forward to.
 	targetPort   int
@@ -45,6 +51,8 @@ var (
 const (
 	localForwardMaxAttempts = 3
 	localForwardRetryDelay  = 150 * time.Millisecond
+	proxyRequestPath        = "/proxy"
+	proxyAuthHeader         = "X-Tailscale-Proxy-Token"
 )
 
 // HasState checks if the state directory contains a valid machine key.
@@ -64,9 +72,16 @@ func HasState(stateDir string) bool {
 }
 
 // Logout stops the server and removes the state directory.
-func Logout(stateDir string) {
+func Logout(stateDir string) error {
+	if strings.TrimSpace(stateDir) == "" {
+		return fmt.Errorf("state dir is empty")
+	}
+
 	Stop()
-	os.RemoveAll(stateDir)
+	if err := os.RemoveAll(stateDir); err != nil {
+		return fmt.Errorf("failed to remove state dir: %w", err)
+	}
+	return nil
 }
 
 // Stop stops the server and closes all listeners.
@@ -88,29 +103,31 @@ func Stop() {
 		srv.Close()
 		srv = nil
 		proxyPort = 0
+		proxyAuthToken = ""
+		reverseProxyTailnetPort = 0
 	}
 }
 
 // Start initializes the Tailscale node and starts the outgoing HTTP proxy.
-// It returns the proxy port number. Call Listen() separately to accept incoming traffic.
-func Start(hostname, authKey, controlURL, stateDir string) (int, error) {
+// It returns the proxy port number and per-session proxy auth token.
+func Start(hostname, authKey, controlURL, stateDir string) (int, string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if srv != nil {
-		return proxyPort, nil
+		return proxyPort, proxyAuthToken, nil
 	}
 
 	os.Setenv("TS_ENABLE_RAW_DISCO", "false")
 
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
-		return 0, fmt.Errorf("failed to create state dir: %v", err)
+		return 0, "", fmt.Errorf("failed to create state dir: %v", err)
 	}
 
 	statePath := stateDir + "/state.db"
 	store, err := NewSQLiteStore(statePath)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create sqlite store: %v", err)
+		return 0, "", fmt.Errorf("failed to create sqlite store: %v", err)
 	}
 
 	srv = &tsnet.Server{
@@ -132,29 +149,45 @@ func Start(hostname, authKey, controlURL, stateDir string) (int, error) {
 		} else {
 			srv.Close()
 			srv = nil
-			return 0, fmt.Errorf("failed to start tsnet: %v", err)
+			return 0, "", fmt.Errorf("failed to start tsnet: %v", err)
 		}
+	}
+
+	token, err := newProxyAuthToken()
+	if err != nil {
+		srv.Close()
+		srv = nil
+		return 0, "", fmt.Errorf("failed to create proxy auth token: %v", err)
 	}
 
 	// Start the outgoing HTTP proxy (Dart → tailnet peers)
 	outLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, fmt.Errorf("failed to listen for outgoing proxy: %v", err)
+		srv.Close()
+		srv = nil
+		return 0, "", fmt.Errorf("failed to listen for outgoing proxy: %v", err)
 	}
 	proxyLn = outLn
 	proxyPort = outLn.Addr().(*net.TCPAddr).Port
+	proxyAuthToken = token
 	go http.Serve(outLn, http.HandlerFunc(handleOutgoingProxy))
 
-	return proxyPort, nil
+	return proxyPort, proxyAuthToken, nil
 }
 
-// Listen starts the reverse proxy that accepts incoming tailnet traffic on port 80
-// and forwards it to a local port. If localPort > 0, traffic is forwarded there.
-// If localPort == 0, an ephemeral port is allocated. Returns the local port.
-func Listen(localPort int) (int, error) {
+// Listen starts the reverse proxy that accepts incoming tailnet HTTP traffic on
+// tailnetPort and forwards it to a local port. If localPort > 0, traffic is
+// forwarded there. If localPort == 0, an ephemeral port is allocated.
+// Returns the local port.
+func Listen(localPort, tailnetPort int) (int, error) {
+	if tailnetPort < 1 || tailnetPort > 65535 {
+		return 0, fmt.Errorf("invalid tailnet port %d", tailnetPort)
+	}
+
 	mu.Lock()
 	s := srv
 	alreadyListening := reverseProxyLn != nil
+	currentTailnetPort := reverseProxyTailnetPort
 	mu.Unlock()
 
 	if s == nil {
@@ -176,14 +209,24 @@ func Listen(localPort int) (int, error) {
 	targetPort = localPort
 	targetPortMu.Unlock()
 
-	// If already listening, the handler picks up the new targetPort
-	if alreadyListening {
+	// If already listening on the requested port, the handler picks up the new targetPort.
+	if alreadyListening && currentTailnetPort == tailnetPort {
 		return localPort, nil
 	}
 
-	ln, err := s.Listen("tcp", ":80")
+	if alreadyListening {
+		mu.Lock()
+		if reverseProxyLn != nil {
+			reverseProxyLn.Close()
+			reverseProxyLn = nil
+			reverseProxyTailnetPort = 0
+		}
+		mu.Unlock()
+	}
+
+	ln, err := s.Listen("tcp", fmt.Sprintf(":%d", tailnetPort))
 	if err != nil {
-		return 0, fmt.Errorf("failed to listen on tsnet:80: %v", err)
+		return 0, fmt.Errorf("failed to listen on tsnet:%d: %v", tailnetPort, err)
 	}
 
 	mu.Lock()
@@ -193,6 +236,7 @@ func Listen(localPort int) (int, error) {
 		return localPort, nil
 	}
 	reverseProxyLn = ln
+	reverseProxyTailnetPort = tailnetPort
 	mu.Unlock()
 
 	go http.Serve(ln, http.HandlerFunc(handleReverseProxy))
@@ -200,40 +244,45 @@ func Listen(localPort int) (int, error) {
 	return localPort, nil
 }
 
-// handleOutgoingProxy proxies HTTP requests from Dart to Tailscale peers.
+// handleOutgoingProxy proxies HTTP/HTTPS requests from Dart to Tailscale peers.
 func handleOutgoingProxy(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	s := srv
+	expectedToken := proxyAuthToken
 	mu.Unlock()
 	if s == nil {
 		http.Error(w, "Server not running", 503)
 		return
 	}
-
-	client := s.HTTPClient()
-
-	targetHost := r.URL.Query().Get("target")
-	realPath := r.URL.Path
-
-	if targetHost == "" {
-		http.Error(w, "Missing 'target' query param", 400)
+	if r.URL.Path != proxyRequestPath {
+		http.Error(w, "Not Found", 404)
+		return
+	}
+	if !isAuthorizedOutgoingProxyRequest(r, expectedToken) {
+		http.Error(w, "Unauthorized", 401)
 		return
 	}
 
-	targetURL := fmt.Sprintf("http://%s%s", targetHost, realPath)
-	query := r.URL.Query()
-	query.Del("target")
-	if encoded := query.Encode(); encoded != "" {
-		targetURL = targetURL + "?" + encoded
+	client := s.HTTPClient()
+
+	targetURL, err := parseOutgoingTarget(r.URL.Query().Get("target"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+	req, err := http.NewRequestWithContext(
+		r.Context(),
+		r.Method,
+		targetURL.String(),
+		r.Body,
+	)
 	if err != nil {
 		http.Error(w, "Bad Request", 400)
 		return
 	}
-	for k, v := range r.Header {
-		req.Header[k] = v
+	for k, v := range filteredProxyRequestHeaders(r.Header) {
+		req.Header[k] = append([]string(nil), v...)
 	}
 
 	resp, err := client.Do(req)
@@ -248,6 +297,43 @@ func handleOutgoingProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+func parseOutgoingTarget(raw string) (*url.URL, error) {
+	if raw == "" {
+		return nil, fmt.Errorf("missing 'target' query param")
+	}
+
+	targetURL, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid target URL: %v", err)
+	}
+	if targetURL.Scheme != "http" && targetURL.Scheme != "https" {
+		return nil, fmt.Errorf("invalid target URL scheme %q", targetURL.Scheme)
+	}
+	if targetURL.Host == "" {
+		return nil, fmt.Errorf("invalid target URL: missing host")
+	}
+
+	return targetURL, nil
+}
+
+func isAuthorizedOutgoingProxyRequest(r *http.Request, expectedToken string) bool {
+	if expectedToken == "" {
+		return false
+	}
+	return r.Header.Get(proxyAuthHeader) == expectedToken
+}
+
+func filteredProxyRequestHeaders(src http.Header) http.Header {
+	filtered := make(http.Header, len(src))
+	for k, v := range src {
+		if http.CanonicalHeaderKey(k) == proxyAuthHeader {
+			continue
+		}
+		filtered[k] = append([]string(nil), v...)
+	}
+	return filtered
 }
 
 // handleReverseProxy forwards incoming Tailscale traffic to the local Dart server.
@@ -363,7 +449,7 @@ func GetPeers() string {
 	return string(jsonBytes)
 }
 
-// DuneStatus returns the full status JSON from the LocalAPI.
+// DuneStatus returns the local-node status JSON from the LocalAPI.
 func DuneStatus() string {
 	mu.Lock()
 	s := srv
@@ -375,11 +461,41 @@ func DuneStatus() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	status, err := lc.Status(context.Background())
+	status, err := lc.StatusWithoutPeers(context.Background())
 	if err != nil {
 		return jsonError(err)
 	}
 	jsonBytes, err := json.Marshal(status)
+	if err != nil {
+		return jsonError(err)
+	}
+	return string(jsonBytes)
+}
+
+// DunePeers returns the current peer list as JSON.
+func DunePeers() string {
+	mu.Lock()
+	s := srv
+	mu.Unlock()
+	if s == nil {
+		return "[]"
+	}
+	lc, err := s.LocalClient()
+	if err != nil {
+		return jsonError(err)
+	}
+	status, err := lc.Status(context.Background())
+	if err != nil {
+		return jsonError(err)
+	}
+
+	peers := make([]*ipnstate.PeerStatus, 0, len(status.Peer))
+	for _, peer := range status.Peer {
+		peers = append(peers, peer)
+	}
+	ipnstate.SortPeers(peers)
+
+	jsonBytes, err := json.Marshal(peers)
 	if err != nil {
 		return jsonError(err)
 	}
@@ -402,4 +518,12 @@ func logError(format string, args ...any) {
 	if atomic.LoadInt32(&LogLevel) >= 1 {
 		log.Printf("TSNET ERROR: "+format, args...)
 	}
+}
+
+func newProxyAuthToken() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
 }

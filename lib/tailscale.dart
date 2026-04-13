@@ -1,14 +1,20 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'package:http/http.dart' as pkg_http;
+import 'package:path/path.dart' as p;
+import 'src/errors.dart';
 import 'src/ffi_bindings.dart' as native;
+import 'src/proxy_client.dart';
 import 'src/status.dart';
 
+export 'src/errors.dart';
 export 'src/status.dart';
+
+const _ownedStateSubdirectory = 'tailscale';
+final Uri _defaultControlUrl = Uri.parse('https://controlplane.tailscale.com');
 
 String _callNativeString(ffi.Pointer<Utf8> Function() fn) {
   final ptr = fn();
@@ -17,56 +23,44 @@ String _callNativeString(ffi.Pointer<Utf8> Function() fn) {
   return result;
 }
 
-/// An HTTP client that routes requests through the Tailscale proxy.
-class _TailscaleHttpClient extends pkg_http.BaseClient {
-  _TailscaleHttpClient(this._proxyPort);
-  final int _proxyPort;
-  final _inner = pkg_http.Client();
+/// Native log verbosity for the embedded Tailscale runtime.
+enum TailscaleLogLevel { silent, error, info }
 
-  @override
-  Future<pkg_http.StreamedResponse> send(pkg_http.BaseRequest request) {
-    final target = '${request.url.host}:${request.url.port}';
-    final proxyUri = Uri.parse(
-        'http://127.0.0.1:$_proxyPort${request.url.path}?target=$target'
-        '${request.url.query.isNotEmpty ? "&${request.url.query}" : ""}');
-
-    final proxied = pkg_http.StreamedRequest(request.method, proxyUri);
-    proxied.headers.addAll(request.headers);
-
-    if (request is pkg_http.Request) {
-      proxied.contentLength = request.bodyBytes.length;
-      proxied.sink.add(request.bodyBytes);
-      proxied.sink.close();
-    } else if (request is pkg_http.StreamedRequest) {
-      request.finalize().listen(
-            proxied.sink.add,
-            onDone: proxied.sink.close,
-            onError: proxied.sink.addError,
-          );
-    }
-
-    return _inner.send(proxied);
-  }
-
-  @override
-  void close() => _inner.close();
+extension on TailscaleLogLevel {
+  int get nativeValue => switch (this) {
+    TailscaleLogLevel.silent => 0,
+    TailscaleLogLevel.error => 1,
+    TailscaleLogLevel.info => 2,
+  };
 }
 
+/// Singleton embedded Tailscale node for the current Dart process.
+///
+/// This package runs one node per process. Configure it once with [init], then
+/// access the singleton through [instance].
 class Tailscale {
   Tailscale._();
-  static Tailscale instance = Tailscale._();
+  static final Tailscale instance = Tailscale._();
 
-  static String? _stateDir;
+  static String? _stateBaseDir;
+  static TailscaleLogLevel? _configuredLogLevel;
   static bool _initialized = false;
-  static void Function(TailscaleStatus status)? _onStatusChange;
-  static void Function(String error)? _onError;
 
   bool _starting = false;
   bool _started = false;
   int _proxyPort = 0;
-  _TailscaleHttpClient? _http;
+  String? _proxyAuthToken;
+  pkg_http.Client? _http;
   ReceivePort? _receivePort;
   bool _dartApiInitialized = false;
+  final StreamController<TailscaleStatus> _statusController =
+      StreamController<TailscaleStatus>.broadcast();
+  final StreamController<TailscaleRuntimeError> _errorController =
+      StreamController<TailscaleRuntimeError>.broadcast();
+  TailscaleStatus _lastStatus = TailscaleStatus.stopped;
+
+  static String get _ownedStateDir =>
+      p.join(_stateBaseDir!, _ownedStateSubdirectory);
 
   /// Whether the Tailscale node is currently running.
   bool get isRunning => _started;
@@ -75,105 +69,130 @@ class Tailscale {
   ///
   /// Created lazily on first access. Use like any `http.Client`:
   /// ```dart
-  /// await tsnet.http.get(Uri.parse('http://100.64.0.5/api/data'));
+  /// await tsnet.httpClient.get(Uri.parse('http://100.64.0.5/api/data'));
   /// ```
   ///
-  /// Throws [StateError] if [start] hasn't been called.
-  pkg_http.Client get http {
+  /// Throws [TailscaleUsageException] if [up] hasn't been called.
+  pkg_http.Client get httpClient {
     if (!_started) {
-      throw StateError('Call start() before accessing http.');
+      throw const TailscaleUsageException(
+        'Call up() before accessing httpClient.',
+      );
     }
-    return _http ??= _TailscaleHttpClient(_proxyPort);
+    final proxyAuthToken = _proxyAuthToken;
+    if (proxyAuthToken == null) {
+      throw const TailscaleUsageException('Tailscale proxy is not ready.');
+    }
+    return _http ??= TailscaleProxyClient(_proxyPort, proxyAuthToken);
   }
 
-  /// The local proxy port. Exposed for advanced use cases — most callers
-  /// should use [http] instead.
+  /// The local proxy port used internally by [httpClient].
+  ///
+  /// This is exposed for diagnostics only. Direct requests through the proxy
+  /// are not a stable public API and require an internal per-session token.
+  @Deprecated('Use httpClient instead of the internal proxy port.')
   int get proxyPort => _proxyPort;
+
+  /// Real-time status snapshots pushed from the embedded node.
+  ///
+  /// Each event is a full local-node [TailscaleStatus] snapshot, not a delta
+  /// object. Peer inventory is intentionally excluded; call [peers] when you
+  /// need a peer snapshot.
+  ///
+  /// Errors are reported separately through [runtimeErrors].
+  Stream<TailscaleStatus> get statusChanges => _statusController.stream;
+
+  /// Background runtime errors pushed from the embedded node.
+  ///
+  /// These are asynchronous engine/watcher failures, not call-specific
+  /// exceptions from [up], [listen], or [status].
+  Stream<TailscaleRuntimeError> get runtimeErrors => _errorController.stream;
 
   /// Configures the Tailscale library. Call this once at app startup,
   /// alongside other library initializers (Firebase, Supabase, etc.).
   ///
-  /// [stateDir] is the directory where Tailscale persists authentication
-  /// state across app sessions.
+  /// [stateDir] is a base directory owned by your app. Tailscale persists its
+  /// authentication state in a dedicated `tailscale/` subdirectory inside it.
   ///
-  /// [logLevel] controls native log verbosity:
-  /// - 0 = silent (default)
-  /// - 1 = errors only
-  /// - 2 = info + errors (verbose)
+  /// [logLevel] controls native log verbosity.
   ///
-  /// [onStatusChange] fires whenever the Tailscale backend state changes
-  /// (e.g. connecting, running, needs login). Pushed from Go — no polling.
-  ///
-  /// [onError] fires when the Go engine encounters an error.
+  /// Repeated calls are allowed only if they use the same effective
+  /// configuration. Calling [init] again with a different [stateDir] or
+  /// [logLevel] throws [TailscaleUsageException].
   static void init({
     required String stateDir,
-    int logLevel = 0,
-    void Function(TailscaleStatus status)? onStatusChange,
-    void Function(String error)? onError,
+    TailscaleLogLevel logLevel = TailscaleLogLevel.silent,
   }) {
-    _stateDir = stateDir;
+    if (stateDir.trim().isEmpty) {
+      throw const TailscaleUsageException('stateDir must not be empty.');
+    }
+    final normalizedStateDir = p.normalize(p.absolute(stateDir));
+    if (_initialized) {
+      if (_stateBaseDir == normalizedStateDir &&
+          _configuredLogLevel == logLevel) {
+        return;
+      }
+
+      throw TailscaleUsageException(
+        'Tailscale.init() has already been called for this process. '
+        'Repeated calls must use the same stateDir and logLevel.',
+      );
+    }
+
+    _stateBaseDir = normalizedStateDir;
+    _configuredLogLevel = logLevel;
     _initialized = true;
-    _onStatusChange = onStatusChange;
-    _onError = onError;
-    native.duneSetLogLevel(logLevel);
+    native.duneSetLogLevel(logLevel.nativeValue);
   }
 
-  /// Checks if the configured state directory contains a valid machine key
-  /// from a previous session.
+  /// Brings the embedded Tailscale node up and connects to the control plane.
   ///
-  /// Call [init] first.
-  Future<bool> isProvisioned() {
-    _ensureInitialized();
-    final dir = _stateDir!;
-
-    return Isolate.run(() {
-      if (!Directory(dir).existsSync()) return false;
-
-      final dirPtr = dir.toNativeUtf8();
-      final result = native.duneHasState(dirPtr);
-      calloc.free(dirPtr);
-
-      return result == 1;
-    });
-  }
-
-  /// Starts the Tailscale node and connects to the control plane.
+  /// Returns the current [TailscaleStatus] when the node reaches "Running"
+  /// (connected and ready to send/receive traffic), or throws
+  /// [TailscaleTimeoutException] if it does not reach Running within
+  /// [timeout].
   ///
-  /// Returns when the node is in the "Running" state (connected and ready
-  /// to send/receive traffic), or throws [TimeoutException] if the node
-  /// doesn't reach Running within [timeout].
+  /// After [up], use [httpClient] to make requests to peers.
   ///
-  /// After start, use [http] to make requests to peers.
+  /// [hostname] controls the node's tailnet-visible hostname / MagicDNS base
+  /// label. Leave it unset to let the embedded runtime pick its default.
   ///
   /// On first use, provide [authKey] to register the node. On subsequent
   /// launches, the node reconnects using stored credentials — [authKey]
-  /// can be omitted. To switch tailnets, delete the state directory and
-  /// call [start] with new credentials.
+  /// can be omitted. Subscribe to [statusChanges] to observe auth URLs and
+  /// intermediate states while [up] is in progress.
   ///
-  /// To accept incoming traffic, call [listen] after start.
-  Future<void> start({
-    String nodeName = '',
-    String authKey = '',
-    String controlUrl = 'https://controlplane.tailscale.com',
+  /// [controlUrl] selects the control plane. Use the default for Tailscale, or
+  /// point it at your Headscale deployment.
+  ///
+  /// To accept incoming traffic, call [listen] after [up].
+  Future<TailscaleStatus> up({
+    String hostname = '',
+    String? authKey,
+    Uri? controlUrl,
     Duration timeout = const Duration(seconds: 30),
   }) async {
     _ensureInitialized();
     if (_started) {
-      throw StateError('Already started. Call close() before restarting.');
+      throw const TailscaleUsageException(
+        'Already up. Call down() before reconnecting.',
+      );
     }
     if (_starting) {
-      throw StateError('start() is already in progress.');
+      throw const TailscaleUsageException('up() is already in progress.');
     }
     _starting = true;
 
-    final stateDir = _stateDir!;
+    final stateDir = _ownedStateDir;
+    final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
+    var nativeStarted = false;
 
     try {
       // Boot the Go engine on a background isolate.
-      final proxyPort = await Isolate.run(() {
-        final p1 = nodeName.toNativeUtf8();
-        final p2 = authKey.toNativeUtf8();
-        final p3 = controlUrl.toNativeUtf8();
+      final startResult = await Isolate.run(() {
+        final p1 = hostname.toNativeUtf8();
+        final p2 = (authKey ?? '').toNativeUtf8();
+        final p3 = resolvedControlUrl.toString().toNativeUtf8();
         final p4 = stateDir.toNativeUtf8();
 
         try {
@@ -181,11 +200,9 @@ class Tailscale {
           final resultJson = resultPtr.toDartString();
           native.duneFree(resultPtr);
 
-          final Map<String, dynamic> parsed = jsonDecode(resultJson);
-          if (parsed.containsKey('error')) {
-            throw Exception(parsed['error']);
-          }
-          return parsed['proxyPort'] as int;
+          return Map<String, dynamic>.from(
+            jsonDecode(resultJson) as Map<String, dynamic>,
+          );
         } finally {
           calloc.free(p1);
           calloc.free(p2);
@@ -194,11 +211,22 @@ class Tailscale {
         }
       });
 
-      if (proxyPort == 0) {
-        throw Exception('Failed to start Tailscale (proxy port 0)');
+      final startError = startResult['error'] as String?;
+      if (startError != null) {
+        throw TailscaleUpException(startError);
+      }
+      final proxyPort = startResult['proxyPort'] as int? ?? 0;
+      final proxyAuthToken = startResult['proxyAuthToken'] as String?;
+
+      if (proxyPort == 0 || proxyAuthToken == null || proxyAuthToken.isEmpty) {
+        throw const TailscaleUpException(
+          'Failed to start Tailscale: native runtime did not return a usable proxy endpoint.',
+        );
       }
 
       _proxyPort = proxyPort;
+      _proxyAuthToken = proxyAuthToken;
+      nativeStarted = true;
 
       // Set up the push channel and wait for Running state.
       _setupPushChannel();
@@ -206,76 +234,199 @@ class Tailscale {
       await _waitForRunning(timeout);
 
       _started = true;
-    } catch (e) {
+      return await _publishCurrentStatus();
+    } catch (error, stackTrace) {
       // Clean up on failure.
       _teardownPushChannel();
       _proxyPort = 0;
-      rethrow;
+      _proxyAuthToken = null;
+      _http?.close();
+      _http = null;
+      if (nativeStarted) {
+        await Isolate.run(() {
+          native.duneStop();
+        });
+      }
+      _publishStatus(TailscaleStatus.stopped);
+      Error.throwWithStackTrace(error, stackTrace);
     } finally {
       _starting = false;
     }
   }
 
-  /// Starts accepting incoming traffic from the tailnet.
+  /// Exposes a local HTTP server to peers on the tailnet.
   ///
-  /// Tailnet peers can reach this node on port 80. Traffic is forwarded to
-  /// `localhost:<port>`. If [port] is 0 (default), an ephemeral port is
-  /// allocated — bind your server to the returned port.
+  /// Tailnet peers can reach this node on [tailnetPort]. Traffic is forwarded
+  /// to `localhost:<localPort>`. If [localPort] is 0 (default), an ephemeral
+  /// local port is allocated — bind your server to the returned port.
   ///
-  /// Can be called multiple times to change the target port.
+  /// Can be called multiple times to change the local target port or
+  /// tailnet-facing port. This is an HTTP convenience API, not a general
+  /// `tsnet.Listen` equivalent.
   ///
   /// Returns the local port that receives incoming traffic.
-  Future<int> listen({int port = 0}) async {
+  Future<int> listen({int localPort = 0, int tailnetPort = 80}) async {
     if (!_started) {
-      throw StateError('Call start() before listen().');
+      throw const TailscaleUsageException('Call up() before listen().');
     }
 
-    return Isolate.run(() {
-      final resultPtr = native.duneListen(port);
+    final result = await Isolate.run(() {
+      final resultPtr = native.duneListen(localPort, tailnetPort);
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
 
-      final Map<String, dynamic> parsed = jsonDecode(resultJson);
-      if (parsed.containsKey('error')) {
-        throw Exception(parsed['error']);
-      }
-      return parsed['listenPort'] as int;
+      return Map<String, dynamic>.from(
+        jsonDecode(resultJson) as Map<String, dynamic>,
+      );
     });
+
+    final error = result['error'] as String?;
+    if (error != null) {
+      throw TailscaleListenException(error);
+    }
+
+    final listenPort = result['listenPort'] as int?;
+    if (listenPort == null || listenPort <= 0) {
+      throw const TailscaleListenException(
+        'Native runtime did not return a usable local listen port.',
+      );
+    }
+
+    return listenPort;
   }
 
   /// Returns the current Tailscale status.
   ///
-  /// Includes backend state, local IPs, online peers, health, and more.
+  /// Includes backend state, local IPs, health, and tailnet info.
+  ///
+  /// Peer inventory is intentionally excluded so status polling and
+  /// [statusChanges] stay lightweight. Call [peers] when you need the current
+  /// peer snapshot.
   Future<TailscaleStatus> status() async {
+    _ensureInitialized();
     final json = await Isolate.run(() {
       return _callNativeString(native.duneStatus);
     });
     try {
-      return TailscaleStatus.fromJson(jsonDecode(json));
-    } catch (_) {
-      return TailscaleStatus.stopped;
+      final parsed = Map<String, dynamic>.from(
+        jsonDecode(json) as Map<String, dynamic>,
+      );
+      final error = parsed['error'] as String?;
+      if (error != null) {
+        throw TailscaleStatusException(error);
+      }
+      return TailscaleStatus.fromJson(parsed);
+    } catch (error) {
+      if (error is TailscaleStatusException) {
+        rethrow;
+      }
+      throw TailscaleStatusException(
+        'Failed to decode native Tailscale status.',
+        cause: error,
+      );
     }
   }
 
-  /// Closes the Tailscale engine.
+  /// Returns the current peer snapshot for the tailnet.
+  ///
+  /// This is separated from [status] so apps can watch lightweight node-state
+  /// updates without reloading the full peer inventory each time.
+  Future<List<PeerStatus>> peers() async {
+    _ensureInitialized();
+    final json = await Isolate.run(() {
+      return _callNativeString(native.dunePeers);
+    });
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is Map<String, dynamic>) {
+        final error = decoded['error'] as String?;
+        if (error != null) {
+          throw TailscaleStatusException(error);
+        }
+      }
+
+      if (decoded is! List<dynamic>) {
+        throw const TailscaleStatusException(
+          'Failed to decode native Tailscale peers.',
+        );
+      }
+
+      return PeerStatus.listFromJson(decoded);
+    } catch (error) {
+      if (error is TailscaleStatusException) {
+        rethrow;
+      }
+      throw TailscaleStatusException(
+        'Failed to decode native Tailscale peers.',
+        cause: error,
+      );
+    }
+  }
+
+  /// Brings the embedded node down while preserving persisted state.
   ///
   /// Preserves state in the configured state directory, so the next
-  /// [start] call can reconnect without a fresh auth key.
+  /// [up] call can reconnect without a fresh auth key.
   ///
-  /// To fully reset (clear stored state), delete the state directory
-  /// after closing.
-  ///
-  /// No-op if not started.
-  Future<void> close() async {
+  /// No-op if not running.
+  Future<void> down() async {
+    if (_starting) {
+      throw const TailscaleUsageException(
+        'Cannot call down() while up() is in progress.',
+      );
+    }
     if (!_started) return;
     _started = false;
     _proxyPort = 0;
+    _proxyAuthToken = null;
     _http?.close();
     _http = null;
     _teardownPushChannel();
     await Isolate.run(() {
       native.duneStop();
     });
+    _publishStatus(TailscaleStatus.stopped);
+  }
+
+  /// Logs out and clears persisted state for the embedded node.
+  ///
+  /// The next [up] call will require fresh authentication.
+  Future<void> logout() async {
+    _ensureInitialized();
+    if (_starting) {
+      throw const TailscaleUsageException(
+        'Cannot call logout() while up() is in progress.',
+      );
+    }
+
+    _started = false;
+    _proxyPort = 0;
+    _proxyAuthToken = null;
+    _http?.close();
+    _http = null;
+    _teardownPushChannel();
+
+    final stateDir = _ownedStateDir;
+    final result = await Isolate.run(() {
+      final dirPtr = stateDir.toNativeUtf8();
+      try {
+        final resultPtr = native.duneLogout(dirPtr);
+        final resultJson = resultPtr.toDartString();
+        native.duneFree(resultPtr);
+        return Map<String, dynamic>.from(
+          jsonDecode(resultJson) as Map<String, dynamic>,
+        );
+      } finally {
+        calloc.free(dirPtr);
+      }
+    });
+
+    final error = result['error'] as String?;
+    if (error != null) {
+      throw TailscaleLogoutException(error);
+    }
+
+    _publishStatus(TailscaleStatus.stopped);
   }
 
   // ---------------------------------------------------------------------------
@@ -288,7 +439,12 @@ class Tailscale {
     // Initialize the Dart native API (idempotent — safe to call multiple times
     // but only the first call does anything).
     if (!_dartApiInitialized) {
-      native.duneInitDartAPI(ffi.NativeApi.initializeApiDLData);
+      final result = native.duneInitDartAPI(ffi.NativeApi.initializeApiDLData);
+      if (result != 0) {
+        throw const TailscaleUpException(
+          'Failed to initialize the Dart native API bridge.',
+        );
+      }
       _dartApiInitialized = true;
     }
 
@@ -316,8 +472,11 @@ class Tailscale {
       final parsed = jsonDecode(message) as Map<String, dynamic>;
 
       if (parsed['type'] == 'error') {
-        final error = parsed['error'] as String? ?? 'Unknown error';
-        _onError?.call(error);
+        final error = TailscaleRuntimeError.fromPushPayload(parsed);
+        if (_runningCompleter != null && !_runningCompleter!.isCompleted) {
+          _runningCompleter!.completeError(TailscaleUpException(error.message));
+        }
+        _publishRuntimeError(error);
         return;
       }
 
@@ -331,10 +490,7 @@ class Tailscale {
           _runningCompleter!.complete();
         }
 
-        // Fire the onStatusChange callback with a full status snapshot.
-        if (_onStatusChange != null) {
-          status().then((s) => _onStatusChange?.call(s));
-        }
+        unawaited(_publishCurrentStatus());
       }
     } catch (_) {
       // Malformed message from Go — ignore.
@@ -347,10 +503,10 @@ class Tailscale {
     try {
       await _runningCompleter!.future.timeout(
         timeout,
-        onTimeout: () => throw TimeoutException(
-          'Tailscale did not reach Running state within $timeout. '
-          'Check that the control server is reachable.',
-          timeout,
+        onTimeout: () => throw TailscaleTimeoutException(
+          message: _buildUpTimeoutMessage(timeout),
+          timeout: timeout,
+          lastStatus: _lastStatus,
         ),
       );
     } finally {
@@ -360,8 +516,49 @@ class Tailscale {
 
   void _ensureInitialized() {
     if (!_initialized) {
-      throw StateError(
-          'Tailscale.init() must be called before using the library.');
+      throw const TailscaleUsageException(
+        'Tailscale.init() must be called before using the library.',
+      );
     }
+  }
+
+  Future<TailscaleStatus> _publishCurrentStatus() async {
+    try {
+      final snapshot = await status();
+      _publishStatus(snapshot);
+      return snapshot;
+    } catch (_) {
+      // Ignore best-effort status publication failures.
+      return _lastStatus;
+    }
+  }
+
+  void _publishStatus(TailscaleStatus status) {
+    _lastStatus = status;
+    _statusController.add(status);
+  }
+
+  void _publishRuntimeError(TailscaleRuntimeError error) {
+    _errorController.add(error);
+  }
+
+  String _buildUpTimeoutMessage(Duration timeout) {
+    final lastStatus = _lastStatus;
+    if (lastStatus.nodeStatus == NodeStatus.needsLogin) {
+      final authUrl = lastStatus.authUrl;
+      if (authUrl != null) {
+        return 'Tailscale needs login before it can reach Running. Open '
+            '$authUrl, finish authentication, then retry up().';
+      }
+      return 'Tailscale needs login before it can reach Running. Subscribe to '
+          'statusChanges to receive the auth URL, then retry up().';
+    }
+    if (lastStatus.nodeStatus == NodeStatus.needsMachineAuth) {
+      return 'Tailscale is waiting for machine approval on the control plane '
+          'and did not reach Running within $timeout.';
+    }
+
+    return 'Tailscale did not reach Running state within $timeout. Check that '
+        'the control server is reachable.';
   }
 }

@@ -66,7 +66,7 @@ void main(List<String> args) async {
     if (targetOS == OS.android) {
       _configureAndroid(env, buildTags, targetArch);
     } else if (isIOS) {
-      await _configureIOS(env, targetArch);
+      await _configureIOS(env, input.config.code.iOS, targetArch);
     } else if (targetOS == OS.macOS) {
       // macOS: Dart's native asset bundler uses install_name_tool to rewrite
       // dylib paths. This requires enough header padding in the Mach-O binary.
@@ -147,7 +147,10 @@ Future<String> _findGo() async {
   final whichCmd = Platform.isWindows ? 'where' : 'which';
   final whichResult = await Process.run(whichCmd, ['go']);
   if (whichResult.exitCode == 0) {
-    return (whichResult.stdout as String).trim().split(RegExp(r'[\r\n]+')).first;
+    return (whichResult.stdout as String)
+        .trim()
+        .split(RegExp(r'[\r\n]+'))
+        .first;
   }
 
   // Check GOROOT if set
@@ -158,7 +161,8 @@ Future<String> _findGo() async {
   }
 
   // Common installation paths by platform
-  final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
+  final home =
+      Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
   final candidates = [
     // Official installer default
     if (!Platform.isWindows) '/usr/local/go/bin/go',
@@ -219,8 +223,7 @@ Future<void> _checkGoVersion(String goBin) async {
   final major = int.parse(match.group(1)!);
   final minor = int.parse(match.group(2)!);
 
-  if (major < _minGoMajor ||
-      (major == _minGoMajor && minor < _minGoMinor)) {
+  if (major < _minGoMajor || (major == _minGoMajor && minor < _minGoMinor)) {
     throw Exception(
       'Go $_minGoMajor.$_minGoMinor+ required, found go$major.$minor.\n'
       'Update from: https://go.dev/dl/',
@@ -233,28 +236,31 @@ Future<void> _checkGoVersion(String goBin) async {
 // ---------------------------------------------------------------------------
 
 String _toGOOS(OS os) => switch (os) {
-      OS.android => 'android',
-      OS.iOS => 'ios',
-      OS.linux => 'linux',
-      OS.macOS => 'darwin',
-      OS.windows => 'windows',
-      _ => throw UnsupportedError('Unsupported target OS: $os'),
-    };
+  OS.android => 'android',
+  OS.iOS => 'ios',
+  OS.linux => 'linux',
+  OS.macOS => 'darwin',
+  OS.windows => 'windows',
+  _ => throw UnsupportedError('Unsupported target OS: $os'),
+};
 
 String _toGOARCH(Architecture? arch) => switch (arch) {
-      Architecture.arm64 => 'arm64',
-      Architecture.x64 => 'amd64',
-      Architecture.arm => 'arm',
-      Architecture.ia32 => '386',
-      _ => throw UnsupportedError('Unsupported target architecture: $arch'),
-    };
+  Architecture.arm64 => 'arm64',
+  Architecture.x64 => 'amd64',
+  Architecture.arm => 'arm',
+  Architecture.ia32 => '386',
+  _ => throw UnsupportedError('Unsupported target architecture: $arch'),
+};
 
 // ---------------------------------------------------------------------------
 // Android NDK configuration
 // ---------------------------------------------------------------------------
 
 void _configureAndroid(
-    Map<String, String> env, List<String> buildTags, Architecture? arch) {
+  Map<String, String> env,
+  List<String> buildTags,
+  Architecture? arch,
+) {
   // Omit raw disco on Android to avoid socket permission issues.
   buildTags.add('ts_omit_listenrawdisco');
 
@@ -270,8 +276,8 @@ void _configureAndroid(
   final hostOS = Platform.isWindows
       ? 'windows-x86_64'
       : Platform.isMacOS
-          ? 'darwin-x86_64'
-          : 'linux-x86_64';
+      ? 'darwin-x86_64'
+      : 'linux-x86_64';
   final toolchain = p.join(ndkHome, 'toolchains', 'llvm', 'prebuilt', hostOS);
 
   const apiLevel = 24;
@@ -308,12 +314,9 @@ String? _findAndroidNDK() {
     final ndkDir = Directory(p.join(sdk, 'ndk'));
     if (!ndkDir.existsSync()) continue;
 
-    final versions = ndkDir
-        .listSync()
-        .whereType<Directory>()
-        .map((d) => d.path)
-        .toList()
-      ..sort();
+    final versions =
+        ndkDir.listSync().whereType<Directory>().map((d) => d.path).toList()
+          ..sort();
 
     if (versions.isNotEmpty) return versions.last;
   }
@@ -326,23 +329,32 @@ String? _findAndroidNDK() {
 // ---------------------------------------------------------------------------
 
 Future<void> _configureIOS(
-    Map<String, String> env, Architecture? arch) async {
-  // On Apple Silicon Macs, the simulator uses arm64 (same as device).
-  // The Dart build system tells us the target — we just need to pick the right SDK.
-  // For now, physical device = iphoneos, and we don't distinguish simulator here
-  // because the Dart native assets system handles that via the target triple.
-  const sdk = 'iphoneos';
-  const minVersion = '13.0';
+  Map<String, String> env,
+  IOSCodeConfig iOSConfig,
+  Architecture? arch,
+) async {
+  final sdk = iOSConfig.targetSdk.type;
+  final minVersion = iOSConfig.targetVersion.toString();
+  final versionFlag = sdk == IOSSdk.iPhoneSimulator.type
+      ? '-mios-simulator-version-min=$minVersion'
+      : '-miphoneos-version-min=$minVersion';
 
-  final ccResult =
-      await Process.run('xcrun', ['--sdk', sdk, '--find', 'clang']);
+  final ccResult = await Process.run('xcrun', [
+    '--sdk',
+    sdk,
+    '--find',
+    'clang',
+  ]);
   if (ccResult.exitCode != 0) {
     throw Exception('Failed to find iOS clang: ${ccResult.stderr}');
   }
   final cc = (ccResult.stdout as String).trim();
 
-  final sdkPathResult =
-      await Process.run('xcrun', ['--sdk', sdk, '--show-sdk-path']);
+  final sdkPathResult = await Process.run('xcrun', [
+    '--sdk',
+    sdk,
+    '--show-sdk-path',
+  ]);
   if (sdkPathResult.exitCode != 0) {
     throw Exception('Failed to find iOS SDK path: ${sdkPathResult.stderr}');
   }
@@ -352,10 +364,8 @@ Future<void> _configureIOS(
 
   env['CC'] = cc;
   env['CXX'] = cc.replaceAll('clang', 'clang++');
-  env['CGO_CFLAGS'] =
-      '-isysroot $sdkPath -arch $archFlag -miphoneos-version-min=$minVersion';
-  env['CGO_LDFLAGS'] =
-      '-isysroot $sdkPath -arch $archFlag -miphoneos-version-min=$minVersion';
+  env['CGO_CFLAGS'] = '-isysroot $sdkPath -arch $archFlag $versionFlag';
+  env['CGO_LDFLAGS'] = '-isysroot $sdkPath -arch $archFlag $versionFlag';
 }
 
 /// Converts a Go c-archive (.a) into a shared library (.dylib) using clang.
@@ -363,7 +373,10 @@ Future<void> _configureIOS(
 /// Go doesn't support c-shared on ios/arm64, but Flutter's native assets
 /// system requires a dynamic library. This bridges the gap.
 Future<void> _archiveToSharedLib(
-    Map<String, String> env, String archivePath, String dylibPath) async {
+  Map<String, String> env,
+  String archivePath,
+  String dylibPath,
+) async {
   final cc = env['CC'];
   if (cc == null) throw Exception('CC not set for iOS build');
 
@@ -376,9 +389,12 @@ Future<void> _archiveToSharedLib(
     '-shared',
     '-Wl,-all_load',
     archivePath,
-    '-framework', 'CoreFoundation',
-    '-framework', 'Security',
-    '-o', dylibPath,
+    '-framework',
+    'CoreFoundation',
+    '-framework',
+    'Security',
+    '-o',
+    dylibPath,
     '-headerpad_max_install_names',
     ...ldflags.split(' ').where((s) => s.isNotEmpty),
   ];

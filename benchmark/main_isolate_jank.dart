@@ -33,7 +33,7 @@ import 'package:tailscale/tailscale.dart';
 const _warmup = 3;
 const _iterations = 20;
 
-void main() async {
+Future<void> main() async {
   final controlUrl = Platform.environment['HEADSCALE_URL'];
   final authKey = Platform.environment['HEADSCALE_AUTH_KEY'];
 
@@ -41,13 +41,20 @@ void main() async {
     print('ERROR: HEADSCALE_URL and HEADSCALE_AUTH_KEY required.');
     print('Start Headscale: cd test/e2e && docker compose up -d');
     print(
-        'Create key: docker compose exec headscale headscale preauthkeys create --user dune-test --ephemeral --expiration 10m');
+      'Create key: docker compose exec headscale headscale preauthkeys create --user dune-test --ephemeral --expiration 10m',
+    );
     exit(1);
   }
 
-  final tsnet = DuneTsnet.instance;
-  final stateDir =
-      Directory.systemTemp.createTempSync('tailscale_bench_').path;
+  final parsedControlUrl = Uri.parse(controlUrl);
+  final tsnet = Tailscale.instance;
+  final stateDir = Directory.systemTemp.createTempSync('tailscale_bench_').path;
+  final backend = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  backend.listen((request) async {
+    request.response.statusCode = HttpStatus.ok;
+    request.response.write('ok');
+    await request.response.close();
+  });
 
   print('');
   print('=== tailscale Main Isolate Jank Benchmark ===');
@@ -62,43 +69,52 @@ void main() async {
 
   final results = <_BenchResult>[];
 
-  // --- init() ---
-  {
-    final r = await _benchOnce('init()', () => tsnet.init(
-          clientId: 'bench-node',
+  try {
+    results.add(
+      _benchSyncOnce('Tailscale.init()', () {
+        Tailscale.init(stateDir: stateDir);
+      }),
+    );
+
+    results.add(
+      await _benchOnce(
+        'up()',
+        () => tsnet.up(
+          hostname: 'bench-node',
           authKey: authKey,
-          controlUrl: controlUrl,
-          stateDir: stateDir,
-        ));
-    results.add(r);
+          controlUrl: parsedControlUrl,
+          timeout: const Duration(seconds: 60),
+        ),
+      ),
+    );
+
     await Future.delayed(const Duration(seconds: 1));
-  }
 
-  // --- Repeated API benchmarks ---
-  results.add(await _bench('getLocalIP()', () => tsnet.getLocalIP()));
-  results.add(
-      await _bench('getPeerAddresses()', () => tsnet.getPeerAddresses()));
-  results.add(await _bench('getStatus()', () => tsnet.getStatus()));
-  // --- getProxyUri() is sync ---
-  {
-    final wallUs = <int>[];
-    for (var i = 0; i < _warmup + _iterations; i++) {
-      final sw = Stopwatch()..start();
-      tsnet.getProxyUri('100.64.0.1', '/api/test');
-      sw.stop();
-      if (i >= _warmup) wallUs.add(sw.elapsedMicroseconds);
-    }
-    results.add(_BenchResult('getProxyUri()', wallUs, wallUs, wallUs));
-  }
+    results.add(await _bench('status()', () => tsnet.status()));
+    results.add(await _bench('peers()', () => tsnet.peers()));
+    results.add(
+      await _bench('listen()', () => tsnet.listen(localPort: backend.port)),
+    );
+    results.add(
+      _benchSync('httpClient getter', () {
+        final _ = tsnet.httpClient;
+      }),
+    );
+    results.add(await _benchOnce('down()', () => tsnet.down()));
 
-  // --- stop() ---
-  results.add(await _benchOnce('stop()', () => tsnet.stop()));
+    // --- Also benchmark raw Isolate.run() overhead with no-op ---
+    results.add(
+      await _bench('Isolate.run() baseline', () => Isolate.run(() => 42)),
+    );
 
-  // --- Also benchmark raw Isolate.run() overhead with no-op ---
-  results.add(await _bench('Isolate.run() baseline', () => Isolate.run(() => 42)));
-
-  _printResults(results);
-
+    _printResults(results);
+  } catch (_) {}
+  try {
+    await tsnet.down();
+  } catch (_) {}
+  try {
+    await backend.close(force: true);
+  } catch (_) {}
   try {
     Directory(stateDir).deleteSync(recursive: true);
   } catch (_) {}
@@ -110,8 +126,7 @@ void main() async {
 /// free. The main isolate time is: wall_time - time_spent_yielded.
 /// We approximate this by counting how many microtask ticks fire during
 /// the await — if the main isolate is truly free, ticks fire rapidly.
-Future<_BenchResult> _bench(
-    String label, Future<dynamic> Function() fn) async {
+Future<_BenchResult> _bench(String label, Future<dynamic> Function() fn) async {
   // Warmup
   for (var i = 0; i < _warmup; i++) {
     await fn();
@@ -132,10 +147,43 @@ Future<_BenchResult> _bench(
 }
 
 Future<_BenchResult> _benchOnce(
-    String label, Future<dynamic> Function() fn) async {
+  String label,
+  Future<dynamic> Function() fn,
+) async {
   final m = await _measureMainIsolateTime(fn);
-  return _BenchResult(label, [m.wallUs], [m.mainUs], [m.isolateUs],
-      singleShot: true);
+  return _BenchResult(label, [m.wallUs], [m.mainUs], [
+    m.isolateUs,
+  ], singleShot: true);
+}
+
+_BenchResult _benchSync(String label, void Function() fn) {
+  for (var i = 0; i < _warmup; i++) {
+    fn();
+  }
+
+  final wallUs = <int>[];
+  for (var i = 0; i < _iterations; i++) {
+    final sw = Stopwatch()..start();
+    fn();
+    sw.stop();
+    wallUs.add(sw.elapsedMicroseconds);
+  }
+
+  return _BenchResult(label, wallUs, wallUs, List.filled(wallUs.length, 0));
+}
+
+_BenchResult _benchSyncOnce(String label, void Function() fn) {
+  final sw = Stopwatch()..start();
+  fn();
+  sw.stop();
+
+  return _BenchResult(
+    label,
+    [sw.elapsedMicroseconds],
+    [sw.elapsedMicroseconds],
+    const [0],
+    singleShot: true,
+  );
 }
 
 /// Measures how much of the wall time is spent blocking the main isolate.
@@ -156,8 +204,8 @@ Future<_BenchResult> _benchOnce(
 /// So we measure: before spawn (sync), after spawn (async wait), after result (sync).
 /// We use Completer + microtask scheduling to distinguish the phases.
 Future<_Measurement> _measureMainIsolateTime(
-    Future<dynamic> Function() fn) async {
-
+  Future<dynamic> Function() fn,
+) async {
   // Phase 1: Record the total wall time
   final wallSw = Stopwatch()..start();
 
@@ -211,8 +259,13 @@ class _Measurement {
 }
 
 class _BenchResult {
-  _BenchResult(this.label, this.wallUs, this.mainUs, this.isolateUs,
-      {this.singleShot = false});
+  _BenchResult(
+    this.label,
+    this.wallUs,
+    this.mainUs,
+    this.isolateUs, {
+    this.singleShot = false,
+  });
 
   final String label;
   final List<int> wallUs;
@@ -256,21 +309,23 @@ void _printResults(List<_BenchResult> results) {
     '${'Wall p90'.padLeft(11)}'
     '${'  Jank?'.padLeft(9)}',
   );
-  print('${''.padRight(lw, '-')}'
-      '${''.padRight(11, '-')}'
-      '${''.padRight(11, '-')}'
-      '${''.padRight(11, '-')}'
-      '${''.padRight(11, '-')}'
-      '${''.padRight(9, '-')}');
+  print(
+    '${''.padRight(lw, '-')}'
+    '${''.padRight(11, '-')}'
+    '${''.padRight(11, '-')}'
+    '${''.padRight(11, '-')}'
+    '${''.padRight(11, '-')}'
+    '${''.padRight(9, '-')}',
+  );
 
   for (final r in results) {
     final jank = r.mainMed < 1.0
         ? 'None'
         : r.mainMed < 4.0
-            ? 'Low'
-            : r.mainMed < 16.0
-                ? 'Med'
-                : 'HIGH';
+        ? 'Low'
+        : r.mainMed < 16.0
+        ? 'Med'
+        : 'HIGH';
     print(
       '${r.label.padRight(lw)}'
       '${_fmtMs(r.mainMed)} ms'
@@ -291,21 +346,26 @@ void _printResults(List<_BenchResult> results) {
   print('--- Markdown ---');
   print('');
   print(
-      '| API | Main med (ms) | Main p90 (ms) | Wall med (ms) | Wall p90 (ms) | Jank risk |');
-  print('|-----|--------------|--------------|--------------|--------------|-----------|');
+    '| API | Main med (ms) | Main p90 (ms) | Wall med (ms) | Wall p90 (ms) | Jank risk |',
+  );
+  print(
+    '|-----|--------------|--------------|--------------|--------------|-----------|',
+  );
   for (final r in results) {
     final jank = r.mainMed < 1.0
         ? 'None'
         : r.mainMed < 4.0
-            ? 'Low'
-            : r.mainMed < 16.0
-                ? 'Med'
-                : 'HIGH';
-    print('| ${r.label} '
-        '| ${r.mainMed.toStringAsFixed(2)} '
-        '| ${r.mainP90.toStringAsFixed(2)} '
-        '| ${r.wallMed.toStringAsFixed(2)} '
-        '| ${r.wallP90.toStringAsFixed(2)} '
-        '| $jank |');
+        ? 'Low'
+        : r.mainMed < 16.0
+        ? 'Med'
+        : 'HIGH';
+    print(
+      '| ${r.label} '
+      '| ${r.mainMed.toStringAsFixed(2)} '
+      '| ${r.mainP90.toStringAsFixed(2)} '
+      '| ${r.wallMed.toStringAsFixed(2)} '
+      '| ${r.wallP90.toStringAsFixed(2)} '
+      '| $jank |',
+    );
   }
 }

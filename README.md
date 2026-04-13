@@ -1,10 +1,17 @@
 # tailscale
 
-Embed a full [Tailscale](https://tailscale.com) node in any Dart or Flutter app. Your app joins the tailnet, gets its own IP, reaches peers, and exposes a local HTTP server to the tailnet — all over encrypted WireGuard tunnels. No system `tailscaled` required.
+Bring a Dart or Flutter app onto your tailnet as its own app-managed node.
 
-This package runs one embedded node per process. It is designed for app-owned traffic, not system-wide VPN routing.
+With this package, your app can talk directly to other tailnet devices and expose a local HTTP service to the tailnet without asking users to install, configure, or route traffic through a system-wide VPN.
 
 Works with [Tailscale](https://tailscale.com) and self-hosted [Headscale](https://github.com/juanfont/headscale).
+
+## Why it's different
+
+- Your app joins the tailnet itself instead of depending on a separate Tailscale app or daemon.
+- Traffic is app-scoped, not device-scoped, so you can add private connectivity without taking over the machine's networking.
+- It works across iOS, Android, macOS, Linux, and Windows from one Dart API.
+- It gives Dart and Flutter apps a practical embedded-networking model instead of making you coordinate a separate system service.
 
 ```dart
 Tailscale.init(stateDir: '/path/to/state');
@@ -23,6 +30,19 @@ await tsnet.httpClient.get(Uri.parse('http://${peer.ipv4}/api/data'));
 await tsnet.listen(localPort: 8080);
 ```
 
+## App Model
+
+This package embeds a Tailscale node directly inside your app process.
+
+- Your app brings the node up with `up()`.
+- The node gets its own tailnet identity and IP addresses.
+- Outbound app traffic goes through `httpClient`.
+- Local node state is available through `status()` and `statusChanges`.
+- Peer inventory is fetched explicitly through `peers()`.
+- A local HTTP server can be published to the tailnet with `listen()`.
+
+The package runs one embedded node per process. It is designed for app-owned connectivity, not for replacing the machine's primary VPN or network stack.
+
 ## Platform support
 
 | Platform | Status | Notes |
@@ -35,30 +55,16 @@ await tsnet.listen(localPort: 8080);
 
 All platforms build automatically via a Dart [build hook](hook/build.dart) — no manual compilation, no pre-built binaries to manage.
 
-## Features
+## Highlights
 
-**Networking**
-- **Outgoing requests** — `tsnet.httpClient` is a standard `http.Client` that routes through the WireGuard tunnel.
-- **Incoming requests** — `tsnet.listen()` forwards tailnet HTTP traffic to your local server. Peer IP forwarded via `X-Dune-Peer-Ip` header.
-- **Peer discovery** — `tsnet.peers()` returns typed peer snapshots, separate from lightweight node status.
-
-**Real-time state updates**
-- **Push channel** — Go pushes state transitions to Dart via NativePort. No polling.
-- **`statusChanges` stream** — subscribe to pushed local-node `TailscaleStatus` snapshots after initialization.
-- **`runtimeErrors` stream** — subscribe to typed asynchronous engine and watcher errors separately from call-specific exceptions.
-- **`up()` waits for Running** — returns the current `TailscaleStatus` when the node is connected and ready for traffic, or throws on timeout.
-
-**Developer experience**
-- **Pure Dart** — no Flutter dependency. Works in Flutter apps, CLI tools, and server-side Dart.
-- **Zero jank** — every FFI call runs on a background isolate. The main isolate is never blocked.
-- **Automatic builds** — a Dart build hook compiles Go from source for the target platform. Add the dependency, have Go installed, done.
-- **Headscale support** — configurable control URL. Tested end-to-end against Headscale in CI.
-
-**Reliability**
-- **Persistent auth** — machine keys stored in SQLite. Reconnects instantly on subsequent launches without an auth key.
-- **Up timeout** — configurable timeout with clear error if the control server is unreachable.
-- **Log control** — `Tailscale.init(logLevel: TailscaleLogLevel.info)` enables verbose native logs when you need them.
-- **Tested** — unit, FFI integration, and full E2E tests against a real Headscale server, all running in CI.
+- **App-scoped tailnet access** — add private networking to one app without turning on a device-wide VPN.
+- **Outbound peer access with familiar Dart APIs** — use a standard `http.Client` for requests to tailnet peers.
+- **Inbound HTTP publishing** — expose a local app server to other tailnet peers.
+- **Typed runtime state** — observe node status, peer snapshots, and runtime errors through Dart models instead of parsing raw LocalAPI responses.
+- **Persistent identity** — reconnect across launches without re-authenticating every time.
+- **Cross-platform native builds** — the package compiles its Go layer automatically for the target platform.
+- **Headscale support** — point the control plane at Tailscale or your own Headscale deployment.
+- **Production-oriented validation** — unit, FFI integration, Go, and Headscale-backed end-to-end tests are all in the repo.
 
 ## Usage
 
@@ -232,7 +238,7 @@ Your app's `AndroidManifest.xml` must include:
 
 Deployment target must be iOS 13.0+.
 
-## How it works
+## Architecture
 
 ```
 ┌─────────────┐       FFI        ┌──────────────┐      Tailscale       ┌─────────────┐

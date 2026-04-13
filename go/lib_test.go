@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"tailscale.com/ipn"
+	"tailscale.com/tsnet"
 )
 
 // --- HasState tests ---
@@ -68,7 +69,9 @@ func TestLogout_RemovesDir(t *testing.T) {
 	// Write a file so the dir isn't empty
 	os.WriteFile(filepath.Join(stateDir, "state.db"), []byte("data"), 0600)
 
-	Logout(stateDir)
+	if err := Logout(stateDir); err != nil {
+		t.Fatalf("Logout returned error: %v", err)
+	}
 
 	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
 		t.Errorf("Logout should remove the state directory, but it still exists")
@@ -122,6 +125,98 @@ func TestOutgoingProxy_MissingTarget(t *testing.T) {
 	// With srv == nil, we get 503
 	if rec.Code != 503 {
 		t.Errorf("expected 503 when srv is nil, got %d", rec.Code)
+	}
+}
+
+func TestParseOutgoingTarget_PreservesHTTPSAndQuery(t *testing.T) {
+	target, err := parseOutgoingTarget("https://100.64.0.5/api/data?target=user-value&foo=bar")
+	if err != nil {
+		t.Fatalf("parseOutgoingTarget returned error: %v", err)
+	}
+
+	if got := target.Scheme; got != "https" {
+		t.Errorf("scheme = %q, want %q", got, "https")
+	}
+	if got := target.Host; got != "100.64.0.5" {
+		t.Errorf("host = %q, want %q", got, "100.64.0.5")
+	}
+	if got := target.RawQuery; got != "target=user-value&foo=bar" {
+		t.Errorf("raw query = %q, want %q", got, "target=user-value&foo=bar")
+	}
+}
+
+func TestParseOutgoingTarget_RejectsInvalidURLs(t *testing.T) {
+	tests := []string{
+		"",
+		"/relative/path",
+		"ftp://100.64.0.5/file.txt",
+		"http:///missing-host",
+	}
+
+	for i, target := range tests {
+		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			if _, err := parseOutgoingTarget(target); err == nil {
+				t.Errorf("parseOutgoingTarget(%q) succeeded, want error", target)
+			}
+		})
+	}
+}
+
+func TestIsAuthorizedOutgoingProxyRequest(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://127.0.0.1/proxy", nil)
+
+	if isAuthorizedOutgoingProxyRequest(req, "secret") {
+		t.Fatal("request without auth header should not be authorized")
+	}
+
+	req.Header.Set(proxyAuthHeader, "secret")
+	if !isAuthorizedOutgoingProxyRequest(req, "secret") {
+		t.Fatal("request with matching auth header should be authorized")
+	}
+}
+
+func TestFilteredProxyRequestHeaders_StripsInternalProxyAuth(t *testing.T) {
+	headers := http.Header{
+		proxyAuthHeader: []string{"secret"},
+		"Accept":        []string{"application/json"},
+	}
+
+	filtered := filteredProxyRequestHeaders(headers)
+
+	if got := filtered.Get(proxyAuthHeader); got != "" {
+		t.Fatalf("proxy auth header leaked to outbound request: %q", got)
+	}
+	if got := filtered.Get("Accept"); got != "application/json" {
+		t.Fatalf("Accept header = %q, want application/json", got)
+	}
+}
+
+func TestHandleOutgoingProxy_RejectsUnexpectedPath(t *testing.T) {
+	mu.Lock()
+	srv = &tsnet.Server{}
+	proxyAuthToken = "secret"
+	mu.Unlock()
+	defer func() {
+		mu.Lock()
+		srv = nil
+		proxyAuthToken = ""
+		mu.Unlock()
+	}()
+
+	req := httptest.NewRequest("GET", "http://127.0.0.1/not-proxy?target=https://example.com", nil)
+	req.Header.Set(proxyAuthHeader, "secret")
+	rec := httptest.NewRecorder()
+
+	handleOutgoingProxy(rec, req)
+
+	if rec.Code != 404 {
+		t.Fatalf("unexpected status for non-proxy path: got %d want 404", rec.Code)
+	}
+}
+
+func TestListen_RejectsInvalidTailnetPort(t *testing.T) {
+	if _, err := Listen(0, 0); err == nil {
+		t.Fatal("Listen with invalid tailnet port succeeded, want error")
 	}
 }
 

@@ -19,18 +19,22 @@ func DuneStart(hostname *C.char, authKey *C.char, controlURL *C.char, stateDir *
 	ctl := C.GoString(controlURL)
 	dir := C.GoString(stateDir)
 
-	port, err := tailscale.Start(name, key, ctl, dir)
+	port, proxyAuthToken, err := tailscale.Start(name, key, ctl, dir)
 	if err != nil {
 		m := map[string]string{"error": err.Error()}
 		b, _ := json.Marshal(m)
 		return C.CString(string(b))
 	}
-	return C.CString(fmt.Sprintf(`{"proxyPort": %d}`, port))
+	result, _ := json.Marshal(map[string]any{
+		"proxyPort":      port,
+		"proxyAuthToken": proxyAuthToken,
+	})
+	return C.CString(string(result))
 }
 
 //export DuneListen
-func DuneListen(localPort C.int) *C.char {
-	port, err := tailscale.Listen(int(localPort))
+func DuneListen(localPort C.int, tailnetPort C.int) *C.char {
+	port, err := tailscale.Listen(int(localPort), int(tailnetPort))
 	if err != nil {
 		m := map[string]string{"error": err.Error()}
 		b, _ := json.Marshal(m)
@@ -59,9 +63,14 @@ func DuneHasState(stateDir *C.char) C.int {
 }
 
 //export DuneLogout
-func DuneLogout(stateDir *C.char) {
+func DuneLogout(stateDir *C.char) *C.char {
 	dir := C.GoString(stateDir)
-	tailscale.Logout(dir)
+	if err := tailscale.Logout(dir); err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(`{"ok":true}`)
 }
 
 //export DuneStop
@@ -72,6 +81,11 @@ func DuneStop() {
 //export DuneStatus
 func DuneStatus() *C.char {
 	return C.CString(tailscale.DuneStatus())
+}
+
+//export DunePeers
+func DunePeers() *C.char {
+	return C.CString(tailscale.DunePeers())
 }
 
 //export DuneFree

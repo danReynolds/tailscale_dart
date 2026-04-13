@@ -11,6 +11,7 @@ library;
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
@@ -35,23 +36,25 @@ void main() {
 
   tearDownAll(() async {
     try {
-      await tsnet.close();
+      await tsnet.down();
     } catch (_) {}
     try {
       Directory(stateDir).deleteSync(recursive: true);
     } catch (_) {}
   });
 
-  test('start connects and reaches Running state', () async {
-    // start() returns only when the node is Running — no polling needed.
-    await tsnet.start(
-      nodeName: 'dune-e2e-test',
+  test('up connects and reaches Running state', () async {
+    // up() returns the current status once the node is Running.
+    final status = await tsnet.up(
+      hostname: 'dune-e2e-test',
       authKey: authKey,
-      controlUrl: controlUrl,
+      controlUrl: Uri.parse(controlUrl),
       timeout: const Duration(seconds: 60),
     );
 
     expect(tsnet.isRunning, isTrue);
+    expect(status.isRunning, isTrue);
+    expect(status.ipv4, startsWith('100.'));
     expect(tsnet.proxyPort, greaterThan(0));
   });
 
@@ -62,32 +65,32 @@ void main() {
     expect(s.ipv4, startsWith('100.'));
   });
 
-  test('status.onlinePeers returns a list', () async {
-    final s = await tsnet.status();
-    expect(s.onlinePeers, isA<List<PeerStatus>>());
+  test('peers returns a list', () async {
+    final peers = await tsnet.peers();
+    expect(peers, isA<List<PeerStatus>>());
   });
 
   test('http client is available', () async {
-    expect(tsnet.http, isA<http.Client>());
+    expect(tsnet.httpClient, isA<http.Client>());
   });
 
-  test('close shuts down cleanly', () async {
-    await tsnet.close();
+  test('down shuts down cleanly', () async {
+    await tsnet.down();
     expect(tsnet.isRunning, isFalse);
   });
 
-  test('restart and close + delete stateDir clears state', () async {
-    await tsnet.start(
-      nodeName: 'dune-e2e-test',
+  test('logout clears persisted state', () async {
+    await tsnet.up(
+      hostname: 'dune-e2e-test',
       authKey: authKey,
-      controlUrl: controlUrl,
+      controlUrl: Uri.parse(controlUrl),
       timeout: const Duration(seconds: 60),
     );
 
-    await tsnet.close();
-    Directory(stateDir).deleteSync(recursive: true);
+    await tsnet.logout();
 
     expect(tsnet.isRunning, isFalse);
-    expect(Directory(stateDir).existsSync(), isFalse);
+    expect(Directory(stateDir).existsSync(), isTrue);
+    expect(Directory(p.join(stateDir, 'tailscale')).existsSync(), isFalse);
   });
 }

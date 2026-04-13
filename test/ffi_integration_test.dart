@@ -9,13 +9,27 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+import 'package:tailscale/tailscale.dart';
 import 'package:tailscale/src/ffi_bindings.dart' as native;
 
 void main() {
+  late Directory configuredStateBaseDir;
+
   setUpAll(() {
     // Suppress Go stderr logging during tests.
     native.duneSetLogLevel(0);
+    configuredStateBaseDir = Directory.systemTemp.createTempSync(
+      'tailscale_test_base_',
+    );
+    Tailscale.init(stateDir: configuredStateBaseDir.path);
+  });
+
+  tearDownAll(() {
+    if (configuredStateBaseDir.existsSync()) {
+      configuredStateBaseDir.deleteSync(recursive: true);
+    }
   });
 
   group('symbol resolution', () {
@@ -54,6 +68,17 @@ void main() {
   group('duneGetPeers (before start)', () {
     test('returns empty array JSON when server not running', () {
       final ptr = native.duneGetPeers();
+      final result = ptr.toDartString();
+      native.duneFree(ptr);
+
+      expect(result, '[]');
+      expect(jsonDecode(result), isEmpty);
+    });
+  });
+
+  group('dunePeers (before start)', () {
+    test('returns empty array JSON when server not running', () {
+      final ptr = native.dunePeers();
       final result = ptr.toDartString();
       native.duneFree(ptr);
 
@@ -114,8 +139,12 @@ void main() {
       final controlUrl = 'http://127.0.0.1:1/'.toNativeUtf8();
       final stateDir = dir.path.toNativeUtf8();
 
-      final resultPtr =
-          native.duneStart(hostname, authKey, controlUrl, stateDir);
+      final resultPtr = native.duneStart(
+        hostname,
+        authKey,
+        controlUrl,
+        stateDir,
+      );
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
 
@@ -126,9 +155,100 @@ void main() {
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
       expect(
-          parsed.containsKey('proxyPort') || parsed.containsKey('error'), isTrue,
-          reason:
-              'Expected {"proxyPort": N, "listenPort": M} or {"error": "..."}, got: $resultJson');
+        parsed.containsKey('proxyPort') || parsed.containsKey('error'),
+        isTrue,
+        reason:
+            'Expected {"proxyPort": N, "proxyAuthToken": "..."} or {"error": "..."}, got: $resultJson',
+      );
+      if (parsed.containsKey('proxyPort')) {
+        expect(parsed['proxyAuthToken'], isA<String>());
+        expect((parsed['proxyAuthToken'] as String), isNotEmpty);
+      }
+    });
+  });
+
+  group('duneListen validation', () {
+    test('rejects invalid tailnet port before server startup', () {
+      final resultPtr = native.duneListen(0, 0);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('invalid tailnet port'));
+    });
+  });
+
+  group('Tailscale.up cleanup', () {
+    test('stops the native server when start times out', () async {
+      addTearDown(() async {
+        try {
+          await Tailscale.instance.down();
+        } catch (_) {}
+        native.duneStop();
+      });
+
+      await expectLater(
+        Tailscale.instance.up(
+          hostname: 'timeout-test',
+          authKey: 'tskey-fake-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+          timeout: const Duration(milliseconds: 200),
+        ),
+        throwsA(anything),
+      );
+
+      expect(Tailscale.instance.isRunning, isFalse);
+      expect(Tailscale.instance.proxyPort, 0);
+
+      final ptr = native.duneStatus();
+      final result = ptr.toDartString();
+      native.duneFree(ptr);
+      expect(result, '{}');
+    });
+  });
+
+  group('Tailscale.logout', () {
+    test('removes only the owned state subdirectory', () async {
+      final ownedStateDir = Directory(
+        p.join(configuredStateBaseDir.path, 'tailscale'),
+      );
+      if (ownedStateDir.existsSync()) {
+        ownedStateDir.deleteSync(recursive: true);
+      }
+      ownedStateDir.createSync(recursive: true);
+
+      final preservedFile = File(
+        p.join(configuredStateBaseDir.path, 'keep.txt'),
+      )..writeAsStringSync('keep');
+      File(
+        p.join(ownedStateDir.path, 'state.db'),
+      ).writeAsStringSync('placeholder');
+
+      await Tailscale.instance.logout();
+
+      expect(configuredStateBaseDir.existsSync(), isTrue);
+      expect(preservedFile.existsSync(), isTrue);
+      expect(ownedStateDir.existsSync(), isFalse);
+    });
+
+    test('emits a stopped snapshot on statusChanges', () async {
+      final ownedStateDir = Directory(
+        p.join(configuredStateBaseDir.path, 'tailscale'),
+      );
+      if (ownedStateDir.existsSync()) {
+        ownedStateDir.deleteSync(recursive: true);
+      }
+      ownedStateDir.createSync(recursive: true);
+      File(
+        p.join(ownedStateDir.path, 'state.db'),
+      ).writeAsStringSync('placeholder');
+
+      final eventFuture = Tailscale.instance.statusChanges.first;
+      await Tailscale.instance.logout();
+      final snapshot = await eventFuture;
+
+      expect(snapshot.nodeStatus, NodeStatus.stopped);
+      expect(snapshot.isRunning, isFalse);
     });
   });
 }

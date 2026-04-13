@@ -10,14 +10,17 @@ import 'dart:ffi' as ffi;
 import 'package:ffi/ffi.dart';
 
 /// Starts the Tailscale node and outgoing HTTP proxy.
-/// Returns JSON: {"proxyPort": N} on success, {"error": "..."} on failure.
+/// Returns JSON:
+///   {"proxyPort": N, "proxyAuthToken": "..."} on success
+///   {"error": "..."} on failure.
 @ffi.Native<
-    ffi.Pointer<Utf8> Function(
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-    )>(symbol: 'DuneStart')
+  ffi.Pointer<Utf8> Function(
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+  )
+>(symbol: 'DuneStart')
 external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> hostname,
   ffi.Pointer<Utf8> authKey,
@@ -25,11 +28,13 @@ external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> stateDir,
 );
 
-/// Starts the reverse proxy (tailnet:80 → localhost:localPort).
+/// Starts the reverse proxy (tailnet:tailnetPort → localhost:localPort).
 /// If localPort is 0, allocates an ephemeral port.
 /// Returns JSON: {"listenPort": N} on success, {"error": "..."} on failure.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32)>(symbol: 'DuneListen')
-external ffi.Pointer<Utf8> duneListen(int localPort);
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Int32)>(
+  symbol: 'DuneListen',
+)
+external ffi.Pointer<Utf8> duneListen(int localPort, int tailnetPort);
 
 /// Returns a JSON array of online peer IPv4 addresses.
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneGetPeers')
@@ -44,16 +49,21 @@ external ffi.Pointer<Utf8> duneGetLocalIP();
 external int duneHasState(ffi.Pointer<Utf8> stateDir);
 
 /// Stops the server and removes the state directory.
-@ffi.Native<ffi.Void Function(ffi.Pointer<Utf8>)>(symbol: 'DuneLogout')
-external void duneLogout(ffi.Pointer<Utf8> stateDir);
+/// Returns JSON: {"ok": true} on success, {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(symbol: 'DuneLogout')
+external ffi.Pointer<Utf8> duneLogout(ffi.Pointer<Utf8> stateDir);
 
 /// Stops the server, preserving state.
 @ffi.Native<ffi.Void Function()>(symbol: 'DuneStop')
 external void duneStop();
 
-/// Returns the full Tailscale status as JSON.
+/// Returns the local-node Tailscale status as JSON.
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneStatus')
 external ffi.Pointer<Utf8> duneStatus();
+
+/// Returns the current peer list as JSON.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DunePeers')
+external ffi.Pointer<Utf8> dunePeers();
 
 /// Frees a pointer allocated by the Go layer.
 @ffi.Native<ffi.Void Function(ffi.Pointer<Utf8>)>(symbol: 'DuneFree')

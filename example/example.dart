@@ -4,43 +4,43 @@ void main() async {
   // 1. Configure once at app startup (before any other Tailscale calls).
   Tailscale.init(
     stateDir: '/path/to/persistent/state',
-    logLevel: 2, // 0 = silent, 1 = errors, 2 = verbose
+    logLevel: TailscaleLogLevel.info,
   );
 
   final tsnet = Tailscale.instance;
+  tsnet.statusChanges.listen((status) {
+    print('Node state: ${status.nodeStatus}');
+  });
+  tsnet.runtimeErrors.listen((error) {
+    print('Tailscale runtime error [${error.code.name}]: ${error.message}');
+  });
 
-  // 2. Start the Tailscale node.
-  await tsnet.start(
-    nodeName: 'my-app',
+  // 2. Bring the Tailscale node up.
+  final status = await tsnet.up(
+    hostname: 'my-app',
     authKey: 'tskey-auth-...',
-    controlUrl: 'https://controlplane.tailscale.com',
+    controlUrl: Uri.parse('https://controlplane.tailscale.com'),
   );
 
   // Your app is now a node on the tailnet
-  final status = await tsnet.status();
   print('Local IP: ${status.ipv4}');
-  print('Online peers: ${status.onlinePeers.length}');
+  final peers = await tsnet.peers();
+  print('Known peers: ${peers.length}');
 
   // 3. Make requests to peers using the built-in HTTP client.
   //    It transparently routes through the Tailscale tunnel.
-  final response = await tsnet.http.get(
-    Uri.parse('http://100.64.0.5/api/data'),
+  final peer = peers.firstWhere((peer) => peer.online);
+  final response = await tsnet.httpClient.get(
+    Uri.parse('http://${peer.ipv4}/api/data'),
   );
   print('Response: ${response.body}');
 
-  // The raw proxy port is also available for advanced use cases:
-  print('Proxy port: ${tsnet.proxyPort}');
-
-  // Accept incoming traffic from the tailnet
-  await tsnet.listen(port: 8080);
-
-  // Check if we can reconnect on next launch
-  final provisioned = await tsnet.isProvisioned();
-  print('Has stored credentials: $provisioned');
+  // Expose a local HTTP server to the tailnet
+  await tsnet.listen(localPort: 8080);
 
   // Check status
   print('Running: ${status.isRunning}, healthy: ${status.isHealthy}');
 
   // Clean shutdown
-  await tsnet.close();
+  await tsnet.down();
 }

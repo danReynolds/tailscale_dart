@@ -8,10 +8,10 @@ void main() async {
   );
 
   final tsnet = Tailscale.instance;
-  tsnet.statusChanges.listen((status) {
+  tsnet.onStatusChange.listen((status) {
     print('Node state: ${status.nodeStatus}');
   });
-  tsnet.runtimeErrors.listen((error) {
+  tsnet.onError.listen((error) {
     print('Tailscale runtime error [${error.code.name}]: ${error.message}');
   });
 
@@ -30,7 +30,7 @@ void main() async {
   // 3. Make requests to peers using the built-in HTTP client.
   //    It transparently routes through the Tailscale tunnel.
   final peer = peers.firstWhere((peer) => peer.online);
-  final response = await tsnet.httpClient.get(
+  final response = await tsnet.http.get(
     Uri.parse('http://${peer.ipv4}/api/data'),
   );
   print('Response: ${response.body}');

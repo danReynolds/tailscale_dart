@@ -240,12 +240,12 @@ void main() {
 
     test('statusChanges exposes a broadcast stream', () {
       final tsnet = Tailscale.instance;
-      expect(tsnet.statusChanges.isBroadcast, isTrue);
+      expect(tsnet.onStatusChange.isBroadcast, isTrue);
     });
 
     test('runtimeErrors exposes a broadcast stream', () {
       final tsnet = Tailscale.instance;
-      expect(tsnet.runtimeErrors.isBroadcast, isTrue);
+      expect(tsnet.onError.isBroadcast, isTrue);
     });
   });
 

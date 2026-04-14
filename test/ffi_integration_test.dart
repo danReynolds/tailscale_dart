@@ -198,7 +198,6 @@ void main() {
       );
 
       expect(Tailscale.instance.isRunning, isFalse);
-      expect(Tailscale.instance.proxyPort, 0);
 
       final ptr = native.duneStatus();
       final result = ptr.toDartString();
@@ -243,7 +242,7 @@ void main() {
         p.join(ownedStateDir.path, 'state.db'),
       ).writeAsStringSync('placeholder');
 
-      final eventFuture = Tailscale.instance.statusChanges.first;
+      final eventFuture = Tailscale.instance.onStatusChange.first;
       await Tailscale.instance.logout();
       final snapshot = await eventFuture;
 

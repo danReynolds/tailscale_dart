@@ -96,8 +96,8 @@ Future<void> main() async {
       await _bench('listen()', () => tsnet.listen(localPort: backend.port)),
     );
     results.add(
-      _benchSync('httpClient getter', () {
-        final _ = tsnet.httpClient;
+      _benchSync('http getter', () {
+        final _ = tsnet.http;
       }),
     );
     results.add(await _benchOnce('down()', () => tsnet.down()));
@@ -151,9 +151,14 @@ Future<_BenchResult> _benchOnce(
   Future<dynamic> Function() fn,
 ) async {
   final m = await _measureMainIsolateTime(fn);
-  return _BenchResult(label, [m.wallUs], [m.mainUs], [
-    m.isolateUs,
-  ], singleShot: true);
+  return _BenchResult(
+      label,
+      [m.wallUs],
+      [m.mainUs],
+      [
+        m.isolateUs,
+      ],
+      singleShot: true);
 }
 
 _BenchResult _benchSync(String label, void Function() fn) {
@@ -322,10 +327,10 @@ void _printResults(List<_BenchResult> results) {
     final jank = r.mainMed < 1.0
         ? 'None'
         : r.mainMed < 4.0
-        ? 'Low'
-        : r.mainMed < 16.0
-        ? 'Med'
-        : 'HIGH';
+            ? 'Low'
+            : r.mainMed < 16.0
+                ? 'Med'
+                : 'HIGH';
     print(
       '${r.label.padRight(lw)}'
       '${_fmtMs(r.mainMed)} ms'
@@ -355,10 +360,10 @@ void _printResults(List<_BenchResult> results) {
     final jank = r.mainMed < 1.0
         ? 'None'
         : r.mainMed < 4.0
-        ? 'Low'
-        : r.mainMed < 16.0
-        ? 'Med'
-        : 'HIGH';
+            ? 'Low'
+            : r.mainMed < 16.0
+                ? 'Med'
+                : 'HIGH';
     print(
       '| ${r.label} '
       '| ${r.mainMed.toStringAsFixed(2)} '

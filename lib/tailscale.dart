@@ -28,10 +28,10 @@ enum TailscaleLogLevel { silent, error, info }
 
 extension on TailscaleLogLevel {
   int get nativeValue => switch (this) {
-    TailscaleLogLevel.silent => 0,
-    TailscaleLogLevel.error => 1,
-    TailscaleLogLevel.info => 2,
-  };
+        TailscaleLogLevel.silent => 0,
+        TailscaleLogLevel.error => 1,
+        TailscaleLogLevel.info => 2,
+      };
 }
 
 /// Singleton embedded Tailscale node for the current Dart process.
@@ -73,7 +73,7 @@ class Tailscale {
   /// ```
   ///
   /// Throws [TailscaleUsageException] if [up] hasn't been called.
-  pkg_http.Client get httpClient {
+  pkg_http.Client get http {
     if (!_started) {
       throw const TailscaleUsageException(
         'Call up() before accessing httpClient.',
@@ -86,27 +86,20 @@ class Tailscale {
     return _http ??= TailscaleProxyClient(_proxyPort, proxyAuthToken);
   }
 
-  /// The local proxy port used internally by [httpClient].
-  ///
-  /// This is exposed for diagnostics only. Direct requests through the proxy
-  /// are not a stable public API and require an internal per-session token.
-  @Deprecated('Use httpClient instead of the internal proxy port.')
-  int get proxyPort => _proxyPort;
-
   /// Real-time status snapshots pushed from the embedded node.
   ///
   /// Each event is a full local-node [TailscaleStatus] snapshot, not a delta
   /// object. Peer inventory is intentionally excluded; call [peers] when you
   /// need a peer snapshot.
   ///
-  /// Errors are reported separately through [runtimeErrors].
-  Stream<TailscaleStatus> get statusChanges => _statusController.stream;
+  /// Errors are reported separately through [errors].
+  Stream<TailscaleStatus> get onStatusChange => _statusController.stream;
 
   /// Background runtime errors pushed from the embedded node.
   ///
   /// These are asynchronous engine/watcher failures, not call-specific
   /// exceptions from [up], [listen], or [status].
-  Stream<TailscaleRuntimeError> get runtimeErrors => _errorController.stream;
+  Stream<TailscaleRuntimeError> get onError => _errorController.stream;
 
   /// Configures the Tailscale library. Call this once at app startup,
   /// alongside other library initializers (Firebase, Supabase, etc.).

@@ -55,7 +55,6 @@ void main() {
     expect(tsnet.isRunning, isTrue);
     expect(status.isRunning, isTrue);
     expect(status.ipv4, startsWith('100.'));
-    expect(tsnet.proxyPort, greaterThan(0));
   });
 
   test('status returns our Tailscale IP', () async {
@@ -71,7 +70,7 @@ void main() {
   });
 
   test('http client is available', () async {
-    expect(tsnet.httpClient, isA<http.Client>());
+    expect(tsnet.http, isA<http.Client>());
   });
 
   test('down shuts down cleanly', () async {

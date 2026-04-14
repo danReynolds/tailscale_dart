@@ -59,8 +59,8 @@ Tailscale.init(
 );
 
 final tailscale = Tailscale.instance;
-tailscale.statusChanges.listen((s) => print('Node: ${s.nodeStatus}'));
-tailscale.runtimeErrors.listen((e) => print('Error: ${e.message}'));
+tailscale.onStatusChange.listen((s) => print('Node: ${s.nodeStatus}'));
+tailscale.onError.listen((e) => print('Error: ${e.message}'));
 
 // 2. Bring the node up (first launch needs an auth key)
 final status = await tailscale.up(authKey: 'tskey-auth-...');
@@ -72,7 +72,7 @@ await tailscale.up();
 final peers = await tailscale.peers();
 final peer = peers.firstWhere((p) => p.online);
 
-final response = await tailscale.httpClient.get(
+final response = await tailscale.http.get(
   Uri.parse('http://${peer.ipv4}/api/data'),
 );
 
@@ -106,17 +106,17 @@ await tailscale.logout();
 | `listen({localPort, tailnetPort})` | `Future<int>` | Expose a local HTTP server to peers |
 | `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health) |
 | `peers()` | `Future<List<PeerStatus>>` | Current peer snapshot |
-| `statusChanges` | `Stream<TailscaleStatus>` | Pushed status snapshots on state changes |
-| `runtimeErrors` | `Stream<TailscaleRuntimeError>` | Pushed asynchronous runtime errors |
+| `onStatusChange` | `Stream<TailscaleStatus>` | Pushed status snapshots on state changes |
+| `onError` | `Stream<TailscaleRuntimeError>` | Pushed asynchronous runtime errors |
 | `down()` | `Future<void>` | Disconnect (preserves state for reconnection) |
 | `logout()` | `Future<void>` | Disconnect and clear persisted state |
-| `httpClient` | [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) | HTTP client routed through the WireGuard tunnel |
+| `http` | [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) | HTTP client routed through the WireGuard tunnel |
 | `isRunning` | `bool` | Whether the node is connected |
 
 <details>
 <summary><strong>TailscaleStatus</strong></summary>
 
-A snapshot of the local node's current state. Returned by `up()`/`status()` and pushed to `statusChanges`. Peer inventory is separate — call `peers()` when you need it.
+A snapshot of the local node's current state. Returned by `up()`/`status()` and pushed to `onStatusChange`. Peer inventory is separate — call `peers()` when you need it.
 
 | Member | Type | Description |
 |--------|------|-------------|
@@ -188,11 +188,11 @@ A peer on the tailnet. Matches Go's [`ipnstate.PeerStatus`](https://pkg.go.dev/t
 ## Architecture
 
 ```
-┌─────────────┐       FFI        ┌──────────────┐      Tailscale       ┌─────────────┐
-│  Dart app    │ <─────────────> │  Go (tsnet)   │ <─── WireGuard ────> │  Peers      │
-│              │  Isolate.run()  │  C exports    │      tunnel          │             │
-│              │  NativePort     │  WatchIPNBus  │                      │             │
-└─────────────┘                  └──────────────┘                       └─────────────┘
+┌─────────────┐       FFI       ┌──────────────┐      Tailscale       ┌─────────────┐
+│  Dart app   │ <─────────────> │  Go (tsnet)  │ <─── WireGuard ────> │  Peers      │
+│             │  Isolate.run()  │  C exports   │      tunnel          │             │
+│             │  NativePort     │  WatchIPNBus │                      │             │
+└─────────────┘                 └──────────────┘                      └─────────────┘
 ```
 
 The Go layer wraps [`tailscale.com/tsnet`](https://pkg.go.dev/tailscale.com/tsnet) and compiles to a platform-specific native library. A Dart [build hook](hook/build.dart) handles compilation — detecting the target OS/architecture, finding the Go toolchain, cross-compiling with the appropriate flags, and registering the result as a [native code asset](https://dart.dev/interop/c-interop#native-assets).

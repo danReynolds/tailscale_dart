@@ -2,6 +2,7 @@ library tailscale_dart;
 
 import 'dart:async';
 import 'package:http/http.dart' as pkg_http;
+import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 import 'src/errors.dart';
 import 'src/ffi_bindings.dart' as native;
@@ -20,10 +21,10 @@ enum TailscaleLogLevel { silent, error, info }
 
 extension on TailscaleLogLevel {
   int get nativeValue => switch (this) {
-        TailscaleLogLevel.silent => 0,
-        TailscaleLogLevel.error => 1,
-        TailscaleLogLevel.info => 2,
-      };
+    TailscaleLogLevel.silent => 0,
+    TailscaleLogLevel.error => 1,
+    TailscaleLogLevel.info => 2,
+  };
 }
 
 /// Singleton embedded Tailscale node for the current Dart process.
@@ -35,6 +36,7 @@ class Tailscale {
   static Tailscale instance = Tailscale._();
 
   /// Protected constructor for test subclasses.
+  @visibleForTesting
   @pragma('vm:entry-point')
   Tailscale.forTest();
 
@@ -76,9 +78,7 @@ class Tailscale {
   /// Throws [TailscaleUsageException] if [up] has not been called.
   pkg_http.Client get http {
     if (!_started) {
-      throw const TailscaleUsageException(
-        'Call up() before accessing httpClient.',
-      );
+      throw const TailscaleUsageException('Call up() before accessing http.');
     }
     final proxyAuthToken = _proxyAuthToken;
     if (proxyAuthToken == null) {
@@ -216,6 +216,7 @@ class Tailscale {
           // Best-effort cleanup while surfacing the original startup failure.
         }
       }
+      _worker.shutdown();
       _publishStatus(TailscaleStatus.stopped);
       Error.throwWithStackTrace(error, stackTrace);
     } finally {
@@ -232,7 +233,7 @@ class Tailscale {
   /// `tsnet.Listen` equivalent.
   ///
   /// Returns the local port that receives incoming traffic.
-  Future<int> listen(int localPort, {int tailnetPort = 80}) async {
+  Future<int> listen({required int localPort, int tailnetPort = 80}) async {
     if (!_started) {
       throw const TailscaleUsageException('Call up() before listen().');
     }
@@ -280,6 +281,7 @@ class Tailscale {
     _http?.close();
     _http = null;
     await _worker.down();
+    _worker.shutdown();
     _publishStatus(TailscaleStatus.stopped);
   }
 
@@ -302,6 +304,7 @@ class Tailscale {
 
     final stateDir = _ownedStateDir;
     await _worker.logout(stateDir);
+    _worker.shutdown();
     _publishStatus(TailscaleStatus.stopped);
   }
 
@@ -337,6 +340,7 @@ class Tailscale {
   ///
   /// Returns true when a pushed worker event leaves the next queued RPC
   /// response slot untouched, and the following response still resolves it.
+  @visibleForTesting
   bool debugWorkerEventDoesNotConsumePendingResponseForTest() {
     return _worker.debugEventDoesNotConsumePendingResponse();
   }
@@ -345,6 +349,7 @@ class Tailscale {
   ///
   /// Returns true when a worker exit fails a queued RPC instead of leaving it
   /// hanging.
+  @visibleForTesting
   Future<bool> debugWorkerExitFailsPendingResponseForTest() async {
     return _worker.debugExitFailsPendingResponse();
   }

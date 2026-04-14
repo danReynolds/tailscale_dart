@@ -87,7 +87,7 @@ final class Worker {
       case _WorkerBootstrapFailureMessage(:final message):
         final ready = _workerReadyCompleter;
         if (ready != null && !ready.isCompleted) {
-          ready.completeError(TailscaleUpException(message));
+          ready.completeError(TailscaleOperationException('worker', message));
         } else {
           publishRuntimeError(
             TailscaleRuntimeError(
@@ -126,6 +126,8 @@ final class Worker {
   }
 
   void _exit() {
+    _bestEffortUnexpectedExitCleanup();
+
     const error = TailscaleOperationException(
       'worker',
       'Native worker isolate terminated unexpectedly.',
@@ -159,6 +161,32 @@ final class Worker {
     _workerReadyCompleter = null;
     _workerPort?.close();
     _workerPort = null;
+  }
+
+  void shutdown() {
+    if (_workerIsolate == null &&
+        _workerCommandPort == null &&
+        _workerPort == null &&
+        _workerReadyCompleter == null) {
+      return;
+    }
+
+    _tryCompleteError(
+      _runningCompleter,
+      const TailscaleOperationException(
+        'worker',
+        'Native worker isolate shut down.',
+      ),
+    );
+    _runningCompleter = null;
+    _clearNativePort();
+    _workerIsolate?.kill(priority: Isolate.immediate);
+    _teardown(
+      const TailscaleOperationException(
+        'worker',
+        'Native worker isolate shut down.',
+      ),
+    );
   }
 
   Future<TResponse> _request<TResponse extends _WorkerResponse>(
@@ -322,4 +350,14 @@ final class NativeWorkerStartResult {
 
   final int proxyPort;
   final String proxyAuthToken;
+}
+
+void _clearNativePort() {
+  native.duneSetDartPort(0);
+}
+
+void _bestEffortUnexpectedExitCleanup() {
+  native.duneStopWatch();
+  _clearNativePort();
+  native.duneStop();
 }

@@ -247,6 +247,24 @@ void main() {
       final tsnet = Tailscale.instance;
       expect(tsnet.onError.isBroadcast, isTrue);
     });
+
+    test('worker events do not consume queued RPC responses', () {
+      final tsnet = Tailscale.forTest();
+
+      expect(
+        tsnet.debugWorkerEventDoesNotConsumePendingResponseForTest(),
+        isTrue,
+      );
+    });
+
+    test('worker exit fails queued RPC responses', () async {
+      final tsnet = Tailscale.forTest();
+
+      await expectLater(
+        tsnet.debugWorkerExitFailsPendingResponseForTest(),
+        completion(isTrue),
+      );
+    });
   });
 
   group('TailscaleLogLevel', () {

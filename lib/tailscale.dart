@@ -21,10 +21,10 @@ enum TailscaleLogLevel { silent, error, info }
 
 extension on TailscaleLogLevel {
   int get nativeValue => switch (this) {
-    TailscaleLogLevel.silent => 0,
-    TailscaleLogLevel.error => 1,
-    TailscaleLogLevel.info => 2,
-  };
+        TailscaleLogLevel.silent => 0,
+        TailscaleLogLevel.error => 1,
+        TailscaleLogLevel.info => 2,
+      };
 }
 
 /// Singleton embedded Tailscale node for the current Dart process.
@@ -53,7 +53,6 @@ class Tailscale {
   late final _worker = Worker(
     publishStatus: _publishStatus,
     publishRuntimeError: _publishRuntimeError,
-    publishCurrentStatus: _publishCurrentStatus,
   );
 
   final StreamController<TailscaleStatus> _statusController =
@@ -204,11 +203,7 @@ class Tailscale {
       _started = true;
       return await _publishCurrentStatus();
     } catch (error, stackTrace) {
-      // Clean up on failure.
-      _proxyPort = 0;
-      _proxyAuthToken = null;
-      _http?.close();
-      _http = null;
+      _resetProxyState();
       if (nativeStarted) {
         try {
           await _worker.down();
@@ -233,7 +228,7 @@ class Tailscale {
   /// `tsnet.Listen` equivalent.
   ///
   /// Returns the local port that receives incoming traffic.
-  Future<int> listen({required int localPort, int tailnetPort = 80}) async {
+  Future<int> listen(int localPort, {int tailnetPort = 80}) async {
     if (!_started) {
       throw const TailscaleUsageException('Call up() before listen().');
     }
@@ -276,10 +271,7 @@ class Tailscale {
     }
     if (!_started) return;
     _started = false;
-    _proxyPort = 0;
-    _proxyAuthToken = null;
-    _http?.close();
-    _http = null;
+    _resetProxyState();
     await _worker.down();
     _worker.shutdown();
     _publishStatus(TailscaleStatus.stopped);
@@ -297,15 +289,19 @@ class Tailscale {
     }
 
     _started = false;
-    _proxyPort = 0;
-    _proxyAuthToken = null;
-    _http?.close();
-    _http = null;
+    _resetProxyState();
 
     final stateDir = _ownedStateDir;
     await _worker.logout(stateDir);
     _worker.shutdown();
     _publishStatus(TailscaleStatus.stopped);
+  }
+
+  void _resetProxyState() {
+    _proxyPort = 0;
+    _proxyAuthToken = null;
+    _http?.close();
+    _http = null;
   }
 
   void _ensureInitialized() {

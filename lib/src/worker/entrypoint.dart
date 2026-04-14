@@ -30,17 +30,15 @@ void _workerEntrypoint(SendPort sendPort) {
         if (parsed['type'] == 'error') {
           sendPort.send(
             _WorkerRuntimeErrorEvent(
-                TailscaleRuntimeError.fromPushPayload(parsed)),
+              TailscaleRuntimeError.fromPushPayload(parsed),
+            ),
           );
           return;
         }
 
         if (parsed['type'] == 'status') {
-          final state = parsed['state'] as String?;
-          TailscaleStatus? snapshot;
-
           try {
-            snapshot = _loadStatusSnapshot();
+            sendPort.send(_WorkerStatusEvent(snapshot: _loadStatusSnapshot()));
           } on TailscaleStatusException catch (error) {
             sendPort.send(
               _WorkerRuntimeErrorEvent(
@@ -51,8 +49,6 @@ void _workerEntrypoint(SendPort sendPort) {
               ),
             );
           }
-
-          sendPort.send(_WorkerStatusEvent(state: state, snapshot: snapshot));
         }
       } catch (_) {
         // Malformed message from Go — ignore.
@@ -69,7 +65,7 @@ void _workerEntrypoint(SendPort sendPort) {
               :authKey,
               :controlUrl,
               :hostname,
-              :stateDir
+              :stateDir,
             ) = request;
 
             final hostnamePtr = hostname.toNativeUtf8();
@@ -80,11 +76,15 @@ void _workerEntrypoint(SendPort sendPort) {
             try {
               native.duneStopWatch();
 
-              final result = _callNativeMap(
+              final result = _callNativeJson(
                 () => native.duneStart(
-                    hostnamePtr, authKeyPtr, controlUrlPtr, stateDirPtr),
+                  hostnamePtr,
+                  authKeyPtr,
+                  controlUrlPtr,
+                  stateDirPtr,
+                ),
                 onError: TailscaleUpException.new,
-              );
+              ) as Map<String, dynamic>;
 
               final proxyPort = result['proxyPort'] as int? ?? 0;
               final proxyAuthToken = result['proxyAuthToken'] as String?;
@@ -111,10 +111,10 @@ void _workerEntrypoint(SendPort sendPort) {
               calloc.free(stateDirPtr);
             }
           case _WorkerListenCommand request:
-            final result = _callNativeMap(
+            final result = _callNativeJson(
               () => native.duneListen(request.localPort, request.tailnetPort),
               onError: TailscaleListenException.new,
-            );
+            ) as Map<String, dynamic>;
 
             final listenPort = result['listenPort'] as int?;
             if (listenPort == null || listenPort <= 0) {
@@ -123,11 +123,7 @@ void _workerEntrypoint(SendPort sendPort) {
               );
             }
 
-            sendPort.send(
-              _WorkerListenResponse(
-                listenPort: listenPort,
-              ),
-            );
+            sendPort.send(_WorkerListenResponse(listenPort: listenPort));
           case _WorkerStatusCommand():
             sendPort.send(_WorkerStatusResponse(status: _loadStatusSnapshot()));
           case _WorkerPeersCommand():
@@ -142,7 +138,7 @@ void _workerEntrypoint(SendPort sendPort) {
 
             final stateDirPtr = request.stateDir.toNativeUtf8();
             try {
-              _callNativeMap(
+              _callNativeJson(
                 () => native.duneLogout(stateDirPtr),
                 onError: TailscaleLogoutException.new,
               );
@@ -160,7 +156,9 @@ void _workerEntrypoint(SendPort sendPort) {
 
         return sendPort.send(
           _WorkerFailureResponse(
-              operation: message.operation, message: errorMessage),
+            operation: message.operation,
+            message: errorMessage,
+          ),
         );
       }
     });
@@ -186,26 +184,27 @@ String _callNativeString(ffi.Pointer<Utf8> Function() fn) {
   return result;
 }
 
-/// Calls a native function that returns a JSON map, decodes it, and checks for
-/// an `error` key. Throws via [onError] if present; otherwise returns the map.
-Map<String, dynamic> _callNativeMap(
+/// Calls a native function that returns JSON, decodes it, and checks for an
+/// `error` key if the result is a map. Throws via [onError] if an error key is
+/// present; otherwise returns the decoded value.
+dynamic _callNativeJson(
   ffi.Pointer<Utf8> Function() fn, {
   required TailscaleException Function(String) onError,
 }) {
-  final result = Map<String, dynamic>.from(
-    jsonDecode(_callNativeString(fn)) as Map<String, dynamic>,
-  );
-  final error = result['error'] as String?;
-  if (error != null) throw onError(error);
+  final result = jsonDecode(_callNativeString(fn));
+  if (result is Map<String, dynamic>) {
+    final error = result['error'] as String?;
+    if (error != null) throw onError(error);
+  }
   return result;
 }
 
 TailscaleStatus _loadStatusSnapshot() {
   try {
-    final parsed = _callNativeMap(
+    final parsed = _callNativeJson(
       native.duneStatus,
       onError: TailscaleStatusException.new,
-    );
+    ) as Map<String, dynamic>;
     return TailscaleStatus.fromJson(parsed);
   } catch (error) {
     if (error is TailscaleStatusException) rethrow;
@@ -218,20 +217,15 @@ TailscaleStatus _loadStatusSnapshot() {
 
 List<PeerStatus> _loadPeerSnapshot() {
   try {
-    final decoded = jsonDecode(_callNativeString(native.dunePeers));
-    if (decoded is Map<String, dynamic>) {
-      final error = decoded['error'] as String?;
-      if (error != null) {
-        throw TailscaleStatusException(error);
-      }
-    }
-
+    final decoded = _callNativeJson(
+      native.dunePeers,
+      onError: TailscaleStatusException.new,
+    );
     if (decoded is! List<dynamic>) {
       throw const TailscaleStatusException(
         'Failed to decode native Tailscale peers.',
       );
     }
-
     return PeerStatus.listFromJson(decoded);
   } catch (error) {
     if (error is TailscaleStatusException) rethrow;

@@ -9,11 +9,11 @@ enum _WorkerOperation {
   logout;
 
   TailscaleException exceptionForMessage(String message) => switch (this) {
-    start  => TailscaleUpException(message),
+    start => TailscaleUpException(message),
     listen => TailscaleListenException(message),
     status => TailscaleStatusException(message),
-    peers  => TailscaleStatusException(message),
-    down   => TailscaleOperationException('down', message),
+    peers => TailscaleStatusException(message),
+    down => TailscaleOperationException('down', message),
     logout => TailscaleLogoutException(message),
   };
 }
@@ -88,10 +88,9 @@ sealed class _WorkerEvent extends _WorkerMainMessage {
 }
 
 final class _WorkerStatusEvent extends _WorkerEvent {
-  const _WorkerStatusEvent({required this.state, this.snapshot});
+  const _WorkerStatusEvent({required this.snapshot});
 
-  final String? state;
-  final TailscaleStatus? snapshot;
+  final TailscaleStatus snapshot;
 }
 
 final class _WorkerRuntimeErrorEvent extends _WorkerEvent {
@@ -115,8 +114,10 @@ final class _WorkerStartResponse extends _WorkerResponse {
   final int proxyPort;
   final String proxyAuthToken;
 
-  NativeWorkerStartResult toResult() =>
-      NativeWorkerStartResult(proxyPort: proxyPort, proxyAuthToken: proxyAuthToken);
+  NativeWorkerStartResult toResult() => NativeWorkerStartResult(
+    proxyPort: proxyPort,
+    proxyAuthToken: proxyAuthToken,
+  );
 }
 
 final class _WorkerListenResponse extends _WorkerResponse {

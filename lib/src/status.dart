@@ -80,10 +80,7 @@ class TailscaleStatus {
   bool get isHealthy => health.isEmpty;
 
   /// This node's first IPv4 address, or null.
-  String? get ipv4 => tailscaleIPs.cast<String?>().firstWhere(
-    (ip) => ip != null && ip.contains('.'),
-    orElse: () => null,
-  );
+  String? get ipv4 => tailscaleIPs.firstIpv4;
 
   factory TailscaleStatus.fromJson(Map<String, dynamic> json) {
     final self = json['Self'] as Map<String, dynamic>?;
@@ -173,10 +170,7 @@ class PeerStatus {
   final String? curAddr;
 
   /// This peer's first IPv4 address, or null.
-  String? get ipv4 => tailscaleIPs.cast<String?>().firstWhere(
-    (ip) => ip != null && ip.contains('.'),
-    orElse: () => null,
-  );
+  String? get ipv4 => tailscaleIPs.firstIpv4;
 
   /// Parses a peer snapshot list returned by `Tailscale.peers()`.
   static List<PeerStatus> listFromJson(List<dynamic> json) {
@@ -200,6 +194,15 @@ class PeerStatus {
       relay: json['Relay'] as String?,
       curAddr: json['CurAddr'] as String?,
     );
+  }
+}
+
+extension on List<String> {
+  String? get firstIpv4 {
+    for (final ip in this) {
+      if (ip.contains('.')) return ip;
+    }
+    return null;
   }
 }
 

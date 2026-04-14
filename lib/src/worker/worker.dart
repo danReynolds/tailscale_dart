@@ -19,15 +19,10 @@ const _workerExitedSentinel = '_tailscaleWorkerExited';
 
 /// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
 final class Worker {
-  Worker({
-    required this.publishStatus,
-    required this.publishRuntimeError,
-    required this.publishCurrentStatus,
-  });
+  Worker({required this.publishStatus, required this.publishRuntimeError});
 
   final void Function(TailscaleStatus status) publishStatus;
   final void Function(TailscaleRuntimeError error) publishRuntimeError;
-  final Future<TailscaleStatus> Function() publishCurrentStatus;
 
   // Commands are processed synchronously on the worker isolate and each
   // command produces exactly one response in request order, so a FIFO queue is
@@ -42,6 +37,12 @@ final class Worker {
 
   Completer<void>? _runningCompleter;
 
+  bool get _isWorkerAlive =>
+      _workerIsolate != null ||
+      _workerCommandPort != null ||
+      _workerPort != null ||
+      _workerReadyCompleter != null;
+
   Future<void> _ensureWorkerStarted() async {
     if (_workerCommandPort != null) return;
     if (_workerReadyCompleter != null) {
@@ -55,18 +56,37 @@ final class Worker {
     _workerPort!.listen(_handleWorkerMessage);
 
     try {
-      _workerIsolate = await Isolate.spawn<SendPort>(
-        _workerEntrypoint,
-        _workerPort!.sendPort,
-      );
-      _workerIsolate!.addOnExitListener(
-        _workerPort!.sendPort,
-        response: _workerExitedSentinel,
-      );
-      await readyCompleter.future;
-    } catch (error, stackTrace) {
-      _reset();
-      Error.throwWithStackTrace(error, stackTrace);
+      try {
+        _workerIsolate = await Isolate.spawn<SendPort>(
+          _workerEntrypoint,
+          _workerPort!.sendPort,
+        );
+        _workerIsolate!.addOnExitListener(
+          _workerPort!.sendPort,
+          response: _workerExitedSentinel,
+        );
+      } catch (error, stackTrace) {
+        _teardownWorker(
+          const TailscaleOperationException(
+            'worker',
+            'Native worker isolate failed to spawn.',
+          ),
+        );
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+
+      try {
+        await readyCompleter.future;
+      } catch (error, stackTrace) {
+        _teardownWorker(
+          const TailscaleOperationException(
+            'worker',
+            'Native worker isolate failed to initialize.',
+          ),
+          killIsolate: true,
+        );
+        Error.throwWithStackTrace(error, stackTrace);
+      }
     } finally {
       if (identical(_workerReadyCompleter, readyCompleter)) {
         _workerReadyCompleter = null;
@@ -76,14 +96,15 @@ final class Worker {
 
   void _handleWorkerMessage(dynamic message) {
     if (message == _workerExitedSentinel) {
-      _exit();
+      _handleUnexpectedExit();
       return;
     }
 
     switch (message) {
       case _WorkerReadyMessage(:final commandPort):
         _workerCommandPort = commandPort;
-        _tryComplete(_workerReadyCompleter);
+        final ready = _workerReadyCompleter;
+        if (ready != null && !ready.isCompleted) ready.complete();
       case _WorkerBootstrapFailureMessage(:final message):
         final ready = _workerReadyCompleter;
         if (ready != null && !ready.isCompleted) {
@@ -97,13 +118,17 @@ final class Worker {
           );
         }
       case _WorkerRuntimeErrorEvent(:final error):
-        _failRunningWaiter(TailscaleUpException(error.message));
+        final running = _runningCompleter;
+        if (running != null && !running.isCompleted) {
+          running.completeError(TailscaleUpException(error.message));
+        }
         publishRuntimeError(error);
-      case _WorkerStatusEvent(:final state, :final snapshot):
-        if (state == 'Running') _resolveRunningWaiter();
-        snapshot != null
-            ? publishStatus(snapshot)
-            : unawaited(publishCurrentStatus());
+      case _WorkerStatusEvent(:final snapshot):
+        if (snapshot.nodeStatus == NodeStatus.running) {
+          final running = _runningCompleter;
+          if (running != null && !running.isCompleted) running.complete();
+        }
+        publishStatus(snapshot);
       case _WorkerResponse():
         if (_pendingWorkerResponses.isEmpty) {
           publishRuntimeError(
@@ -125,67 +150,54 @@ final class Worker {
     }
   }
 
-  void _exit() {
-    _bestEffortUnexpectedExitCleanup();
-
+  void _handleUnexpectedExit() {
     const error = TailscaleOperationException(
       'worker',
       'Native worker isolate terminated unexpectedly.',
     );
-    _failRunningWaiter(TailscaleUpException(error.message));
-    _teardown(error);
-  }
-
-  void _reset() {
-    const error = TailscaleOperationException(
-      'worker',
-      'Native worker isolate failed to initialize.',
-    );
-    _workerIsolate?.kill(priority: Isolate.immediate);
-    _teardown(error);
-  }
-
-  void _teardown(Object error) {
-    _tryCompleteError(_workerReadyCompleter, error);
-
-    final pending = _pendingWorkerResponses.toList(growable: false);
-    _pendingWorkerResponses.clear();
-    for (final completer in pending) {
-      if (!completer.isCompleted) {
-        completer.completeError(error);
-      }
+    // The worker is already gone, so this is the one teardown path that must
+    // attempt native cleanup itself before resetting worker state.
+    _stopNativeRuntimeAfterUnexpectedExit();
+    final running = _runningCompleter;
+    if (running != null && !running.isCompleted) {
+      running.completeError(TailscaleUpException(error.message));
     }
+    _teardownWorker(error);
+  }
 
+  void _teardownWorker(Object error, {bool killIsolate = false}) {
+    final ready = _workerReadyCompleter;
+    if (ready != null && !ready.isCompleted) ready.completeError(error);
+
+    final running = _runningCompleter;
+    if (running != null && !running.isCompleted) running.completeError(error);
+
+    for (final completer in _pendingWorkerResponses) {
+      if (!completer.isCompleted) completer.completeError(error);
+    }
+    _pendingWorkerResponses.clear();
+
+    final isolate = _workerIsolate;
+    _runningCompleter = null;
     _workerIsolate = null;
     _workerCommandPort = null;
     _workerReadyCompleter = null;
     _workerPort?.close();
     _workerPort = null;
+
+    if (killIsolate) isolate?.kill(priority: Isolate.immediate);
   }
 
   void shutdown() {
-    if (_workerIsolate == null &&
-        _workerCommandPort == null &&
-        _workerPort == null &&
-        _workerReadyCompleter == null) {
-      return;
-    }
+    if (!_isWorkerAlive) return;
 
-    _tryCompleteError(
-      _runningCompleter,
-      const TailscaleOperationException(
-        'worker',
-        'Native worker isolate shut down.',
-      ),
-    );
-    _runningCompleter = null;
     _clearNativePort();
-    _workerIsolate?.kill(priority: Isolate.immediate);
-    _teardown(
+    _teardownWorker(
       const TailscaleOperationException(
         'worker',
         'Native worker isolate shut down.',
       ),
+      killIsolate: true,
     );
   }
 
@@ -283,34 +295,13 @@ final class Worker {
     }
   }
 
-  void _failRunningWaiter(TailscaleUpException error) {
-    _tryCompleteError(_runningCompleter, error);
-  }
-
-  void _resolveRunningWaiter() {
-    _tryComplete(_runningCompleter);
-  }
-
-  static void _tryComplete(Completer<void>? completer) {
-    if (completer != null && !completer.isCompleted) completer.complete();
-  }
-
-  static void _tryCompleteError(Completer<void>? completer, Object error) {
-    if (completer != null && !completer.isCompleted) {
-      completer.completeError(error);
-    }
-  }
-
   bool debugEventDoesNotConsumePendingResponse() {
     final completer = Completer<_WorkerResponse>();
     _pendingWorkerResponses.addLast(completer);
 
     try {
       _handleWorkerMessage(
-        const _WorkerStatusEvent(
-          state: 'Starting',
-          snapshot: TailscaleStatus.stopped,
-        ),
+        const _WorkerStatusEvent(snapshot: TailscaleStatus.stopped),
       );
 
       if (_pendingWorkerResponses.length != 1 || completer.isCompleted) {
@@ -328,7 +319,7 @@ final class Worker {
     final completer = Completer<_WorkerResponse>();
     _pendingWorkerResponses.addLast(completer);
 
-    _exit();
+    _handleUnexpectedExit();
 
     try {
       await completer.future;
@@ -356,7 +347,7 @@ void _clearNativePort() {
   native.duneSetDartPort(0);
 }
 
-void _bestEffortUnexpectedExitCleanup() {
+void _stopNativeRuntimeAfterUnexpectedExit() {
   native.duneStopWatch();
   _clearNativePort();
   native.duneStop();

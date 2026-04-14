@@ -1,4 +1,4 @@
-part of tailscale_dart;
+part of 'worker.dart';
 
 enum _WorkerOperation { start, listen, status, peers, down, logout }
 

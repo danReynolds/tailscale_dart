@@ -93,7 +93,7 @@ Future<void> main() async {
     results.add(await _bench('status()', () => tsnet.status()));
     results.add(await _bench('peers()', () => tsnet.peers()));
     results.add(
-      await _bench('listen()', () => tsnet.listen(localPort: backend.port)),
+      await _bench('listen()', () => tsnet.listen(backend.port)),
     );
     results.add(
       _benchSync('http getter', () {

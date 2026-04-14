@@ -36,7 +36,7 @@ void main() async {
   print('Response: ${response.body}');
 
   // Expose a local HTTP server to the tailnet
-  await tsnet.listen(localPort: 8080);
+  await tsnet.listen(8080);
 
   // Check status
   print('Running: ${status.isRunning}, healthy: ${status.isHealthy}');

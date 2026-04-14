@@ -232,7 +232,7 @@ class Tailscale {
   /// `tsnet.Listen` equivalent.
   ///
   /// Returns the local port that receives incoming traffic.
-  Future<int> listen(int localPort, {int tailnetPort = 0}) async {
+  Future<int> listen(int localPort, {int tailnetPort = 80}) async {
     if (!_started) {
       throw const TailscaleUsageException('Call up() before listen().');
     }

@@ -2,17 +2,18 @@ library tailscale_dart.worker;
 
 import 'dart:async';
 import 'dart:collection';
-import 'dart:isolate';
-import 'package:ffi/ffi.dart';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
+import 'dart:isolate';
+
+import 'package:ffi/ffi.dart';
+
 import '../errors.dart';
 import '../ffi_bindings.dart' as native;
 import '../status.dart';
 
 part 'messages.dart';
 part 'entrypoint.dart';
-part 'ffi.dart';
 
 const _workerExitedSentinel = '_tailscaleWorkerExited';
 
@@ -80,42 +81,29 @@ final class Worker {
     }
 
     switch (message) {
-      case _WorkerReadyMessage():
-        _workerCommandPort = message.commandPort;
-        if (_workerReadyCompleter != null &&
-            !_workerReadyCompleter!.isCompleted) {
-          _workerReadyCompleter!.complete();
-        }
-      case _WorkerBootstrapFailureMessage():
-        if (_workerReadyCompleter != null &&
-            !_workerReadyCompleter!.isCompleted) {
-          _workerReadyCompleter!.completeError(
-            TailscaleUpException(message.message),
-          );
+      case _WorkerReadyMessage(:final commandPort):
+        _workerCommandPort = commandPort;
+        _tryComplete(_workerReadyCompleter);
+      case _WorkerBootstrapFailureMessage(:final message):
+        final ready = _workerReadyCompleter;
+        if (ready != null && !ready.isCompleted) {
+          ready.completeError(TailscaleUpException(message));
         } else {
           publishRuntimeError(
             TailscaleRuntimeError(
-              message: message.message,
+              message: message,
               code: TailscaleRuntimeErrorCode.node,
             ),
           );
         }
-      case _WorkerRuntimeErrorEvent():
-        final error = message.error;
+      case _WorkerRuntimeErrorEvent(:final error):
         _failRunningWaiter(TailscaleUpException(error.message));
         publishRuntimeError(error);
-      case _WorkerStatusEvent():
-        final state = message.state;
-        if (state == 'Running') {
-          _resolveRunningWaiter();
-        }
-
-        final snapshot = message.snapshot;
-        if (snapshot != null) {
-          publishStatus(snapshot);
-        } else {
-          unawaited(publishCurrentStatus());
-        }
+      case _WorkerStatusEvent(:final state, :final snapshot):
+        if (state == 'Running') _resolveRunningWaiter();
+        snapshot != null
+            ? publishStatus(snapshot)
+            : unawaited(publishCurrentStatus());
       case _WorkerResponse():
         if (_pendingWorkerResponses.isEmpty) {
           publishRuntimeError(
@@ -142,26 +130,8 @@ final class Worker {
       'worker',
       'Native worker isolate terminated unexpectedly.',
     );
-
-    final readyCompleter = _workerReadyCompleter;
-    if (readyCompleter != null && !readyCompleter.isCompleted) {
-      readyCompleter.completeError(error);
-    }
-
-    final pending = _pendingWorkerResponses.toList(growable: false);
-    _pendingWorkerResponses.clear();
-    for (final completer in pending) {
-      if (!completer.isCompleted) {
-        completer.completeError(error);
-      }
-    }
     _failRunningWaiter(TailscaleUpException(error.message));
-
-    _workerIsolate = null;
-    _workerCommandPort = null;
-    _workerReadyCompleter = null;
-    _workerPort?.close();
-    _workerPort = null;
+    _teardown(error);
   }
 
   void _reset() {
@@ -169,6 +139,13 @@ final class Worker {
       'worker',
       'Native worker isolate failed to initialize.',
     );
+    _workerIsolate?.kill(priority: Isolate.immediate);
+    _teardown(error);
+  }
+
+  void _teardown(Object error) {
+    _tryCompleteError(_workerReadyCompleter, error);
+
     final pending = _pendingWorkerResponses.toList(growable: false);
     _pendingWorkerResponses.clear();
     for (final completer in pending) {
@@ -176,9 +153,10 @@ final class Worker {
         completer.completeError(error);
       }
     }
-    _workerCommandPort = null;
-    _workerIsolate?.kill(priority: Isolate.immediate);
+
     _workerIsolate = null;
+    _workerCommandPort = null;
+    _workerReadyCompleter = null;
     _workerPort?.close();
     _workerPort = null;
   }
@@ -203,17 +181,7 @@ final class Worker {
       commandPort.send(request);
       final response = await completer.future;
       if (response is _WorkerFailureResponse) {
-        throw switch (response.operation) {
-          _WorkerOperation.start => TailscaleUpException(response.message),
-          _WorkerOperation.listen => TailscaleListenException(response.message),
-          _WorkerOperation.status => TailscaleStatusException(response.message),
-          _WorkerOperation.peers => TailscaleStatusException(response.message),
-          _WorkerOperation.down => TailscaleOperationException(
-              'down',
-              response.message,
-            ),
-          _WorkerOperation.logout => TailscaleLogoutException(response.message),
-        };
+        throw response.operation.exceptionForMessage(response.message);
       }
 
       return response as TResponse;
@@ -223,13 +191,13 @@ final class Worker {
     }
   }
 
-  Future<_WorkerStartResponse> _start({
+  Future<NativeWorkerStartResult> start({
     required String hostname,
     required String authKey,
     required String controlUrl,
     required String stateDir,
-  }) {
-    return _request<_WorkerStartResponse>(
+  }) async {
+    final response = await _request<_WorkerStartResponse>(
       _WorkerStartCommand(
         hostname: hostname,
         authKey: authKey,
@@ -237,24 +205,7 @@ final class Worker {
         stateDir: stateDir,
       ),
     );
-  }
-
-  Future<NativeWorkerStartResult> start({
-    required String hostname,
-    required String authKey,
-    required String controlUrl,
-    required String stateDir,
-  }) async {
-    final response = await _start(
-      hostname: hostname,
-      authKey: authKey,
-      controlUrl: controlUrl,
-      stateDir: stateDir,
-    );
-    return NativeWorkerStartResult(
-      proxyPort: response.proxyPort,
-      proxyAuthToken: response.proxyAuthToken,
-    );
+    return response.toResult();
   }
 
   Future<int> listen({required int localPort, required int tailnetPort}) async {
@@ -305,16 +256,20 @@ final class Worker {
   }
 
   void _failRunningWaiter(TailscaleUpException error) {
-    final runningCompleter = _runningCompleter;
-    if (runningCompleter != null && !runningCompleter.isCompleted) {
-      runningCompleter.completeError(error);
-    }
+    _tryCompleteError(_runningCompleter, error);
   }
 
   void _resolveRunningWaiter() {
-    final runningCompleter = _runningCompleter;
-    if (runningCompleter != null && !runningCompleter.isCompleted) {
-      runningCompleter.complete();
+    _tryComplete(_runningCompleter);
+  }
+
+  static void _tryComplete(Completer<void>? completer) {
+    if (completer != null && !completer.isCompleted) completer.complete();
+  }
+
+  static void _tryCompleteError(Completer<void>? completer, Object error) {
+    if (completer != null && !completer.isCompleted) {
+      completer.completeError(error);
     }
   }
 

@@ -1,6 +1,22 @@
 part of 'worker.dart';
 
-enum _WorkerOperation { start, listen, status, peers, down, logout }
+enum _WorkerOperation {
+  start,
+  listen,
+  status,
+  peers,
+  down,
+  logout;
+
+  TailscaleException exceptionForMessage(String message) => switch (this) {
+    start  => TailscaleUpException(message),
+    listen => TailscaleListenException(message),
+    status => TailscaleStatusException(message),
+    peers  => TailscaleStatusException(message),
+    down   => TailscaleOperationException('down', message),
+    logout => TailscaleLogoutException(message),
+  };
+}
 
 sealed class _WorkerCommand {
   const _WorkerCommand(this.operation);
@@ -98,6 +114,9 @@ final class _WorkerStartResponse extends _WorkerResponse {
 
   final int proxyPort;
   final String proxyAuthToken;
+
+  NativeWorkerStartResult toResult() =>
+      NativeWorkerStartResult(proxyPort: proxyPort, proxyAuthToken: proxyAuthToken);
 }
 
 final class _WorkerListenResponse extends _WorkerResponse {
@@ -132,16 +151,4 @@ final class _WorkerFailureResponse extends _WorkerResponse {
   }) : super(operation);
 
   final String message;
-}
-
-_WorkerFailureResponse _workerFailureForError({
-  required _WorkerOperation operation,
-  required Object error,
-}) {
-  final message = switch (error) {
-    TailscaleException _ => error.message,
-    _ => error.toString(),
-  };
-
-  return _WorkerFailureResponse(operation: operation, message: message);
 }

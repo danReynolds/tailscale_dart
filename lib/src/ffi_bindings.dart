@@ -14,13 +14,12 @@ import 'package:ffi/ffi.dart';
 ///   {"proxyPort": N, "proxyAuthToken": "..."} on success
 ///   {"error": "..."} on failure.
 @ffi.Native<
-  ffi.Pointer<Utf8> Function(
-    ffi.Pointer<Utf8>,
-    ffi.Pointer<Utf8>,
-    ffi.Pointer<Utf8>,
-    ffi.Pointer<Utf8>,
-  )
->(symbol: 'DuneStart')
+    ffi.Pointer<Utf8> Function(
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+    )>(symbol: 'DuneStart')
 external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> hostname,
   ffi.Pointer<Utf8> authKey,

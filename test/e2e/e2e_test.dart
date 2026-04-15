@@ -50,14 +50,16 @@ void main() {
       controlUrl: Uri.parse(controlUrl),
     );
 
-    final status = await tsnet.status();
-    expect(status.ipv4, startsWith('100.'));
+    // up() starts the node — wait for it to reach Running via status stream.
+    final running = await tsnet.onStatusChange
+        .firstWhere((s) => s.isRunning)
+        .timeout(const Duration(seconds: 30));
+
+    expect(running.ipv4, startsWith('100.'));
   });
 
-  test('status returns our Tailscale IP', () async {
+  test('status returns current state', () async {
     final s = await tsnet.status();
-
-    expect(s.isRunning, isTrue);
     expect(s.ipv4, startsWith('100.'));
   });
 

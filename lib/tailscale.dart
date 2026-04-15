@@ -51,6 +51,11 @@ class Tailscale {
   static String get _stateDir =>
       p.join(_stateBaseDir!, _ownedStateSubdirectory);
 
+  void _reset() {
+    _http?.close();
+    _http = null;
+  }
+
   /// An HTTP client that routes requests through the Tailscale tunnel.
   ///
   /// Available after [up] completes. Use like any `http.Client`:
@@ -173,6 +178,7 @@ class Tailscale {
   ///
   /// No-op if not running.
   Future<void> down() async {
+    _reset();
     await _worker.down();
   }
 
@@ -180,8 +186,7 @@ class Tailscale {
   ///
   /// The next [up] call will require fresh authentication.
   Future<void> logout() async {
-    _http?.close();
-    _http = null;
+    _reset();
     await _worker.logout(_stateDir);
   }
 }

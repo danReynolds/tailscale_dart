@@ -198,10 +198,10 @@ void main() {
       await expectLater(Tailscale.instance.down(), completes);
     });
 
-    test('listen() throws', () async {
+    test('listen() throws TailscaleListenException', () async {
       await expectLater(
         Tailscale.instance.listen(8080),
-        throwsA(isA<TailscaleException>()),
+        throwsA(isA<TailscaleListenException>()),
       );
     });
 
@@ -218,7 +218,10 @@ void main() {
   });
 
   group('up/down lifecycle', () {
-    test('up() starts the node', () async {
+    test('up() starts the node and delivers status events', () async {
+      // Subscribe before up() so we catch the events.
+      final firstEvent = Tailscale.instance.onStatusChange.first;
+
       await Tailscale.instance.up(
         hostname: 'lifecycle-test',
         authKey: 'tskey-fake-key',
@@ -227,6 +230,9 @@ void main() {
 
       final status = await Tailscale.instance.status();
       expect(status.nodeStatus, isNot(NodeStatus.noState));
+
+      final event = await firstEvent.timeout(const Duration(seconds: 5));
+      expect(event, isA<TailscaleStatus>());
     });
 
     test('http is available after up()', () {

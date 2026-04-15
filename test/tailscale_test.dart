@@ -202,31 +202,30 @@ void main() {
   });
 
   group('Tailscale API', () {
-    test('up is callable', () {
-      final tsnet = Tailscale.instance;
-      expect(tsnet.up, isA<Function>());
+    test('init rejects empty stateDir', () {
+      expect(
+        () => Tailscale.init(stateDir: ''),
+        throwsA(isA<TailscaleUsageException>()),
+      );
+      expect(
+        () => Tailscale.init(stateDir: '   '),
+        throwsA(isA<TailscaleUsageException>()),
+      );
     });
 
-    test('peers exposes a snapshot method', () {
-      final tsnet = Tailscale.instance;
-      expect(tsnet.peers, isA<Function>());
-    });
-
-    test('init accepts a state directory', () {
+    test('init accepts a valid state directory', () {
       expect(
         () => Tailscale.init(stateDir: 'build/test-state'),
         returnsNormally,
       );
     });
 
-    test('statusChanges exposes a broadcast stream', () {
-      final tsnet = Tailscale.instance;
-      expect(tsnet.onStatusChange.isBroadcast, isTrue);
+    test('onStatusChange is a broadcast stream', () {
+      expect(Tailscale.instance.onStatusChange.isBroadcast, isTrue);
     });
 
-    test('runtimeErrors exposes a broadcast stream', () {
-      final tsnet = Tailscale.instance;
-      expect(tsnet.onError.isBroadcast, isTrue);
+    test('onError is a broadcast stream', () {
+      expect(Tailscale.instance.onError.isBroadcast, isTrue);
     });
   });
 

@@ -107,8 +107,20 @@ class Tailscale {
 
   /// Brings the embedded Tailscale node up and connects to the control plane.
   ///
-  /// After [up], use [http] to make requests to peers. Subscribe to
-  /// [onStateChange] to observe the node reaching [NodeState.running].
+  /// After [up] returns, the engine is running and [http] is available.
+  /// Subscribe to [onStateChange] to observe the node reaching
+  /// [NodeState.running].
+  ///
+  /// **State transitions** (delivered via [onStateChange]):
+  ///
+  /// - First launch with auth key:
+  ///   `noState` → `starting` → `running`
+  /// - Subsequent launches with persisted credentials:
+  ///   `stopped` → `starting` → `running`
+  /// - If credentials have expired:
+  ///   `stopped` → `starting` → `needsLogin`
+  ///
+  /// **No-op** if the node is already running.
   ///
   /// [hostname] controls the node's tailnet-visible hostname / MagicDNS base
   /// label. Leave it unset to let the embedded runtime pick its default.
@@ -153,13 +165,15 @@ class Tailscale {
     return _worker.listen(localPort: localPort, tailnetPort: tailnetPort);
   }
 
-  /// Returns the current Tailscale status.
+  /// Returns the current Tailscale status snapshot.
   ///
-  /// Includes backend state, local IPs, health, and tailnet info.
+  /// Includes the node's [NodeState], assigned IPs, health warnings, and
+  /// tailnet metadata. Peer inventory is excluded — call [peers] separately.
   ///
-  /// Peer inventory is intentionally excluded so status polling and
-  /// [onStateChange] stay lightweight. Call [peers] when you need the current
-  /// peer snapshot.
+  /// Before [up] is called, the returned [TailscaleStatus.state] reflects
+  /// whether persisted credentials exist:
+  /// - [NodeState.stopped] — credentials found, ready to reconnect
+  /// - [NodeState.noState] — no credentials, an auth key is required
   Future<TailscaleStatus> status() async {
     return _worker.status(stateDir: _stateDir);
   }
@@ -172,10 +186,10 @@ class Tailscale {
     return _worker.peers();
   }
 
-  /// Brings the embedded node down while preserving persisted state.
+  /// Brings the embedded node down while preserving persisted credentials.
   ///
-  /// Preserves state in the configured state directory, so the next
-  /// [up] call can reconnect without a fresh auth key.
+  /// After [down], [status] returns [NodeState.stopped] and the next
+  /// [up] call can reconnect without an auth key.
   ///
   /// No-op if not running.
   Future<void> down() async {
@@ -183,9 +197,10 @@ class Tailscale {
     await _worker.down();
   }
 
-  /// Logs out and clears persisted state for the embedded node.
+  /// Logs out and clears persisted credentials for the embedded node.
   ///
-  /// The next [up] call will require fresh authentication.
+  /// After [logout], [status] returns [NodeState.noState] and the next
+  /// [up] call will require a fresh auth key.
   Future<void> logout() async {
     _reset();
     await _worker.logout(_stateDir);

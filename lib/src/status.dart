@@ -8,10 +8,13 @@
 /// Matches Go's `ipn.State` values. See
 /// https://pkg.go.dev/tailscale.com/ipn#State
 enum NodeState {
-  /// Initial state — the engine has been created but hasn't started connecting.
+  /// No persisted credentials and the engine has not been started.
+  ///
+  /// This is the initial state when the node has never authenticated.
+  /// An [authKey] must be provided to [Tailscale.up] to proceed.
   noState,
 
-  /// The node needs authentication. Provide an auth key via `Tailscale.up`.
+  /// The node needs authentication. Provide an auth key via [Tailscale.up].
   needsLogin,
 
   /// The node is authenticated but waiting for admin approval on the
@@ -24,7 +27,12 @@ enum NodeState {
   /// The node is connected and ready to send/receive traffic.
   running,
 
-  /// The node has been explicitly shut down.
+  /// The engine is not running but persisted credentials exist.
+  ///
+  /// Returned by [Tailscale.status] when the node was previously
+  /// authenticated but [Tailscale.up] has not been called yet, or after
+  /// [Tailscale.down]. The next [Tailscale.up] can reconnect without an
+  /// auth key.
   stopped;
 
   /// Parses a Go `ipn.State` string into a [NodeState].

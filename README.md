@@ -104,7 +104,7 @@ await tailscale.logout();
 | `instance` | `static Tailscale` | Singleton accessor |
 | `up({hostname, authKey, controlUrl})` | `Future<void>` | Start the node. Subscribe to `onStateChange` to observe when it reaches Running. |
 | `listen(localPort, {tailnetPort})` | `Future<int>` | Expose a local HTTP server to peers |
-| `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health) |
+| `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health). Before `up()`, returns `stopped` or `noState` based on whether persisted credentials exist. |
 | `peers()` | `Future<List<PeerStatus>>` | Current peer snapshot |
 | `onStateChange` | `Stream<NodeState>` | Pushed lifecycle state changes |
 | `onError` | `Stream<TailscaleRuntimeError>` | Pushed asynchronous runtime errors |
@@ -136,12 +136,12 @@ The node's position in the connection lifecycle. Matches Go's [`ipn.State`](http
 
 | Value | Description |
 |-------|-------------|
-| `noState` | Engine created, hasn't started connecting |
-| `needsLogin` | Needs authentication |
+| `noState` | No persisted credentials, never authenticated |
+| `needsLogin` | Needs authentication (credentials expired or first use) |
 | `needsMachineAuth` | Authenticated, waiting for admin approval |
 | `starting` | Connecting to the tailnet |
-| `running` | Connected and ready |
-| `stopped` | Shut down |
+| `running` | Connected and ready for traffic |
+| `stopped` | Engine not running, but persisted credentials exist |
 
 </details>
 

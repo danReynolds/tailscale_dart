@@ -9,13 +9,13 @@ enum _WorkerOperation {
   logout;
 
   TailscaleException exceptionForMessage(String message) => switch (this) {
-    start => TailscaleUpException(message),
-    listen => TailscaleListenException(message),
-    status => TailscaleStatusException(message),
-    peers => TailscaleStatusException(message),
-    down => TailscaleOperationException('down', message),
-    logout => TailscaleLogoutException(message),
-  };
+        start => TailscaleUpException(message),
+        listen => TailscaleListenException(message),
+        status => TailscaleStatusException(message),
+        peers => TailscaleStatusException(message),
+        down => TailscaleOperationException('down', message),
+        logout => TailscaleLogoutException(message),
+      };
 }
 
 sealed class _WorkerCommand {
@@ -62,7 +62,7 @@ final class _WorkerDownCommand extends _WorkerCommand {
 
 final class _WorkerLogoutCommand extends _WorkerCommand {
   const _WorkerLogoutCommand({required this.stateDir})
-    : super(_WorkerOperation.logout);
+      : super(_WorkerOperation.logout);
 
   final String stateDir;
 }
@@ -72,9 +72,9 @@ sealed class _WorkerMainMessage {
 }
 
 final class _WorkerReadyMessage extends _WorkerMainMessage {
-  const _WorkerReadyMessage(this.commandPort);
+  const _WorkerReadyMessage(this.sendPort);
 
-  final SendPort commandPort;
+  final SendPort sendPort;
 }
 
 final class _WorkerBootstrapFailureMessage extends _WorkerMainMessage {
@@ -88,9 +88,9 @@ sealed class _WorkerEvent extends _WorkerMainMessage {
 }
 
 final class _WorkerStatusEvent extends _WorkerEvent {
-  const _WorkerStatusEvent({required this.snapshot});
+  const _WorkerStatusEvent({required this.status});
 
-  final TailscaleStatus snapshot;
+  final TailscaleStatus status;
 }
 
 final class _WorkerRuntimeErrorEvent extends _WorkerEvent {
@@ -113,30 +113,25 @@ final class _WorkerStartResponse extends _WorkerResponse {
 
   final int proxyPort;
   final String proxyAuthToken;
-
-  NativeWorkerStartResult toResult() => NativeWorkerStartResult(
-    proxyPort: proxyPort,
-    proxyAuthToken: proxyAuthToken,
-  );
 }
 
 final class _WorkerListenResponse extends _WorkerResponse {
   const _WorkerListenResponse({required this.listenPort})
-    : super(_WorkerOperation.listen);
+      : super(_WorkerOperation.listen);
 
   final int listenPort;
 }
 
 final class _WorkerStatusResponse extends _WorkerResponse {
   const _WorkerStatusResponse({required this.status})
-    : super(_WorkerOperation.status);
+      : super(_WorkerOperation.status);
 
   final TailscaleStatus status;
 }
 
 final class _WorkerPeersResponse extends _WorkerResponse {
   const _WorkerPeersResponse({required this.peers})
-    : super(_WorkerOperation.peers);
+      : super(_WorkerOperation.peers);
 
   final List<PeerStatus> peers;
 }

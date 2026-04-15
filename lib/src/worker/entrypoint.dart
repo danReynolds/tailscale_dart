@@ -3,6 +3,8 @@ part of 'worker.dart';
 /// Entrypoint for the background worker isolate that executes
 /// commands against the Tailscale native runtime.
 void _workerEntrypoint(SendPort sendPort) {
+  ReceivePort? commandPort;
+  ReceivePort? watcherPort;
   try {
     final initResult = native.duneInitDartAPI(
       ffi.NativeApi.initializeApiDLData,
@@ -16,8 +18,8 @@ void _workerEntrypoint(SendPort sendPort) {
       return;
     }
 
-    final commandPort = ReceivePort();
-    final watcherPort = ReceivePort();
+    commandPort = ReceivePort();
+    watcherPort = ReceivePort();
 
     native.duneSetDartPort(watcherPort.sendPort.nativePort);
 
@@ -38,7 +40,7 @@ void _workerEntrypoint(SendPort sendPort) {
 
         if (parsed['type'] == 'status') {
           try {
-            sendPort.send(_WorkerStatusEvent(snapshot: _loadStatusSnapshot()));
+            sendPort.send(_WorkerStatusEvent(status: _loadStatusSnapshot()));
           } on TailscaleStatusException catch (error) {
             sendPort.send(
               _WorkerRuntimeErrorEvent(
@@ -165,6 +167,8 @@ void _workerEntrypoint(SendPort sendPort) {
 
     sendPort.send(_WorkerReadyMessage(commandPort.sendPort));
   } catch (error) {
+    commandPort?.close();
+    watcherPort?.close();
     sendPort.send(
       _WorkerBootstrapFailureMessage(
         'Native worker isolate failed to start: $error',

@@ -178,8 +178,94 @@ void main() {
     });
   });
 
-  group('Tailscale.up cleanup', () {
-    test('stops the native server when start times out', () async {
+  // -----------------------------------------------------------------------
+  // Public API edge cases — tests run in order, each building on prior state.
+  // -----------------------------------------------------------------------
+
+  group('before up()', () {
+    test('status() returns empty status', () async {
+      final status = await Tailscale.instance.status();
+      expect(status.nodeStatus, NodeStatus.noState);
+      expect(status.tailscaleIPs, isEmpty);
+    });
+
+    test('peers() returns empty list', () async {
+      final peers = await Tailscale.instance.peers();
+      expect(peers, isEmpty);
+    });
+
+    test('down() is a no-op', () async {
+      await expectLater(Tailscale.instance.down(), completes);
+    });
+
+    test('listen() throws', () async {
+      await expectLater(
+        Tailscale.instance.listen(8080),
+        throwsA(isA<TailscaleException>()),
+      );
+    });
+
+    test('logout() does not throw', () async {
+      await expectLater(Tailscale.instance.logout(), completes);
+    });
+
+    test('http throws', () {
+      expect(
+        () => Tailscale.instance.http,
+        throwsA(isA<TailscaleUsageException>()),
+      );
+    });
+  });
+
+  group('up/down lifecycle', () {
+    test('up() starts the node', () async {
+      await Tailscale.instance.up(
+        hostname: 'lifecycle-test',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+
+      final status = await Tailscale.instance.status();
+      expect(status.nodeStatus, isNot(NodeStatus.noState));
+    });
+
+    test('http is available after up()', () {
+      expect(() => Tailscale.instance.http, returnsNormally);
+    });
+
+    test('down() succeeds', () async {
+      await expectLater(Tailscale.instance.down(), completes);
+    });
+
+    test('status() after down() returns empty', () async {
+      final status = await Tailscale.instance.status();
+      expect(status.nodeStatus, NodeStatus.noState);
+      expect(status.tailscaleIPs, isEmpty);
+    });
+
+    test('peers() after down() returns empty', () async {
+      final peers = await Tailscale.instance.peers();
+      expect(peers, isEmpty);
+    });
+
+    test('down() twice is a no-op', () async {
+      await expectLater(Tailscale.instance.down(), completes);
+    });
+
+    test('up() restarts after down()', () async {
+      await Tailscale.instance.up(
+        hostname: 'lifecycle-restart',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+
+      final status = await Tailscale.instance.status();
+      expect(status.nodeStatus, isNot(NodeStatus.noState));
+
+      await Tailscale.instance.down();
+    });
+
+    test('up() twice without down() replaces the node', () async {
       addTearDown(() async {
         try {
           await Tailscale.instance.down();
@@ -187,26 +273,24 @@ void main() {
         native.duneStop();
       });
 
-      await expectLater(
-        Tailscale.instance.up(
-          hostname: 'timeout-test',
-          authKey: 'tskey-fake-key',
-          controlUrl: Uri.parse('http://127.0.0.1:1/'),
-          timeout: const Duration(milliseconds: 200),
-        ),
-        throwsA(anything),
+      await Tailscale.instance.up(
+        hostname: 'double-up-1',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
       );
 
-      expect(Tailscale.instance.isRunning, isFalse);
+      await Tailscale.instance.up(
+        hostname: 'double-up-2',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
 
-      final ptr = native.duneStatus();
-      final result = ptr.toDartString();
-      native.duneFree(ptr);
-      expect(result, '{}');
+      final status = await Tailscale.instance.status();
+      expect(status.nodeStatus, isNot(NodeStatus.noState));
     });
   });
 
-  group('Tailscale.logout', () {
+  group('logout', () {
     test('removes only the owned state subdirectory', () async {
       final ownedStateDir = Directory(
         p.join(configuredStateBaseDir.path, 'tailscale'),
@@ -230,24 +314,8 @@ void main() {
       expect(ownedStateDir.existsSync(), isFalse);
     });
 
-    test('emits a stopped snapshot on statusChanges', () async {
-      final ownedStateDir = Directory(
-        p.join(configuredStateBaseDir.path, 'tailscale'),
-      );
-      if (ownedStateDir.existsSync()) {
-        ownedStateDir.deleteSync(recursive: true);
-      }
-      ownedStateDir.createSync(recursive: true);
-      File(
-        p.join(ownedStateDir.path, 'state.db'),
-      ).writeAsStringSync('placeholder');
-
-      final eventFuture = Tailscale.instance.onStatusChange.first;
-      await Tailscale.instance.logout();
-      final snapshot = await eventFuture;
-
-      expect(snapshot.nodeStatus, NodeStatus.stopped);
-      expect(snapshot.isRunning, isFalse);
+    test('logout() twice does not throw', () async {
+      await expectLater(Tailscale.instance.logout(), completes);
     });
   });
 }

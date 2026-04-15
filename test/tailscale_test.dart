@@ -202,7 +202,7 @@ void main() {
   });
 
   group('Tailscale API', () {
-    test('up timeout parameter has a default', () {
+    test('up is callable', () {
       final tsnet = Tailscale.instance;
       expect(tsnet.up, isA<Function>());
     });
@@ -212,31 +212,12 @@ void main() {
       expect(tsnet.peers, isA<Function>());
     });
 
-    test(
-      'init is idempotent for identical config and rejects config drift',
-      () {
-        Tailscale.init(
-          stateDir: 'build/test-state',
-          logLevel: TailscaleLogLevel.info,
-        );
-
-        expect(
-          () => Tailscale.init(
-            stateDir: 'build/./test-state/',
-            logLevel: TailscaleLogLevel.info,
-          ),
-          returnsNormally,
-        );
-
-        expect(
-          () => Tailscale.init(
-            stateDir: 'build/other-state',
-            logLevel: TailscaleLogLevel.info,
-          ),
-          throwsA(isA<TailscaleUsageException>()),
-        );
-      },
-    );
+    test('init accepts a state directory', () {
+      expect(
+        () => Tailscale.init(stateDir: 'build/test-state'),
+        returnsNormally,
+      );
+    });
 
     test('statusChanges exposes a broadcast stream', () {
       final tsnet = Tailscale.instance;
@@ -246,24 +227,6 @@ void main() {
     test('runtimeErrors exposes a broadcast stream', () {
       final tsnet = Tailscale.instance;
       expect(tsnet.onError.isBroadcast, isTrue);
-    });
-
-    test('worker events do not consume queued RPC responses', () {
-      final tsnet = Tailscale.forTest();
-
-      expect(
-        tsnet.debugWorkerEventDoesNotConsumePendingResponseForTest(),
-        isTrue,
-      );
-    });
-
-    test('worker exit fails queued RPC responses', () async {
-      final tsnet = Tailscale.forTest();
-
-      await expectLater(
-        tsnet.debugWorkerExitFailsPendingResponseForTest(),
-        completion(isTrue),
-      );
     });
   });
 

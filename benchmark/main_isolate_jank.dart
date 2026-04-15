@@ -83,7 +83,6 @@ Future<void> main() async {
           hostname: 'bench-node',
           authKey: authKey,
           controlUrl: parsedControlUrl,
-          timeout: const Duration(seconds: 60),
         ),
       ),
     );

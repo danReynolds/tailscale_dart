@@ -88,7 +88,11 @@ func Logout(stateDir string) error {
 func Stop() {
 	mu.Lock()
 	defer mu.Unlock()
+	stopLocked()
+}
 
+// stopLocked tears down the server and all listeners. Caller must hold mu.
+func stopLocked() {
 	if reverseProxyLn != nil {
 		reverseProxyLn.Close()
 		reverseProxyLn = nil
@@ -115,7 +119,18 @@ func Start(hostname, authKey, controlURL, stateDir string) (int, string, error) 
 	defer mu.Unlock()
 
 	if srv != nil {
-		return proxyPort, proxyAuthToken, nil
+		if authKey == "" {
+			return proxyPort, proxyAuthToken, nil
+		}
+		// Auth key provided on an already-running server — tear down
+		// and restart so the new key is applied. Clear persisted state
+		// so tsnet treats it as a fresh node; otherwise the existing
+		// NeedsLogin state causes tsnet to call StartLoginInteractive
+		// and ignore the auth key.
+		stopLocked()
+		if err := os.RemoveAll(stateDir); err != nil {
+			return 0, "", fmt.Errorf("failed to clear state dir for re-auth: %w", err)
+		}
 	}
 
 	os.Setenv("TS_ENABLE_RAW_DISCO", "false")

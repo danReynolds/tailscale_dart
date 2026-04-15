@@ -1,6 +1,7 @@
 library tailscale_dart;
 
 import 'dart:async';
+import 'package:ffi/ffi.dart';
 import 'package:http/http.dart' as pkg_http;
 import 'package:path/path.dart' as p;
 import 'src/errors.dart';
@@ -50,6 +51,15 @@ class Tailscale {
 
   static String get _stateDir =>
       p.join(_stateBaseDir!, _ownedStateSubdirectory);
+
+  static bool _hasPersistedState(String stateDir) {
+    final ptr = stateDir.toNativeUtf8();
+    try {
+      return native.duneHasState(ptr) != 0;
+    } finally {
+      calloc.free(ptr);
+    }
+  }
 
   void _reset() {
     _http?.close();
@@ -109,14 +119,17 @@ class Tailscale {
   /// Brings the embedded Tailscale node up and connects to the control plane.
   ///
   /// After [up], use [http] to make requests to peers. Subscribe to
-  /// [onStatusChange] to observe the node reaching Running, auth URLs,
-  /// and other state transitions.
+  /// [onStatusChange] to observe the node reaching Running.
   ///
   /// [hostname] controls the node's tailnet-visible hostname / MagicDNS base
   /// label. Leave it unset to let the embedded runtime pick its default.
   ///
-  /// On first use, provide [authKey] to register the node. On subsequent
-  /// launches, the node reconnects using stored credentials.
+  /// [authKey] is required on first use to register the node. On subsequent
+  /// launches, omit it to reconnect using stored credentials. If provided on
+  /// an already-running node, the engine restarts with the new key.
+  ///
+  /// Throws [TailscaleUsageException] if no [authKey] is provided and no
+  /// existing session state is found.
   ///
   /// [controlUrl] selects the control plane. Use the default for Tailscale, or
   /// point it at your Headscale deployment.
@@ -128,6 +141,14 @@ class Tailscale {
     Uri? controlUrl,
   }) async {
     final stateDir = _stateDir;
+
+    if (authKey == null && !_hasPersistedState(stateDir)) {
+      throw const TailscaleUsageException(
+        'No auth key provided and no existing session state. '
+        'Pass an authKey to authenticate.',
+      );
+    }
+
     final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
 
     final (:proxyPort, :proxyAuthToken) = await _worker.start(

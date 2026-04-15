@@ -7,7 +7,7 @@
 ///
 /// Matches Go's `ipn.State` values. See
 /// https://pkg.go.dev/tailscale.com/ipn#State
-enum NodeStatus {
+enum NodeState {
   /// Initial state — the engine has been created but hasn't started connecting.
   noState,
 
@@ -25,18 +25,19 @@ enum NodeStatus {
   running,
 
   /// The node has been explicitly shut down.
-  stopped,
-}
+  stopped;
 
-NodeStatus _parseNodeStatus(String? s) => switch (s) {
-  'NoState' => NodeStatus.noState,
-  'NeedsLogin' => NodeStatus.needsLogin,
-  'NeedsMachineAuth' => NodeStatus.needsMachineAuth,
-  'Starting' => NodeStatus.starting,
-  'Running' => NodeStatus.running,
-  'Stopped' => NodeStatus.stopped,
-  _ => NodeStatus.noState,
-};
+  /// Parses a Go `ipn.State` string into a [NodeState].
+  static NodeState parse(String? s) => switch (s) {
+    'NoState' => NodeState.noState,
+    'NeedsLogin' => NodeState.needsLogin,
+    'NeedsMachineAuth' => NodeState.needsMachineAuth,
+    'Starting' => NodeState.starting,
+    'Running' => NodeState.running,
+    'Stopped' => NodeState.stopped,
+    _ => NodeState.noState,
+  };
+}
 
 /// A snapshot of the local node's current state.
 ///
@@ -44,7 +45,7 @@ NodeStatus _parseNodeStatus(String? s) => switch (s) {
 /// information. Peer inventory is exposed separately through `Tailscale.peers`.
 class TailscaleStatus {
   const TailscaleStatus({
-    required this.nodeStatus,
+    required this.state,
     this.authUrl,
     required this.tailscaleIPs,
     required this.health,
@@ -52,7 +53,7 @@ class TailscaleStatus {
   });
 
   /// Where the node is in the connection lifecycle.
-  final NodeStatus nodeStatus;
+  final NodeState state;
 
   /// Login URL from the control plane, if authentication is required.
   ///
@@ -71,10 +72,10 @@ class TailscaleStatus {
   final String? magicDNSSuffix;
 
   /// Whether the node is connected and ready for traffic.
-  bool get isRunning => nodeStatus == NodeStatus.running;
+  bool get isRunning => state == NodeState.running;
 
   /// Whether the node needs authentication credentials.
-  bool get needsLogin => nodeStatus == NodeStatus.needsLogin;
+  bool get needsLogin => state == NodeState.needsLogin;
 
   /// Whether all health checks are passing.
   bool get isHealthy => health.isEmpty;
@@ -86,7 +87,7 @@ class TailscaleStatus {
     final self = json['Self'] as Map<String, dynamic>?;
 
     return TailscaleStatus(
-      nodeStatus: _parseNodeStatus(json['BackendState'] as String?),
+      state: NodeState.parse(json['BackendState'] as String?),
       authUrl: _parseUri(json['AuthURL']),
       tailscaleIPs: _parseIPs(self?['TailscaleIPs']),
       health: (json['Health'] as List?)?.cast<String>() ?? const [],
@@ -98,7 +99,7 @@ class TailscaleStatus {
 
   /// A status representing a stopped/uninitialized engine.
   static const stopped = TailscaleStatus(
-    nodeStatus: NodeStatus.stopped,
+    state: NodeState.stopped,
     tailscaleIPs: [],
     health: [],
   );

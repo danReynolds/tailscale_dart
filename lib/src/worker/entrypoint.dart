@@ -39,18 +39,8 @@ void _workerEntrypoint(SendPort sendPort) {
         }
 
         if (parsed['type'] == 'status') {
-          try {
-            sendPort.send(_WorkerStatusEvent(status: _loadStatusSnapshot()));
-          } on TailscaleStatusException catch (error) {
-            sendPort.send(
-              _WorkerRuntimeErrorEvent(
-                TailscaleRuntimeError(
-                  message: error.message,
-                  code: TailscaleRuntimeErrorCode.node,
-                ),
-              ),
-            );
-          }
+          final state = NodeState.parse(parsed['state'] as String?);
+          sendPort.send(_WorkerStateEvent(state: state));
         }
       } catch (_) {
         // Malformed message from Go — ignore.
@@ -69,6 +59,20 @@ void _workerEntrypoint(SendPort sendPort) {
               :hostname,
               :stateDir,
             ) = request;
+
+            if (authKey.isEmpty) {
+              final stateDirPtr = stateDir.toNativeUtf8();
+              try {
+                if (native.duneHasState(stateDirPtr) == 0) {
+                  throw const TailscaleUpException(
+                    'No auth key provided and no existing session state. '
+                    'Pass an authKey to authenticate.',
+                  );
+                }
+              } finally {
+                calloc.free(stateDirPtr);
+              }
+            }
 
             final hostnamePtr = hostname.toNativeUtf8();
             final authKeyPtr = authKey.toNativeUtf8();
@@ -126,8 +130,10 @@ void _workerEntrypoint(SendPort sendPort) {
             }
 
             sendPort.send(_WorkerListenResponse(listenPort: listenPort));
-          case _WorkerStatusCommand():
-            sendPort.send(_WorkerStatusResponse(status: _loadStatusSnapshot()));
+          case _WorkerStatusCommand(:final stateDir):
+            sendPort.send(_WorkerStatusResponse(
+              status: _loadStatusSnapshot(stateDir: stateDir),
+            ));
           case _WorkerPeersCommand():
             sendPort.send(_WorkerPeersResponse(peers: _loadPeerSnapshot()));
           case _WorkerDownCommand():
@@ -203,12 +209,28 @@ dynamic _callNativeJson(
   return result;
 }
 
-TailscaleStatus _loadStatusSnapshot() {
+TailscaleStatus _loadStatusSnapshot({String? stateDir}) {
   try {
     final parsed = _callNativeJson(
       native.duneStatus,
       onError: TailscaleStatusException.new,
     ) as Map<String, dynamic>;
+
+    // When the engine isn't running, duneStatus returns {} which parses
+    // to noState. If we have a stateDir to check and persisted credentials
+    // exist, report stopped instead so consumers can distinguish "was
+    // previously authenticated" from "never authenticated".
+    if (parsed.isEmpty && stateDir != null) {
+      final stateDirPtr = stateDir.toNativeUtf8();
+      try {
+        if (native.duneHasState(stateDirPtr) != 0) {
+          return TailscaleStatus.stopped;
+        }
+      } finally {
+        calloc.free(stateDirPtr);
+      }
+    }
+
     return TailscaleStatus.fromJson(parsed);
   } catch (error) {
     if (error is TailscaleStatusException) rethrow;

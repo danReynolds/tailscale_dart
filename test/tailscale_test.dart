@@ -42,7 +42,7 @@ void main() {
 
       final status = TailscaleStatus.fromJson(json);
 
-      expect(status.nodeStatus, NodeStatus.running);
+      expect(status.state, NodeState.running);
       expect(status.isRunning, isTrue);
       expect(status.needsLogin, isFalse);
       expect(status.isHealthy, isTrue);
@@ -115,7 +115,7 @@ void main() {
     test('handles empty/minimal JSON', () {
       final status = TailscaleStatus.fromJson({});
 
-      expect(status.nodeStatus, NodeStatus.noState);
+      expect(status.state, NodeState.noState);
       expect(status.isRunning, isFalse);
       expect(status.tailscaleIPs, isEmpty);
       expect(status.health, isEmpty);
@@ -128,7 +128,7 @@ void main() {
         'AuthURL': 'https://login.tailscale.com/a/abc123',
       });
 
-      expect(status.nodeStatus, NodeStatus.needsLogin);
+      expect(status.state, NodeState.needsLogin);
       expect(status.needsLogin, isTrue);
       expect(status.isRunning, isFalse);
       expect(status.authUrl, isA<Uri>());
@@ -171,22 +171,22 @@ void main() {
     });
 
     test('stopped constant', () {
-      expect(TailscaleStatus.stopped.nodeStatus, NodeStatus.stopped);
+      expect(TailscaleStatus.stopped.state, NodeState.stopped);
       expect(TailscaleStatus.stopped.isRunning, isFalse);
     });
 
-    test('all NodeStatus values parse correctly', () {
+    test('all NodeState values parse correctly', () {
       for (final entry in {
-        'NoState': NodeStatus.noState,
-        'NeedsLogin': NodeStatus.needsLogin,
-        'NeedsMachineAuth': NodeStatus.needsMachineAuth,
-        'Starting': NodeStatus.starting,
-        'Running': NodeStatus.running,
-        'Stopped': NodeStatus.stopped,
+        'NoState': NodeState.noState,
+        'NeedsLogin': NodeState.needsLogin,
+        'NeedsMachineAuth': NodeState.needsMachineAuth,
+        'Starting': NodeState.starting,
+        'Running': NodeState.running,
+        'Stopped': NodeState.stopped,
       }.entries) {
         final status = TailscaleStatus.fromJson({'BackendState': entry.key});
         expect(
-          status.nodeStatus,
+          status.state,
           entry.value,
           reason: '${entry.key} should parse to ${entry.value}',
         );
@@ -197,7 +197,7 @@ void main() {
       final status = TailscaleStatus.fromJson({
         'BackendState': 'SomeFutureState',
       });
-      expect(status.nodeStatus, NodeStatus.noState);
+      expect(status.state, NodeState.noState);
     });
   });
 
@@ -220,8 +220,8 @@ void main() {
       );
     });
 
-    test('onStatusChange is a broadcast stream', () {
-      expect(Tailscale.instance.onStatusChange.isBroadcast, isTrue);
+    test('onStateChange is a broadcast stream', () {
+      expect(Tailscale.instance.onStateChange.isBroadcast, isTrue);
     });
 
     test('onError is a broadcast stream', () {

@@ -1,7 +1,6 @@
 library tailscale_dart;
 
 import 'dart:async';
-import 'package:ffi/ffi.dart';
 import 'package:http/http.dart' as pkg_http;
 import 'package:path/path.dart' as p;
 import 'src/errors.dart';
@@ -21,10 +20,10 @@ enum TailscaleLogLevel { silent, error, info }
 
 extension on TailscaleLogLevel {
   int get nativeValue => switch (this) {
-        TailscaleLogLevel.silent => 0,
-        TailscaleLogLevel.error => 1,
-        TailscaleLogLevel.info => 2,
-      };
+    TailscaleLogLevel.silent => 0,
+    TailscaleLogLevel.error => 1,
+    TailscaleLogLevel.info => 2,
+  };
 }
 
 /// Singleton embedded Tailscale node for the current Dart process.
@@ -40,26 +39,17 @@ class Tailscale {
   pkg_http.Client? _http;
 
   late final _worker = Worker(
-    publishStatus: _statusController.add,
+    publishState: _stateController.add,
     publishRuntimeError: _errorController.add,
   );
 
-  final StreamController<TailscaleStatus> _statusController =
-      StreamController<TailscaleStatus>.broadcast();
+  final StreamController<NodeState> _stateController =
+      StreamController<NodeState>.broadcast();
   final StreamController<TailscaleRuntimeError> _errorController =
       StreamController<TailscaleRuntimeError>.broadcast();
 
   static String get _stateDir =>
       p.join(_stateBaseDir!, _ownedStateSubdirectory);
-
-  static bool _hasPersistedState(String stateDir) {
-    final ptr = stateDir.toNativeUtf8();
-    try {
-      return native.duneHasState(ptr) != 0;
-    } finally {
-      calloc.free(ptr);
-    }
-  }
 
   void _reset() {
     _http?.close();
@@ -81,14 +71,13 @@ class Tailscale {
     throw const TailscaleUsageException('Call up() before accessing http.');
   }
 
-  /// Real-time status snapshots pushed from the embedded node.
+  /// Emits the new [NodeState] whenever the node's lifecycle state changes.
   ///
-  /// Each event is a full local-node [TailscaleStatus] snapshot, not a delta
-  /// object. Peer inventory is intentionally excluded; call [peers] when you
-  /// need a peer snapshot.
+  /// Use [status] to fetch the full [TailscaleStatus] snapshot (IPs, health,
+  /// etc.) when needed.
   ///
   /// Errors are reported separately through [onError].
-  Stream<TailscaleStatus> get onStatusChange => _statusController.stream;
+  Stream<NodeState> get onStateChange => _stateController.stream;
 
   /// Background runtime errors pushed from the embedded node.
   ///
@@ -119,7 +108,7 @@ class Tailscale {
   /// Brings the embedded Tailscale node up and connects to the control plane.
   ///
   /// After [up], use [http] to make requests to peers. Subscribe to
-  /// [onStatusChange] to observe the node reaching Running.
+  /// [onStateChange] to observe the node reaching [NodeState.running].
   ///
   /// [hostname] controls the node's tailnet-visible hostname / MagicDNS base
   /// label. Leave it unset to let the embedded runtime pick its default.
@@ -128,7 +117,7 @@ class Tailscale {
   /// launches, omit it to reconnect using stored credentials. If provided on
   /// an already-running node, the engine restarts with the new key.
   ///
-  /// Throws [TailscaleUsageException] if no [authKey] is provided and no
+  /// Throws [TailscaleUpException] if no [authKey] is provided and no
   /// existing session state is found.
   ///
   /// [controlUrl] selects the control plane. Use the default for Tailscale, or
@@ -140,22 +129,13 @@ class Tailscale {
     String? authKey,
     Uri? controlUrl,
   }) async {
-    final stateDir = _stateDir;
-
-    if (authKey == null && !_hasPersistedState(stateDir)) {
-      throw const TailscaleUsageException(
-        'No auth key provided and no existing session state. '
-        'Pass an authKey to authenticate.',
-      );
-    }
-
     final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
 
     final (:proxyPort, :proxyAuthToken) = await _worker.start(
       hostname: hostname,
       authKey: authKey ?? '',
       controlUrl: resolvedControlUrl.toString(),
-      stateDir: stateDir,
+      stateDir: _stateDir,
     );
     _http = TailscaleProxyClient(proxyPort, proxyAuthToken);
   }
@@ -178,10 +158,10 @@ class Tailscale {
   /// Includes backend state, local IPs, health, and tailnet info.
   ///
   /// Peer inventory is intentionally excluded so status polling and
-  /// [onStatusChange] stay lightweight. Call [peers] when you need the current
+  /// [onStateChange] stay lightweight. Call [peers] when you need the current
   /// peer snapshot.
   Future<TailscaleStatus> status() async {
-    return _worker.status();
+    return _worker.status(stateDir: _stateDir);
   }
 
   /// Returns the current peer snapshot for the tailnet.

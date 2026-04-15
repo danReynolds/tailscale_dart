@@ -182,10 +182,76 @@ void main() {
   // Public API edge cases — tests run in order, each building on prior state.
   // -----------------------------------------------------------------------
 
+  group('status() before up()', () {
+    test('returns stopped when persisted state exists', () async {
+      // Create persisted state via a throwaway duneStart/duneStop.
+      final ownedStateDir = Directory(
+        p.join(configuredStateBaseDir.path, 'tailscale'),
+      );
+      ownedStateDir.createSync(recursive: true);
+
+      final hostname = 'status-test'.toNativeUtf8();
+      final authKey = 'tskey-fake'.toNativeUtf8();
+      final controlUrl = 'http://127.0.0.1:1/'.toNativeUtf8();
+      final stateDir = ownedStateDir.path.toNativeUtf8();
+
+      final resultPtr = native.duneStart(
+        hostname,
+        authKey,
+        controlUrl,
+        stateDir,
+      );
+      native.duneFree(resultPtr);
+      calloc.free(hostname);
+      calloc.free(authKey);
+      calloc.free(controlUrl);
+      calloc.free(stateDir);
+      native.duneStop();
+
+      final status = await Tailscale.instance.status();
+      expect(status.state, NodeState.stopped);
+
+      // Clean up so later tests start fresh.
+      ownedStateDir.deleteSync(recursive: true);
+    });
+
+    test('returns noState when no persisted state', () async {
+      final ownedStateDir = Directory(
+        p.join(configuredStateBaseDir.path, 'tailscale'),
+      );
+      if (ownedStateDir.existsSync()) {
+        ownedStateDir.deleteSync(recursive: true);
+      }
+
+      final status = await Tailscale.instance.status();
+      expect(status.state, NodeState.noState);
+    });
+  });
+
+  group('up() without auth key', () {
+    test('throws TailscaleUpException when no persisted state', () async {
+      // Ensure no state directory exists.
+      final ownedStateDir = Directory(
+        p.join(configuredStateBaseDir.path, 'tailscale'),
+      );
+      if (ownedStateDir.existsSync()) {
+        ownedStateDir.deleteSync(recursive: true);
+      }
+
+      await expectLater(
+        Tailscale.instance.up(
+          hostname: 'no-auth-test',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+        ),
+        throwsA(isA<TailscaleUpException>()),
+      );
+    });
+  });
+
   group('before up()', () {
     test('status() returns empty status', () async {
       final status = await Tailscale.instance.status();
-      expect(status.nodeStatus, NodeStatus.noState);
+      expect(status.state, NodeState.noState);
       expect(status.tailscaleIPs, isEmpty);
     });
 
@@ -218,9 +284,9 @@ void main() {
   });
 
   group('up/down lifecycle', () {
-    test('up() starts the node and delivers status events', () async {
+    test('up() starts the node and delivers state events', () async {
       // Subscribe before up() so we catch the events.
-      final firstEvent = Tailscale.instance.onStatusChange.first;
+      final firstEvent = Tailscale.instance.onStateChange.first;
 
       await Tailscale.instance.up(
         hostname: 'lifecycle-test',
@@ -229,10 +295,10 @@ void main() {
       );
 
       final status = await Tailscale.instance.status();
-      expect(status.nodeStatus, isNot(NodeStatus.noState));
+      expect(status.state, isNot(NodeState.noState));
 
-      final event = await firstEvent.timeout(const Duration(seconds: 5));
-      expect(event, isA<TailscaleStatus>());
+      final state = await firstEvent.timeout(const Duration(seconds: 5));
+      expect(state, isA<NodeState>());
     });
 
     test('http is available after up()', () {
@@ -243,9 +309,9 @@ void main() {
       await expectLater(Tailscale.instance.down(), completes);
     });
 
-    test('status() after down() returns empty', () async {
+    test('status() after down() returns stopped (persisted state exists)', () async {
       final status = await Tailscale.instance.status();
-      expect(status.nodeStatus, NodeStatus.noState);
+      expect(status.state, NodeState.stopped);
       expect(status.tailscaleIPs, isEmpty);
     });
 
@@ -266,7 +332,7 @@ void main() {
       );
 
       final status = await Tailscale.instance.status();
-      expect(status.nodeStatus, isNot(NodeStatus.noState));
+      expect(status.state, isNot(NodeState.noState));
 
       await Tailscale.instance.down();
     });
@@ -292,7 +358,7 @@ void main() {
       );
 
       final status = await Tailscale.instance.status();
-      expect(status.nodeStatus, isNot(NodeStatus.noState));
+      expect(status.state, isNot(NodeState.noState));
     });
   });
 

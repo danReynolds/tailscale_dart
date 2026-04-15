@@ -50,12 +50,13 @@ void main() {
       controlUrl: Uri.parse(controlUrl),
     );
 
-    // up() starts the node — wait for it to reach Running via status stream.
-    final running = await tsnet.onStatusChange
-        .firstWhere((s) => s.isRunning)
+    // up() starts the node — wait for it to reach Running via state stream.
+    await tsnet.onStateChange
+        .firstWhere((s) => s == NodeState.running)
         .timeout(const Duration(seconds: 30));
 
-    expect(running.ipv4, startsWith('100.'));
+    final status = await tsnet.status();
+    expect(status.ipv4, startsWith('100.'));
   });
 
   test('status returns current state', () async {

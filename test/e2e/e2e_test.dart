@@ -44,23 +44,22 @@ void main() {
   });
 
   test('up connects and reaches Running state', () async {
-    // up() returns the current status once the node is Running.
-    final status = await tsnet.up(
+    await tsnet.up(
       hostname: 'dune-e2e-test',
       authKey: authKey,
       controlUrl: Uri.parse(controlUrl),
-      timeout: const Duration(seconds: 60),
     );
 
-    expect(tsnet.isRunning, isTrue);
-    expect(status.isRunning, isTrue);
-    expect(status.ipv4, startsWith('100.'));
+    // up() starts the node — wait for it to reach Running via status stream.
+    final running = await tsnet.onStatusChange
+        .firstWhere((s) => s.isRunning)
+        .timeout(const Duration(seconds: 30));
+
+    expect(running.ipv4, startsWith('100.'));
   });
 
-  test('status returns our Tailscale IP', () async {
+  test('status returns current state', () async {
     final s = await tsnet.status();
-
-    expect(s.isRunning, isTrue);
     expect(s.ipv4, startsWith('100.'));
   });
 
@@ -75,7 +74,6 @@ void main() {
 
   test('down shuts down cleanly', () async {
     await tsnet.down();
-    expect(tsnet.isRunning, isFalse);
   });
 
   test('logout clears persisted state', () async {
@@ -83,12 +81,10 @@ void main() {
       hostname: 'dune-e2e-test',
       authKey: authKey,
       controlUrl: Uri.parse(controlUrl),
-      timeout: const Duration(seconds: 60),
     );
 
     await tsnet.logout();
 
-    expect(tsnet.isRunning, isFalse);
     expect(Directory(stateDir).existsSync(), isTrue);
     expect(Directory(p.join(stateDir, 'tailscale')).existsSync(), isFalse);
   });

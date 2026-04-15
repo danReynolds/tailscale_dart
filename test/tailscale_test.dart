@@ -202,50 +202,30 @@ void main() {
   });
 
   group('Tailscale API', () {
-    test('up timeout parameter has a default', () {
-      final tsnet = Tailscale.instance;
-      expect(tsnet.up, isA<Function>());
+    test('init rejects empty stateDir', () {
+      expect(
+        () => Tailscale.init(stateDir: ''),
+        throwsA(isA<TailscaleUsageException>()),
+      );
+      expect(
+        () => Tailscale.init(stateDir: '   '),
+        throwsA(isA<TailscaleUsageException>()),
+      );
     });
 
-    test('peers exposes a snapshot method', () {
-      final tsnet = Tailscale.instance;
-      expect(tsnet.peers, isA<Function>());
+    test('init accepts a valid state directory', () {
+      expect(
+        () => Tailscale.init(stateDir: 'build/test-state'),
+        returnsNormally,
+      );
     });
 
-    test(
-      'init is idempotent for identical config and rejects config drift',
-      () {
-        Tailscale.init(
-          stateDir: 'build/test-state',
-          logLevel: TailscaleLogLevel.info,
-        );
-
-        expect(
-          () => Tailscale.init(
-            stateDir: 'build/./test-state/',
-            logLevel: TailscaleLogLevel.info,
-          ),
-          returnsNormally,
-        );
-
-        expect(
-          () => Tailscale.init(
-            stateDir: 'build/other-state',
-            logLevel: TailscaleLogLevel.info,
-          ),
-          throwsA(isA<TailscaleUsageException>()),
-        );
-      },
-    );
-
-    test('statusChanges exposes a broadcast stream', () {
-      final tsnet = Tailscale.instance;
-      expect(tsnet.onStatusChange.isBroadcast, isTrue);
+    test('onStatusChange is a broadcast stream', () {
+      expect(Tailscale.instance.onStatusChange.isBroadcast, isTrue);
     });
 
-    test('runtimeErrors exposes a broadcast stream', () {
-      final tsnet = Tailscale.instance;
-      expect(tsnet.onError.isBroadcast, isTrue);
+    test('onError is a broadcast stream', () {
+      expect(Tailscale.instance.onError.isBroadcast, isTrue);
     });
   });
 

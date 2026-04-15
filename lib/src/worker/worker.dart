@@ -1,0 +1,159 @@
+library tailscale_dart.worker;
+
+import 'dart:async';
+import 'dart:collection';
+import 'dart:convert';
+import 'dart:ffi' as ffi;
+import 'dart:isolate';
+
+import 'package:ffi/ffi.dart';
+
+import '../errors.dart';
+import '../ffi_bindings.dart' as native;
+import '../status.dart';
+
+part 'messages.dart';
+part 'entrypoint.dart';
+
+/// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
+final class Worker {
+  Worker({required this.publishStatus, required this.publishRuntimeError}) {
+    _start();
+  }
+
+  final void Function(TailscaleStatus status) publishStatus;
+  final void Function(TailscaleRuntimeError error) publishRuntimeError;
+
+  // Requests are processed synchronously on the worker isolate and each
+  // command produces exactly one response in request order, so a FIFO queue is
+  // sufficient for matching RPC responses without request IDs.
+  final Queue<Completer<_WorkerResponse>> _pendingRequests =
+      Queue<Completer<_WorkerResponse>>();
+
+  final _sendPortCompleter = Completer<SendPort>();
+  final _receivePort = ReceivePort();
+  Future<SendPort> get _sendPort => _sendPortCompleter.future;
+
+  Future<void> _start() async {
+    _receivePort.listen(_handleWorkerMessage);
+    try {
+      final isolate = await Isolate.spawn<SendPort>(
+        _workerEntrypoint,
+        _receivePort.sendPort,
+      );
+      isolate.addOnExitListener(_receivePort.sendPort);
+    } catch (_) {
+      _dispose();
+    }
+  }
+
+  void _handleWorkerMessage(dynamic message) {
+    if (message == null) {
+      _dispose();
+      return;
+    }
+
+    switch (message) {
+      case _WorkerReadyMessage(:final sendPort):
+        _sendPortCompleter.complete(sendPort);
+      case _WorkerBootstrapFailureMessage(:final message):
+        publishRuntimeError(TailscaleRuntimeError(
+          message: message,
+          code: TailscaleRuntimeErrorCode.node,
+        ));
+        _dispose();
+      case _WorkerRuntimeErrorEvent(:final error):
+        publishRuntimeError(error);
+      case _WorkerStatusEvent(:final status):
+        publishStatus(status);
+      case _WorkerResponse():
+        _pendingRequests.removeFirst().complete(message);
+    }
+  }
+
+  void _dispose() {
+    native.duneStopWatch();
+    native.duneSetDartPort(0);
+    native.duneStop();
+    _receivePort.close();
+
+    final error =
+        const TailscaleOperationException('worker', 'Worker terminated.');
+
+    if (!_sendPortCompleter.isCompleted) {
+      _sendPortCompleter.completeError(error);
+    }
+    for (final c in _pendingRequests) {
+      c.completeError(error);
+    }
+    _pendingRequests.clear();
+  }
+
+  Future<TResponse> _request<TResponse extends _WorkerResponse>(
+    _WorkerCommand request,
+  ) async {
+    final sendPort = await _sendPort;
+    final completer = Completer<_WorkerResponse>();
+    _pendingRequests.addLast(completer);
+    try {
+      sendPort.send(request);
+      final response = await completer.future;
+      if (response is _WorkerFailureResponse) {
+        throw response.operation.exceptionForMessage(response.message);
+      }
+      return response as TResponse;
+    } catch (error) {
+      _pendingRequests.remove(completer);
+      rethrow;
+    }
+  }
+
+  Future<({int proxyPort, String proxyAuthToken})> start({
+    required String hostname,
+    required String authKey,
+    required String controlUrl,
+    required String stateDir,
+  }) async {
+    final _WorkerStartResponse(:proxyPort, :proxyAuthToken) =
+        await _request<_WorkerStartResponse>(
+      _WorkerStartCommand(
+        hostname: hostname,
+        authKey: authKey,
+        controlUrl: controlUrl,
+        stateDir: stateDir,
+      ),
+    );
+    return (proxyPort: proxyPort, proxyAuthToken: proxyAuthToken);
+  }
+
+  Future<int> listen({required int localPort, required int tailnetPort}) async {
+    final response = await _request<_WorkerListenResponse>(
+      _WorkerListenCommand(localPort: localPort, tailnetPort: tailnetPort),
+    );
+    return response.listenPort;
+  }
+
+  Future<TailscaleStatus> status() async {
+    final response = await _request<_WorkerStatusResponse>(
+      const _WorkerStatusCommand(),
+    );
+    return response.status;
+  }
+
+  Future<List<PeerStatus>> peers() async {
+    final response = await _request<_WorkerPeersResponse>(
+      const _WorkerPeersCommand(),
+    );
+    return response.peers;
+  }
+
+  Future<void> down() async {
+    await _request<_WorkerAckResponse>(const _WorkerDownCommand());
+  }
+
+  Future<void> logout(String stateDir) async {
+    await _request<_WorkerAckResponse>(
+      _WorkerLogoutCommand(stateDir: stateDir),
+    );
+  }
+}

@@ -71,6 +71,16 @@ void main(List<String> args) async {
       // macOS: Dart's native asset bundler uses install_name_tool to rewrite
       // dylib paths. This requires enough header padding in the Mach-O binary.
       env['CGO_LDFLAGS'] = '-headerpad_max_install_names';
+
+      // Ensure CGO can find system headers (stdlib.h, etc.) via the SDK path.
+      // Without this, builds fail on setups where Xcode CLT is installed but
+      // the default include search path doesn't include the SDK sysroot.
+      final sdkRoot = Platform.environment['SDKROOT'] ??
+          (await Process.run('xcrun', ['--show-sdk-path'])).stdout.toString().trim();
+      if (sdkRoot.isNotEmpty) {
+        env['SDKROOT'] = sdkRoot;
+        env['CGO_CFLAGS'] = '-isysroot $sdkRoot';
+      }
     }
 
     // Find Go binary and verify version

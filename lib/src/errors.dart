@@ -1,5 +1,3 @@
-import 'status.dart';
-
 /// Stable library-level exception base for embedded Tailscale operations.
 sealed class TailscaleException implements Exception {
   const TailscaleException(this.message, {this.cause});
@@ -48,21 +46,6 @@ class TailscaleOperationException extends TailscaleException {
 class TailscaleUpException extends TailscaleOperationException {
   const TailscaleUpException(String message, {Object? cause})
     : super('up', message, cause: cause);
-}
-
-/// Thrown when `up()` times out before the node reaches Running.
-final class TailscaleTimeoutException extends TailscaleUpException {
-  const TailscaleTimeoutException({
-    required String message,
-    required this.timeout,
-    required this.lastStatus,
-  }) : super(message);
-
-  /// Timeout value passed to `up()`.
-  final Duration timeout;
-
-  /// Last published status snapshot when the timeout fired.
-  final TailscaleStatus lastStatus;
 }
 
 /// Thrown when `listen()` fails to expose a local HTTP server.

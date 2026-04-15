@@ -16,13 +16,14 @@ void main() async {
   });
 
   // 2. Bring the Tailscale node up.
-  final status = await tsnet.up(
+  await tsnet.up(
     hostname: 'my-app',
     authKey: 'tskey-auth-...',
     controlUrl: Uri.parse('https://controlplane.tailscale.com'),
   );
 
   // Your app is now a node on the tailnet
+  final status = await tsnet.status();
   print('Local IP: ${status.ipv4}');
   final peers = await tsnet.peers();
   print('Known peers: ${peers.length}');
@@ -36,10 +37,7 @@ void main() async {
   print('Response: ${response.body}');
 
   // Expose a local HTTP server to the tailnet
-  await tsnet.listen(localPort: 8080);
-
-  // Check status
-  print('Running: ${status.isRunning}, healthy: ${status.isHealthy}');
+  await tsnet.listen(8080);
 
   // Clean shutdown
   await tsnet.down();

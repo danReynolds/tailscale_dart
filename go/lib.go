@@ -127,6 +127,9 @@ func Start(hostname, authKey, controlURL, stateDir string) (int, string, error) 
 		// so tsnet treats it as a fresh node; otherwise the existing
 		// NeedsLogin state causes tsnet to call StartLoginInteractive
 		// and ignore the auth key.
+		if strings.TrimSpace(stateDir) == "" {
+			return 0, "", fmt.Errorf("state dir is empty")
+		}
 		stopLocked()
 		if err := os.RemoveAll(stateDir); err != nil {
 			return 0, "", fmt.Errorf("failed to clear state dir for re-auth: %w", err)

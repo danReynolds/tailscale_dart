@@ -387,7 +387,7 @@ func TestStop_ResetsProxyPort(t *testing.T) {
 	mu.Unlock()
 }
 
-// --- Start restart-with-authkey tests ---
+// --- Start behavior tests ---
 
 func TestStart_NoOpWithoutAuthKey(t *testing.T) {
 	// Simulate a running server by setting the package-level state.
@@ -458,50 +458,13 @@ func TestStart_StopLockedClosesListeners(t *testing.T) {
 		t.Error("reverseProxyLn should be nil after stopLocked")
 	}
 
-	// Old listeners should be closed.
+	// Old listeners should be closed — Accept returns immediately with an
+	// error on a closed listener, so no deadline is needed.
 	if _, err := oldLn.Accept(); err == nil {
 		t.Error("old proxy listener should be closed")
 	}
 	if _, err := oldRevLn.Accept(); err == nil {
 		t.Error("old reverse proxy listener should be closed")
-	}
-}
-
-func TestStart_EarlyReturnVsRestart(t *testing.T) {
-	// Verify the branch logic: empty authKey → early return, non-empty → proceeds past guard.
-	// We set srv to non-nil via a listener trick, then observe the return values.
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-
-	mu.Lock()
-	srv = &tsnet.Server{}
-	proxyPort = ln.Addr().(*net.TCPAddr).Port
-	proxyLn = ln
-	proxyAuthToken = "existing"
-	mu.Unlock()
-	defer func() {
-		mu.Lock()
-		srv = nil
-		proxyPort = 0
-		proxyLn = nil
-		proxyAuthToken = ""
-		mu.Unlock()
-	}()
-
-	// Empty auth key → should return existing values unchanged.
-	port, token, err := Start("host", "", "https://control", t.TempDir())
-	if err != nil {
-		t.Fatalf("empty authKey Start failed: %v", err)
-	}
-	if token != "existing" {
-		t.Errorf("empty authKey: token = %q, want %q", token, "existing")
-	}
-	if port != ln.Addr().(*net.TCPAddr).Port {
-		t.Error("empty authKey: port changed unexpectedly")
 	}
 }
 

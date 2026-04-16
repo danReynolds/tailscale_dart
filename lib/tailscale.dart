@@ -94,11 +94,6 @@ class Tailscale {
   /// authentication state in a dedicated `tailscale/` subdirectory inside it.
   ///
   /// [logLevel] controls native log verbosity.
-  ///
-  /// Safe to call more than once — each call overwrites the previously
-  /// configured [stateDir] and [logLevel]. Subsequent calls take effect on
-  /// the next [up] / [status] invocation; they do not disturb an already
-  /// running engine.
   static void init({
     required String stateDir,
     TailscaleLogLevel logLevel = TailscaleLogLevel.silent,
@@ -143,11 +138,6 @@ class Tailscale {
   /// point it at your Headscale deployment.
   ///
   /// To accept incoming traffic, call [listen] after [up].
-  ///
-  /// Not safe to invoke concurrently. If [up] is called again while a prior
-  /// call is still in flight, both requests will be dispatched to the engine
-  /// and ordering of the restart is undefined. Await the first call before
-  /// issuing another.
   Future<void> up({
     String hostname = '',
     String? authKey,

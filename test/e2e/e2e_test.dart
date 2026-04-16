@@ -71,10 +71,15 @@ void main() {
     tsnet = Tailscale.instance;
     await statSo('after-Tailscale.init');
 
-    // Second warmup AFTER parent has loaded the .so. If the framework
-    // re-copies the cached .so into .dart_tool/lib/libtailscale.so on
-    // every `dart run` (rather than checking whether it's already there),
-    // this is what crashes the parent with SIGBUS on Linux.
+    // Workaround attempt: write-protect the .so so the framework's
+    // re-copy on subprocess `dart run` fails with EACCES instead of
+    // truncating and crashing this process with SIGBUS.
+    final chmod =
+        await Process.run('chmod', ['0444', '.dart_tool/lib/libtailscale.so']);
+    stderr.writeln('[diag chmod 0444 → ${chmod.exitCode}]');
+    await statSo('after-chmod');
+
+    // Second warmup — the smoke test for the fix.
     final warmup2 = await Process.run(
       Platform.resolvedExecutable,
       [
@@ -87,7 +92,10 @@ void main() {
         'PEER_WARMUP': '1',
       },
     );
-    stderr.writeln('[diag warmup2 exitCode=${warmup2.exitCode}]');
+    stderr.writeln(
+      '[diag warmup2 exitCode=${warmup2.exitCode} '
+      'stderr=${warmup2.stderr.toString().split('\n').take(3).join(" | ")}]',
+    );
     await statSo('after-warmup2');
   });
 

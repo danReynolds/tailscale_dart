@@ -17,11 +17,11 @@ part 'entrypoint.dart';
 
 /// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
 final class Worker {
-  Worker({required this.publishStatus, required this.publishRuntimeError}) {
+  Worker({required this.publishState, required this.publishRuntimeError}) {
     _start();
   }
 
-  final void Function(TailscaleStatus status) publishStatus;
+  final void Function(NodeState state) publishState;
   final void Function(TailscaleRuntimeError error) publishRuntimeError;
 
   // Requests are processed synchronously on the worker isolate and each
@@ -64,8 +64,8 @@ final class Worker {
         _dispose();
       case _WorkerRuntimeErrorEvent(:final error):
         publishRuntimeError(error);
-      case _WorkerStatusEvent(:final status):
-        publishStatus(status);
+      case _WorkerStateEvent(:final state):
+        publishState(state);
       case _WorkerResponse():
         _pendingRequests.removeFirst().complete(message);
     }
@@ -133,9 +133,9 @@ final class Worker {
     return response.listenPort;
   }
 
-  Future<TailscaleStatus> status() async {
+  Future<TailscaleStatus> status({required String stateDir}) async {
     final response = await _request<_WorkerStatusResponse>(
-      const _WorkerStatusCommand(),
+      _WorkerStatusCommand(stateDir: stateDir),
     );
     return response.status;
   }
@@ -156,4 +156,5 @@ final class Worker {
       _WorkerLogoutCommand(stateDir: stateDir),
     );
   }
+
 }

@@ -20,10 +20,10 @@ enum TailscaleLogLevel { silent, error, info }
 
 extension on TailscaleLogLevel {
   int get nativeValue => switch (this) {
-        TailscaleLogLevel.silent => 0,
-        TailscaleLogLevel.error => 1,
-        TailscaleLogLevel.info => 2,
-      };
+    TailscaleLogLevel.silent => 0,
+    TailscaleLogLevel.error => 1,
+    TailscaleLogLevel.info => 2,
+  };
 }
 
 /// Singleton embedded Tailscale node for the current Dart process.
@@ -39,12 +39,12 @@ class Tailscale {
   pkg_http.Client? _http;
 
   late final _worker = Worker(
-    publishStatus: _statusController.add,
+    publishState: _stateController.add,
     publishRuntimeError: _errorController.add,
   );
 
-  final StreamController<TailscaleStatus> _statusController =
-      StreamController<TailscaleStatus>.broadcast();
+  final StreamController<NodeState> _stateController =
+      StreamController<NodeState>.broadcast();
   final StreamController<TailscaleRuntimeError> _errorController =
       StreamController<TailscaleRuntimeError>.broadcast();
 
@@ -71,14 +71,13 @@ class Tailscale {
     throw const TailscaleUsageException('Call up() before accessing http.');
   }
 
-  /// Real-time status snapshots pushed from the embedded node.
+  /// Emits the new [NodeState] whenever the node's lifecycle state changes.
   ///
-  /// Each event is a full local-node [TailscaleStatus] snapshot, not a delta
-  /// object. Peer inventory is intentionally excluded; call [peers] when you
-  /// need a peer snapshot.
+  /// Use [status] to fetch the full [TailscaleStatus] snapshot (IPs, health,
+  /// etc.) when needed.
   ///
   /// Errors are reported separately through [onError].
-  Stream<TailscaleStatus> get onStatusChange => _statusController.stream;
+  Stream<NodeState> get onStateChange => _stateController.stream;
 
   /// Background runtime errors pushed from the embedded node.
   ///
@@ -108,15 +107,30 @@ class Tailscale {
 
   /// Brings the embedded Tailscale node up and connects to the control plane.
   ///
-  /// After [up], use [http] to make requests to peers. Subscribe to
-  /// [onStatusChange] to observe the node reaching Running, auth URLs,
-  /// and other state transitions.
+  /// After [up] returns, the engine is running and [http] is available.
+  /// Subscribe to [onStateChange] to observe the node reaching
+  /// [NodeState.running].
+  ///
+  /// **State transitions** (delivered via [onStateChange]):
+  ///
+  /// - First launch with auth key:
+  ///   `noState` → `starting` → `running`
+  /// - Subsequent launches with persisted credentials:
+  ///   `stopped` → `starting` → `running`
+  /// - If credentials have expired:
+  ///   `stopped` → `starting` → `needsLogin`
+  ///
+  /// **No-op** if the node is already running.
   ///
   /// [hostname] controls the node's tailnet-visible hostname / MagicDNS base
   /// label. Leave it unset to let the embedded runtime pick its default.
   ///
-  /// On first use, provide [authKey] to register the node. On subsequent
-  /// launches, the node reconnects using stored credentials.
+  /// [authKey] is required on first use to register the node. On subsequent
+  /// launches, omit it to reconnect using stored credentials. If provided on
+  /// an already-running node, the engine restarts with the new key.
+  ///
+  /// Throws [TailscaleUpException] if no [authKey] is provided and no
+  /// existing session state is found.
   ///
   /// [controlUrl] selects the control plane. Use the default for Tailscale, or
   /// point it at your Headscale deployment.
@@ -127,14 +141,13 @@ class Tailscale {
     String? authKey,
     Uri? controlUrl,
   }) async {
-    final stateDir = _stateDir;
     final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
 
     final (:proxyPort, :proxyAuthToken) = await _worker.start(
       hostname: hostname,
       authKey: authKey ?? '',
       controlUrl: resolvedControlUrl.toString(),
-      stateDir: stateDir,
+      stateDir: _stateDir,
     );
     _http = TailscaleProxyClient(proxyPort, proxyAuthToken);
   }
@@ -152,15 +165,17 @@ class Tailscale {
     return _worker.listen(localPort: localPort, tailnetPort: tailnetPort);
   }
 
-  /// Returns the current Tailscale status.
+  /// Returns the current Tailscale status snapshot.
   ///
-  /// Includes backend state, local IPs, health, and tailnet info.
+  /// Includes the node's [NodeState], assigned IPs, health warnings, and
+  /// tailnet metadata. Peer inventory is excluded — call [peers] separately.
   ///
-  /// Peer inventory is intentionally excluded so status polling and
-  /// [onStatusChange] stay lightweight. Call [peers] when you need the current
-  /// peer snapshot.
+  /// Before [up] is called, the returned [TailscaleStatus.state] reflects
+  /// whether persisted credentials exist:
+  /// - [NodeState.stopped] — credentials found, ready to reconnect
+  /// - [NodeState.noState] — no credentials, an auth key is required
   Future<TailscaleStatus> status() async {
-    return _worker.status();
+    return _worker.status(stateDir: _stateDir);
   }
 
   /// Returns the current peer snapshot for the tailnet.
@@ -171,10 +186,10 @@ class Tailscale {
     return _worker.peers();
   }
 
-  /// Brings the embedded node down while preserving persisted state.
+  /// Brings the embedded node down while preserving persisted credentials.
   ///
-  /// Preserves state in the configured state directory, so the next
-  /// [up] call can reconnect without a fresh auth key.
+  /// After [down], [status] returns [NodeState.stopped] and the next
+  /// [up] call can reconnect without an auth key.
   ///
   /// No-op if not running.
   Future<void> down() async {
@@ -182,9 +197,10 @@ class Tailscale {
     await _worker.down();
   }
 
-  /// Logs out and clears persisted state for the embedded node.
+  /// Logs out and clears persisted credentials for the embedded node.
   ///
-  /// The next [up] call will require fresh authentication.
+  /// After [logout], [status] returns [NodeState.noState] and the next
+  /// [up] call will require a fresh auth key.
   Future<void> logout() async {
     _reset();
     await _worker.logout(_stateDir);

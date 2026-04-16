@@ -45,25 +45,25 @@ class TailscaleOperationException extends TailscaleException {
 /// Thrown when `up()` fails before the node reaches Running.
 class TailscaleUpException extends TailscaleOperationException {
   const TailscaleUpException(String message, {Object? cause})
-    : super('up', message, cause: cause);
+      : super('up', message, cause: cause);
 }
 
 /// Thrown when `listen()` fails to expose a local HTTP server.
 final class TailscaleListenException extends TailscaleOperationException {
   const TailscaleListenException(String message, {Object? cause})
-    : super('listen', message, cause: cause);
+      : super('listen', message, cause: cause);
 }
 
 /// Thrown when `status()` fails to decode or fetch native status.
 final class TailscaleStatusException extends TailscaleOperationException {
   const TailscaleStatusException(String message, {Object? cause})
-    : super('status', message, cause: cause);
+      : super('status', message, cause: cause);
 }
 
 /// Thrown when `logout()` fails to clear persisted state.
 final class TailscaleLogoutException extends TailscaleOperationException {
   const TailscaleLogoutException(String message, {Object? cause})
-    : super('logout', message, cause: cause);
+      : super('logout', message, cause: cause);
 }
 
 /// High-level category for asynchronous runtime errors pushed from Go.

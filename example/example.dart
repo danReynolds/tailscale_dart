@@ -8,8 +8,8 @@ void main() async {
   );
 
   final tsnet = Tailscale.instance;
-  tsnet.onStatusChange.listen((status) {
-    print('Node state: ${status.nodeStatus}');
+  tsnet.onStateChange.listen((state) {
+    print('Node state: $state');
   });
   tsnet.onError.listen((error) {
     print('Tailscale runtime error [${error.code.name}]: ${error.message}');

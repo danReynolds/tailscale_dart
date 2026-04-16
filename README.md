@@ -13,17 +13,17 @@ Tailscale.init(stateDir: '/path/to/state');
 
 final tailscale = Tailscale.instance;
 
-final status = await tailscale.up(authKey: 'tskey-auth-...');
+await tailscale.up(authKey: 'tskey-auth-...');
 
 // Discover peers
 final peers = await tailscale.peers(); // List<PeerStatus>
 final peer = peers.firstWhere((peer) => peer.online);
 
 // Make requests — standard http.Client, routed through the tunnel
-await tailscale.httpClient.get(Uri.parse('http://${peer.ipv4}/api/data'));
+await tailscale.http.get(Uri.parse('http://${peer.ipv4}/api/data'));
 
 // Expose a local HTTP server to receive traffic from the tailnet
-await tailscale.listen(localPort: 8080);
+await tailscale.listen(8080);
 ```
 
 ### Install
@@ -59,11 +59,11 @@ Tailscale.init(
 );
 
 final tailscale = Tailscale.instance;
-tailscale.onStatusChange.listen((s) => print('Node: ${s.nodeStatus}'));
+tailscale.onStateChange.listen((state) => print('Node: $state'));
 tailscale.onError.listen((e) => print('Error: ${e.message}'));
 
 // 2. Bring the node up (first launch needs an auth key)
-final status = await tailscale.up(authKey: 'tskey-auth-...');
+await tailscale.up(authKey: 'tskey-auth-...');
 
 //    Subsequent launches reconnect from stored state
 await tailscale.up();
@@ -77,7 +77,7 @@ final response = await tailscale.http.get(
 );
 
 // 4. Accept incoming HTTP requests from peers
-await tailscale.listen(localPort: 8080); // tailnet:80 -> localhost:8080
+await tailscale.listen(8080); // tailnet:80 -> localhost:8080
 
 // 5. Disconnect (keeps identity)
 await tailscale.down();
@@ -102,25 +102,24 @@ await tailscale.logout();
 |--------|------|-------------|
 | `init({stateDir, logLevel})` | `static void` | Configure once at startup. Stores state in `stateDir/tailscale/`. |
 | `instance` | `static Tailscale` | Singleton accessor |
-| `up({hostname, authKey, controlUrl, timeout})` | `Future<TailscaleStatus>` | Connect to the tailnet. Returns status when Running. |
-| `listen({localPort, tailnetPort})` | `Future<int>` | Expose a local HTTP server to peers |
-| `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health) |
+| `up({hostname, authKey, controlUrl})` | `Future<void>` | Start the node. Subscribe to `onStateChange` to observe when it reaches Running. |
+| `listen(localPort, {tailnetPort})` | `Future<int>` | Expose a local HTTP server to peers |
+| `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health). Before `up()`, returns `stopped` or `noState` based on whether persisted credentials exist. |
 | `peers()` | `Future<List<PeerStatus>>` | Current peer snapshot |
-| `onStatusChange` | `Stream<TailscaleStatus>` | Pushed status snapshots on state changes |
+| `onStateChange` | `Stream<NodeState>` | Pushed lifecycle state changes |
 | `onError` | `Stream<TailscaleRuntimeError>` | Pushed asynchronous runtime errors |
 | `down()` | `Future<void>` | Disconnect (preserves state for reconnection) |
 | `logout()` | `Future<void>` | Disconnect and clear persisted state |
 | `http` | [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) | HTTP client routed through the WireGuard tunnel |
-| `isRunning` | `bool` | Whether the node is connected |
 
 <details>
 <summary><strong>TailscaleStatus</strong></summary>
 
-A snapshot of the local node's current state. Returned by `up()`/`status()` and pushed to `onStatusChange`. Peer inventory is separate — call `peers()` when you need it.
+A snapshot of the local node's current state. Returned by `status()`. Peer inventory is separate — call `peers()` when you need it.
 
 | Member | Type | Description |
 |--------|------|-------------|
-| `nodeStatus` | `NodeStatus` | Connection lifecycle state |
+| `state` | `NodeState` | Connection lifecycle state |
 | `authUrl` | `Uri?` | Login URL when authentication is required |
 | `tailscaleIPs` | `List<String>` | Assigned Tailscale IPs |
 | `ipv4` | `String?` | IPv4 address |
@@ -131,18 +130,18 @@ A snapshot of the local node's current state. Returned by `up()`/`status()` and 
 </details>
 
 <details>
-<summary><strong>NodeStatus</strong></summary>
+<summary><strong>NodeState</strong></summary>
 
 The node's position in the connection lifecycle. Matches Go's [`ipn.State`](https://pkg.go.dev/tailscale.com/ipn#State).
 
 | Value | Description |
 |-------|-------------|
-| `noState` | Engine created, hasn't started connecting |
-| `needsLogin` | Needs authentication |
+| `noState` | No persisted credentials, never authenticated |
+| `needsLogin` | Needs authentication (credentials expired or first use) |
 | `needsMachineAuth` | Authenticated, waiting for admin approval |
 | `starting` | Connecting to the tailnet |
-| `running` | Connected and ready |
-| `stopped` | Shut down |
+| `running` | Connected and ready for traffic |
+| `stopped` | Engine not running, but persisted credentials exist |
 
 </details>
 
@@ -168,7 +167,7 @@ A peer on the tailnet. Matches Go's [`ipnstate.PeerStatus`](https://pkg.go.dev/t
 <details>
 <summary><strong>TailscaleRuntimeError &amp; TailscaleLogLevel</strong></summary>
 
-**TailscaleRuntimeError** — typed background error pushed through `runtimeErrors`.
+**TailscaleRuntimeError** — typed background error pushed through `onError`.
 
 | Member | Type | Description |
 |--------|------|-------------|

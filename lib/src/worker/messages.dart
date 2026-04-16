@@ -49,7 +49,10 @@ final class _WorkerListenCommand extends _WorkerCommand {
 }
 
 final class _WorkerStatusCommand extends _WorkerCommand {
-  const _WorkerStatusCommand() : super(_WorkerOperation.status);
+  const _WorkerStatusCommand({required this.stateDir})
+      : super(_WorkerOperation.status);
+
+  final String stateDir;
 }
 
 final class _WorkerPeersCommand extends _WorkerCommand {
@@ -87,10 +90,10 @@ sealed class _WorkerEvent extends _WorkerMainMessage {
   const _WorkerEvent();
 }
 
-final class _WorkerStatusEvent extends _WorkerEvent {
-  const _WorkerStatusEvent({required this.status});
+final class _WorkerStateEvent extends _WorkerEvent {
+  const _WorkerStateEvent({required this.state});
 
-  final TailscaleStatus status;
+  final NodeState state;
 }
 
 final class _WorkerRuntimeErrorEvent extends _WorkerEvent {

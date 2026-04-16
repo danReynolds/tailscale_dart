@@ -71,13 +71,26 @@ void main() {
     tsnet = Tailscale.instance;
     await statSo('after-Tailscale.init');
 
-    // Workaround attempt: write-protect the .so so the framework's
-    // re-copy on subprocess `dart run` fails with EACCES instead of
-    // truncating and crashing this process with SIGBUS.
-    final chmod =
-        await Process.run('chmod', ['0444', '.dart_tool/lib/libtailscale.so']);
-    stderr.writeln('[diag chmod 0444 → ${chmod.exitCode}]');
-    await statSo('after-chmod');
+    // Atomic-replace workaround for a framework bug.
+    //
+    // The Dart hooks framework copies the cached .so into
+    // .dart_tool/lib/libtailscale.so on every `dart run` — in place,
+    // truncating and rewriting the existing inode. On Linux that
+    // crashes any process holding the file mmap'd (us) with SIGBUS.
+    //
+    // Mitigation: copy our currently-loaded .so to a sibling temp file
+    // and rename(2) it over the original. After this, the directory
+    // entry points to a NEW inode; the kernel keeps the OLD inode
+    // alive because we still have it open, but no future write to the
+    // path can touch our mmap. Subsequent framework re-copies hit the
+    // new inode and don't disturb us.
+    final libPath = '.dart_tool/lib/libtailscale.so';
+    final detachedPath = '$libPath.detached';
+    final cp = await Process.run('cp', ['-f', libPath, detachedPath]);
+    stderr.writeln('[diag cp → ${cp.exitCode} ${cp.stderr}]');
+    final mv = await Process.run('mv', [detachedPath, libPath]);
+    stderr.writeln('[diag mv → ${mv.exitCode} ${mv.stderr}]');
+    await statSo('after-detach');
 
     // Second warmup — the smoke test for the fix.
     final warmup2 = await Process.run(

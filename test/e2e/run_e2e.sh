@@ -48,7 +48,7 @@ docker compose -f "$COMPOSE_FILE" exec headscale \
     headscale users create dune-test 2>/dev/null || true
 
 AUTH_KEY=$(docker compose -f "$COMPOSE_FILE" exec headscale \
-    headscale preauthkeys create --user dune-test --ephemeral --expiration 5m \
+    headscale preauthkeys create --user dune-test --reusable --ephemeral --expiration 10m \
     2>/dev/null | tail -1)
 
 if [ -z "$AUTH_KEY" ]; then
@@ -63,6 +63,6 @@ cd "$PKG_DIR"
 
 HEADSCALE_URL="http://localhost:$HEADSCALE_PORT" \
 HEADSCALE_AUTH_KEY="$AUTH_KEY" \
-    "${DART:-dart}" test test/e2e/e2e_test.dart --enable-experiment=native-assets --timeout=120s
+    "${DART:-dart}" test test/e2e/e2e_test.dart --enable-experiment=native-assets --timeout=240s
 
 echo "=== E2E tests passed ==="

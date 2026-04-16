@@ -8,6 +8,8 @@
 @TestOn('mac-os || linux')
 library;
 
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
@@ -71,6 +73,96 @@ void main() {
 
   test('http client is available', () async {
     expect(tsnet.http, isA<http.Client>());
+  });
+
+  group('two-node connectivity', () {
+    late Process peer;
+    late String peerStateDir;
+    late String peerIpv4;
+    final peerResponseBody = 'hello from peer ${DateTime.now().microsecondsSinceEpoch}';
+
+    setUpAll(() async {
+      peerStateDir =
+          Directory.systemTemp.createTempSync('tailscale_e2e_peer_').path;
+
+      peer = await Process.start(
+        Platform.resolvedExecutable,
+        [
+          'run',
+          '--enable-experiment=native-assets',
+          'test/e2e/peer_main.dart',
+        ],
+        environment: {
+          ...Platform.environment,
+          'STATE_DIR': peerStateDir,
+          'CONTROL_URL': controlUrl,
+          'AUTH_KEY': authKey,
+          'HOSTNAME': 'dune-e2e-peer',
+          'RESPONSE_BODY': peerResponseBody,
+        },
+      );
+
+      // Forward peer stderr so failures are debuggable.
+      unawaited(peer.stderr
+          .transform(utf8.decoder)
+          .forEach((chunk) => stderr.write('[peer stderr] $chunk')));
+
+      final ready = Completer<String>();
+      final readyRegex = RegExp(r'READY\s+(\S+)');
+      unawaited(peer.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .forEach((line) {
+        stdout.writeln('[peer] $line');
+        final match = readyRegex.firstMatch(line);
+        if (match != null && !ready.isCompleted) {
+          ready.complete(match.group(1)!);
+        }
+      }));
+
+      peerIpv4 = await ready.future.timeout(
+        const Duration(seconds: 90),
+        onTimeout: () {
+          peer.kill(ProcessSignal.sigterm);
+          throw StateError('peer did not become ready within 90s');
+        },
+      );
+    });
+
+    tearDownAll(() async {
+      try {
+        await peer.stdin.close();
+        await peer.exitCode.timeout(const Duration(seconds: 15));
+      } catch (_) {
+        peer.kill(ProcessSignal.sigterm);
+      }
+      try {
+        Directory(peerStateDir).deleteSync(recursive: true);
+      } catch (_) {}
+    });
+
+    test('peer appears in peers()', () async {
+      PeerStatus? match;
+      for (var i = 0; i < 30; i++) {
+        final peers = await tsnet.peers();
+        try {
+          match = peers.firstWhere((p) => p.ipv4 == peerIpv4);
+          break;
+        } on StateError {
+          await Future<void>.delayed(const Duration(seconds: 1));
+        }
+      }
+      expect(match, isNotNull, reason: 'peer $peerIpv4 never appeared in peers()');
+      expect(match!.online, isTrue);
+    });
+
+    test('http.get reaches peer via tailnet', () async {
+      final resp = await tsnet.http
+          .get(Uri.parse('http://$peerIpv4/hello'))
+          .timeout(const Duration(seconds: 30));
+      expect(resp.statusCode, 200);
+      expect(resp.body, peerResponseBody);
+    });
   });
 
   test('down shuts down cleanly', () async {

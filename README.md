@@ -30,8 +30,7 @@ await tailscale.listen(8080);
 
 ```yaml
 dependencies:
-  tailscale:
-    git: https://github.com/danReynolds/tailscale_dart
+  tailscale: ^0.1.0
 ```
 
 The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](hook/build.dart) that compiles Go for the target platform automatically. Subsequent builds are cached and only recompile when Go source changes.

@@ -1,5 +1,3 @@
-library tailscale_dart.worker;
-
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';

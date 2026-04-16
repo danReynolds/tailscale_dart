@@ -21,9 +21,10 @@
 ///   - Headscale running on localhost:8080 with a valid auth key
 ///
 /// Usage:
-///   HEADSCALE_URL=http://localhost:8080 \
-///   HEADSCALE_AUTH_KEY=<key> \
+///   HEADSCALE_URL=http://localhost:8080 `\`
+///   HEADSCALE_AUTH_KEY=`<key>` `\`
 ///     dart run benchmark/main_isolate_jank.dart
+library;
 
 import 'dart:async';
 import 'dart:io';

@@ -1,5 +1,3 @@
-library tailscale_dart;
-
 import 'dart:async';
 import 'package:http/http.dart' as pkg_http;
 import 'package:path/path.dart' as p;
@@ -43,8 +41,12 @@ class Tailscale {
     publishRuntimeError: _errorController.add,
   );
 
+  // Singleton broadcast controllers — live for the process lifetime alongside
+  // the embedded Tailscale engine; intentionally never closed.
+  // ignore: close_sinks
   final StreamController<NodeState> _stateController =
       StreamController<NodeState>.broadcast();
+  // ignore: close_sinks
   final StreamController<TailscaleRuntimeError> _errorController =
       StreamController<TailscaleRuntimeError>.broadcast();
 

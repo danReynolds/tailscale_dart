@@ -83,10 +83,6 @@ void main(List<String> args) async {
       }
     }
 
-    // Find Go binary and verify version
-    final goBin = await _findGo();
-    await _checkGoVersion(goBin);
-
     // iOS doesn't support c-shared. Build c-archive then convert to dylib
     // using clang. All other platforms use c-shared directly.
     final buildMode = isIOS ? 'c-archive' : 'c-shared';
@@ -94,36 +90,60 @@ void main(List<String> args) async {
         ? outDir.resolve('libtailscale.a').toFilePath()
         : libPath;
 
-    // Run go build
-    final goArgs = [
-      'build',
-      '-buildmode=$buildMode',
-      if (buildTags.isNotEmpty) '-tags=${buildTags.join(",")}',
-      '-o',
-      goOutput,
-      mainGo,
-    ];
+    // Idempotency: if the output library is already newer than every Go
+    // source file (and, on iOS, the intermediate archive exists), skip
+    // running `go build` entirely. This matters beyond pure speed: on
+    // Linux, rewriting an mmap'd .so under a process that has it loaded
+    // crashes that process with SIGBUS. The Dart hooks framework can
+    // re-invoke this hook from a subprocess while the parent test process
+    // still has the .so mmap'd; short-circuiting here keeps the file
+    // bit-for-bit stable across subprocess invocations.
+    final goDir = p.join(packageRoot, 'go');
+    final goSources = Directory(goDir)
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.go'))
+        .toList(growable: false);
 
-    final result = await Process.run(
-      goBin,
-      goArgs,
-      environment: env,
-      workingDirectory: p.join(packageRoot, 'go'),
-    );
+    if (_outputIsUpToDate(libPath, goSources) &&
+        (!isIOS || File(goOutput).existsSync())) {
+      // Skip the build; just register the asset and dependencies below.
+    } else {
+      // Find Go binary and verify version
+      final goBin = await _findGo();
+      await _checkGoVersion(goBin);
 
-    if (result.exitCode != 0) {
-      throw Exception(
-        'Go build failed (exit ${result.exitCode}):\n'
-        'Command: go ${goArgs.join(" ")}\n'
-        'GOOS=$goos GOARCH=$goarch\n'
-        'stderr: ${result.stderr}\n'
-        'stdout: ${result.stdout}',
+      // Run go build
+      final goArgs = [
+        'build',
+        '-buildmode=$buildMode',
+        if (buildTags.isNotEmpty) '-tags=${buildTags.join(",")}',
+        '-o',
+        goOutput,
+        mainGo,
+      ];
+
+      final result = await Process.run(
+        goBin,
+        goArgs,
+        environment: env,
+        workingDirectory: goDir,
       );
-    }
 
-    // On iOS, convert the static archive to a dynamic library.
-    if (isIOS) {
-      await _archiveToSharedLib(env, goOutput, libPath);
+      if (result.exitCode != 0) {
+        throw Exception(
+          'Go build failed (exit ${result.exitCode}):\n'
+          'Command: go ${goArgs.join(" ")}\n'
+          'GOOS=$goos GOARCH=$goarch\n'
+          'stderr: ${result.stderr}\n'
+          'stdout: ${result.stdout}',
+        );
+      }
+
+      // On iOS, convert the static archive to a dynamic library.
+      if (isIOS) {
+        await _archiveToSharedLib(env, goOutput, libPath);
+      }
     }
 
     final linkMode = DynamicLoadingBundled();
@@ -138,13 +158,24 @@ void main(List<String> args) async {
     );
 
     // Register Go source files as dependencies so the hook re-runs on changes.
-    final goDir = p.join(packageRoot, 'go');
-    for (final entity in Directory(goDir).listSync(recursive: true)) {
-      if (entity is File && entity.path.endsWith('.go')) {
-        output.dependencies.add(entity.uri);
-      }
+    for (final source in goSources) {
+      output.dependencies.add(source.uri);
     }
   });
+}
+
+/// Returns true if [outputPath] exists and was modified at or after every
+/// source in [sources]. Used to skip an otherwise-unnecessary `go build`
+/// invocation that would rewrite the output and crash any process that
+/// currently has it mmap'd (Linux ELF dlopen + mutate = SIGBUS).
+bool _outputIsUpToDate(String outputPath, List<File> sources) {
+  final out = File(outputPath);
+  if (!out.existsSync()) return false;
+  final outMtime = out.statSync().modified;
+  for (final source in sources) {
+    if (source.statSync().modified.isAfter(outMtime)) return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------

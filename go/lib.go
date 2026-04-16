@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -340,7 +341,12 @@ func isAuthorizedOutgoingProxyRequest(r *http.Request, expectedToken string) boo
 	if expectedToken == "" {
 		return false
 	}
-	return r.Header.Get(proxyAuthHeader) == expectedToken
+	// Constant-time comparison to avoid leaking the token byte-by-byte via
+	// response-time measurement from a co-resident local process.
+	return subtle.ConstantTimeCompare(
+		[]byte(r.Header.Get(proxyAuthHeader)),
+		[]byte(expectedToken),
+	) == 1
 }
 
 func filteredProxyRequestHeaders(src http.Header) http.Header {

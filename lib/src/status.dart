@@ -2,6 +2,7 @@
 ///
 /// Parsed from the JSON returned by Go's `ipnstate.Status`. Only includes
 /// fields useful at the application level.
+library;
 
 /// The node's position in the connection lifecycle.
 ///
@@ -91,6 +92,12 @@ class TailscaleStatus {
   /// This node's first IPv4 address, or null.
   String? get ipv4 => tailscaleIPs.firstIpv4;
 
+  /// Parses a status snapshot from the JSON shape produced by Go's
+  /// `ipnstate.Status`.
+  ///
+  /// Missing or malformed fields fall back to safe defaults (empty lists,
+  /// [NodeState.noState]) rather than throwing — callers should treat the
+  /// result as a best-effort view of the engine's reported state.
   factory TailscaleStatus.fromJson(Map<String, dynamic> json) {
     final self = json['Self'] as Map<String, dynamic>?;
 
@@ -188,6 +195,11 @@ class PeerStatus {
         .toList(growable: false);
   }
 
+  /// Parses a single peer from the JSON shape produced by Go's
+  /// `ipnstate.PeerStatus`.
+  ///
+  /// Missing or malformed fields fall back to safe defaults (empty strings,
+  /// `false`, `0`) rather than throwing.
   factory PeerStatus.fromJson(Map<String, dynamic> json) {
     return PeerStatus(
       publicKey: json['PublicKey'] as String? ?? '',

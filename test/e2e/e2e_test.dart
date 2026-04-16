@@ -71,6 +71,12 @@ void main() {
     // kernel keeps the OLD inode (which we have mmap'd) alive until we
     // exit, and any future framework copy hits the new inode without
     // touching our mapping.
+    //
+    // TODO: remove this workaround once we're on a Dart stable that
+    // includes the upstream fix. Tracked in dart-lang/native#2921; fix
+    // merged on `main` 2026-01-07 as dart-lang/sdk@3e020921 ("[dartdev]
+    // Delete and create dylibs instead of truncate") but is not in Dart
+    // 3.11.5. Expected to ship with Dart 3.12+.
     if (Platform.isLinux) {
       const libPath = '.dart_tool/lib/libtailscale.so';
       final detachedPath = '$libPath.detached';

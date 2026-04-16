@@ -84,13 +84,16 @@ jobs:
         id: headscale
         run: |
           docker compose -f test/e2e/docker-compose.yml exec -T headscale headscale users create dune-test || true
-          AUTH_KEY=$(docker compose -f test/e2e/docker-compose.yml exec -T headscale headscale preauthkeys create --user dune-test --ephemeral --expiration 5m | tail -1)
+          # --reusable: one key covers both the test process and the peer subprocess.
+          # Not --ephemeral: the persistence test shuts the peer down and reconnects
+          # from persisted creds; ephemeral nodes get GC'd too fast for that.
+          AUTH_KEY=$(docker compose -f test/e2e/docker-compose.yml exec -T headscale headscale preauthkeys create --user dune-test --reusable --expiration 10m | tail -1)
           echo "auth_key=$AUTH_KEY" >> "$GITHUB_OUTPUT"
       - name: Run E2E tests
         env:
           HEADSCALE_URL: http://localhost:8080
           HEADSCALE_AUTH_KEY: ${{ steps.headscale.outputs.auth_key }}
-        run: dart test test/e2e/e2e_test.dart --timeout=120s
+        run: dart test test/e2e/e2e_test.dart --timeout=240s
       - name: Teardown
         if: always()
         run: docker compose -f test/e2e/docker-compose.yml down -v

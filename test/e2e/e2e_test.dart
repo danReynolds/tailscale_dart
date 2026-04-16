@@ -76,66 +76,25 @@ void main() {
   });
 
   group('two-node connectivity', () {
-    late Process peer;
+    late _PeerProcess peer;
     late String peerStateDir;
-    late String peerIpv4;
-    final peerResponseBody = 'hello from peer ${DateTime.now().microsecondsSinceEpoch}';
+    final peerResponseBody =
+        'hello from peer ${DateTime.now().microsecondsSinceEpoch}';
 
     setUpAll(() async {
       peerStateDir =
           Directory.systemTemp.createTempSync('tailscale_e2e_peer_').path;
-
-      peer = await Process.start(
-        Platform.resolvedExecutable,
-        [
-          'run',
-          '--enable-experiment=native-assets',
-          'test/e2e/peer_main.dart',
-        ],
-        environment: {
-          ...Platform.environment,
-          'STATE_DIR': peerStateDir,
-          'CONTROL_URL': controlUrl,
-          'AUTH_KEY': authKey,
-          'HOSTNAME': 'dune-e2e-peer',
-          'RESPONSE_BODY': peerResponseBody,
-        },
-      );
-
-      // Forward peer stderr so failures are debuggable.
-      unawaited(peer.stderr
-          .transform(utf8.decoder)
-          .forEach((chunk) => stderr.write('[peer stderr] $chunk')));
-
-      final ready = Completer<String>();
-      final readyRegex = RegExp(r'READY\s+(\S+)');
-      unawaited(peer.stdout
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .forEach((line) {
-        stdout.writeln('[peer] $line');
-        final match = readyRegex.firstMatch(line);
-        if (match != null && !ready.isCompleted) {
-          ready.complete(match.group(1)!);
-        }
-      }));
-
-      peerIpv4 = await ready.future.timeout(
-        const Duration(seconds: 90),
-        onTimeout: () {
-          peer.kill(ProcessSignal.sigterm);
-          throw StateError('peer did not become ready within 90s');
-        },
+      peer = await _PeerProcess.spawn(
+        stateDir: peerStateDir,
+        controlUrl: controlUrl,
+        authKey: authKey,
+        hostname: 'dune-e2e-peer',
+        responseBody: peerResponseBody,
       );
     });
 
     tearDownAll(() async {
-      try {
-        await peer.stdin.close();
-        await peer.exitCode.timeout(const Duration(seconds: 15));
-      } catch (_) {
-        peer.kill(ProcessSignal.sigterm);
-      }
+      await peer.shutdown();
       try {
         Directory(peerStateDir).deleteSync(recursive: true);
       } catch (_) {}
@@ -146,22 +105,79 @@ void main() {
       for (var i = 0; i < 30; i++) {
         final peers = await tsnet.peers();
         try {
-          match = peers.firstWhere((p) => p.ipv4 == peerIpv4);
+          match = peers.firstWhere((p) => p.ipv4 == peer.ipv4);
           break;
         } on StateError {
           await Future<void>.delayed(const Duration(seconds: 1));
         }
       }
-      expect(match, isNotNull, reason: 'peer $peerIpv4 never appeared in peers()');
+      expect(match, isNotNull,
+          reason: 'peer ${peer.ipv4} never appeared in peers()');
       expect(match!.online, isTrue);
     });
 
     test('http.get reaches peer via tailnet', () async {
       final resp = await tsnet.http
-          .get(Uri.parse('http://$peerIpv4/hello'))
+          .get(Uri.parse('http://${peer.ipv4}/hello'))
           .timeout(const Duration(seconds: 30));
       expect(resp.statusCode, 200);
       expect(resp.body, peerResponseBody);
+    });
+
+    test('http.post sends body through the tailnet', () async {
+      final resp = await tsnet.http
+          .post(
+            Uri.parse('http://${peer.ipv4}/echo'),
+            headers: {'content-type': 'text/plain'},
+            body: 'ping-from-node-a',
+          )
+          .timeout(const Duration(seconds: 30));
+      expect(resp.statusCode, 200);
+      expect(resp.body, 'echo: ping-from-node-a');
+    });
+  });
+
+  group('peer reconnects with persisted credentials', () {
+    late String persistStateDir;
+    String? firstIpv4;
+
+    setUpAll(() {
+      persistStateDir =
+          Directory.systemTemp.createTempSync('tailscale_e2e_persist_').path;
+    });
+
+    tearDownAll(() {
+      try {
+        Directory(persistStateDir).deleteSync(recursive: true);
+      } catch (_) {}
+    });
+
+    test('first launch registers and persists credentials', () async {
+      final peer = await _PeerProcess.spawn(
+        stateDir: persistStateDir,
+        controlUrl: controlUrl,
+        authKey: authKey,
+        hostname: 'dune-e2e-persist',
+      );
+      firstIpv4 = peer.ipv4;
+      await peer.shutdown();
+      expect(
+        Directory(p.join(persistStateDir, 'tailscale')).existsSync(),
+        isTrue,
+        reason: 'persisted state should remain on disk after shutdown',
+      );
+    });
+
+    test('second launch reconnects without an authKey', () async {
+      final peer = await _PeerProcess.spawn(
+        stateDir: persistStateDir,
+        controlUrl: controlUrl,
+        // Deliberately no authKey — must come up from persisted state.
+        hostname: 'dune-e2e-persist',
+      );
+      addTearDown(peer.shutdown);
+      expect(peer.ipv4, firstIpv4,
+          reason: 'reconnect should keep the same tailnet IPv4');
     });
   });
 
@@ -181,4 +197,75 @@ void main() {
     expect(Directory(stateDir).existsSync(), isTrue);
     expect(Directory(p.join(stateDir, 'tailscale')).existsSync(), isFalse);
   });
+}
+
+/// Handle to a `peer_main.dart` subprocess that has reached Running and
+/// announced its tailnet IPv4.
+class _PeerProcess {
+  _PeerProcess._(this._process, this.ipv4);
+
+  final Process _process;
+  final String ipv4;
+
+  static Future<_PeerProcess> spawn({
+    required String stateDir,
+    required String controlUrl,
+    required String hostname,
+    String? authKey,
+    String? responseBody,
+  }) async {
+    final process = await Process.start(
+      Platform.resolvedExecutable,
+      [
+        'run',
+        '--enable-experiment=native-assets',
+        'test/e2e/peer_main.dart',
+      ],
+      environment: {
+        ...Platform.environment,
+        'STATE_DIR': stateDir,
+        'CONTROL_URL': controlUrl,
+        'HOSTNAME': hostname,
+        if (authKey != null) 'AUTH_KEY': authKey,
+        if (responseBody != null) 'RESPONSE_BODY': responseBody,
+      },
+    );
+
+    unawaited(process.stderr
+        .transform(utf8.decoder)
+        .forEach((chunk) => stderr.write('[peer stderr] $chunk')));
+
+    final ready = Completer<String>();
+    final readyRegex = RegExp(r'READY\s+(\S+)');
+    unawaited(process.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .forEach((line) {
+      stdout.writeln('[peer $hostname] $line');
+      final match = readyRegex.firstMatch(line);
+      if (match != null && !ready.isCompleted) {
+        ready.complete(match.group(1)!);
+      }
+    }));
+
+    final ipv4 = await ready.future.timeout(
+      const Duration(seconds: 90),
+      onTimeout: () {
+        process.kill(ProcessSignal.sigterm);
+        throw StateError('peer "$hostname" did not become ready within 90s');
+      },
+    );
+    return _PeerProcess._(process, ipv4);
+  }
+
+  /// Gracefully shut the peer down by closing its stdin; falls back to
+  /// SIGTERM if it doesn't exit within 15 seconds.
+  Future<void> shutdown() async {
+    try {
+      await _process.stdin.close();
+      await _process.exitCode.timeout(const Duration(seconds: 15));
+    } catch (_) {
+      _process.kill(ProcessSignal.sigterm);
+    }
+  }
 }

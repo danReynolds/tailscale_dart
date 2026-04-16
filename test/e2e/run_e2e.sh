@@ -48,7 +48,7 @@ docker compose -f "$COMPOSE_FILE" exec headscale \
     headscale users create dune-test 2>/dev/null || true
 
 AUTH_KEY=$(docker compose -f "$COMPOSE_FILE" exec headscale \
-    headscale preauthkeys create --user dune-test --reusable --ephemeral --expiration 10m \
+    headscale preauthkeys create --user dune-test --reusable --expiration 10m \
     2>/dev/null | tail -1)
 
 if [ -z "$AUTH_KEY" ]; then

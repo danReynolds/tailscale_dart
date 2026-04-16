@@ -31,31 +31,28 @@ void main() {
   late String stateDir;
 
   setUpAll(() async {
-    // On macOS, warm up the native build hook BEFORE this process loads
-    // the .so via Tailscale.init. Subprocess `dart run` invocations later
-    // re-invoke the build hook; running it once up front means subsequent
-    // hits are no-ops (idempotent in hook/build.dart) and don't rewrite
-    // the .so the parent has mmap'd. The two-node groups are skipped on
-    // Linux entirely, so the warmup is unnecessary there.
-    if (Platform.isMacOS) {
-      final warmup = await Process.run(
-        Platform.resolvedExecutable,
-        [
-          'run',
-          '--enable-experiment=native-assets',
-          'test/e2e/peer_main.dart',
-        ],
-        environment: {
-          ...Platform.environment,
-          'PEER_WARMUP': '1',
-        },
+    // Warm up the native build hook BEFORE this process loads the .so via
+    // Tailscale.init. Subprocess `dart run` invocations later re-invoke
+    // the build hook; running it once up front means subsequent hits are
+    // no-ops (idempotent in hook/build.dart) and don't rewrite the .so
+    // the parent has mmap'd.
+    final warmup = await Process.run(
+      Platform.resolvedExecutable,
+      [
+        'run',
+        '--enable-experiment=native-assets',
+        'test/e2e/peer_main.dart',
+      ],
+      environment: {
+        ...Platform.environment,
+        'PEER_WARMUP': '1',
+      },
+    );
+    if (warmup.exitCode != 0) {
+      throw StateError(
+        'Peer warmup failed (exit ${warmup.exitCode})\n'
+        'stdout: ${warmup.stdout}\nstderr: ${warmup.stderr}',
       );
-      if (warmup.exitCode != 0) {
-        throw StateError(
-          'Peer warmup failed (exit ${warmup.exitCode})\n'
-          'stdout: ${warmup.stdout}\nstderr: ${warmup.stderr}',
-        );
-      }
     }
 
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
@@ -107,12 +104,9 @@ void main() {
   // native build hook from the subprocess, which races the parent process's
   // mmap of the .so and crashes the parent with SIGBUS. The library itself
   // works fine on Linux — the issue is in the test harness's subprocess
-  // pattern. Run these on macOS only until we find a Linux-safe spawn path.
-  // TODO: enable on Linux once the hooks-framework / FFI mmap interaction
-  // is understood.
-  group('two-node connectivity', onPlatform: const {
-    'linux': Skip('Subprocess hook framework races parent mmap on Linux.'),
-  }, () {
+  // pattern. Currently un-skipped while diagnosing; the CI workflow dumps
+  // /tmp/dune_hook.log on failure (DUNE_HOOK_LOG=1 is set in env).
+  group('two-node connectivity', () {
     late _PeerProcess peer;
     late String peerStateDir;
     final peerResponseBody =
@@ -174,9 +168,7 @@ void main() {
     });
   });
 
-  group('peer reconnects with persisted credentials', onPlatform: const {
-    'linux': Skip('Subprocess hook framework races parent mmap on Linux.'),
-  }, () {
+  group('peer reconnects with persisted credentials', () {
     late String persistStateDir;
     String? firstIpv4;
 

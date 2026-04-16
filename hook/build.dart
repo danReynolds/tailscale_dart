@@ -22,11 +22,48 @@
 //   - Android: builds a shared library (c-shared) with NDK toolchain.
 //   - macOS/Linux/Windows: builds a shared library (c-shared) with host toolchain.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
 import 'package:hooks/hooks.dart';
 import 'package:path/path.dart' as p;
+
+// Diagnostic logging — written to a known file when DUNE_HOOK_LOG=1.
+// Used to debug a Linux-only SIGBUS that crashes a parent test process
+// when a subprocess re-invokes this hook.
+const _logEnvVar = 'DUNE_HOOK_LOG';
+final _logFile = File('/tmp/dune_hook.log');
+void _hookLog(String message) {
+  if (Platform.environment[_logEnvVar] != '1') return;
+  final line = '[${DateTime.now().toIso8601String()} pid=$pid] $message\n';
+  try {
+    _logFile.writeAsStringSync(line, mode: FileMode.append, flush: true);
+  } catch (_) {}
+}
+
+String _fileFingerprint(String path) {
+  try {
+    final f = File(path);
+    if (!f.existsSync()) return 'missing';
+    final stat = f.statSync();
+    return 'size=${stat.size} mtime=${stat.modified.toIso8601String()} '
+        'ino=${_inodeOf(path)}';
+  } catch (e) {
+    return 'stat-error: $e';
+  }
+}
+
+String _inodeOf(String path) {
+  if (Platform.isWindows) return '?';
+  try {
+    final r = Process.runSync('stat', ['-c', '%i', path]);
+    if (r.exitCode == 0) return (r.stdout as String).trim();
+    final r2 = Process.runSync('stat', ['-f', '%i', path]);
+    if (r2.exitCode == 0) return (r2.stdout as String).trim();
+  } catch (_) {}
+  return '?';
+}
 
 void main(List<String> args) async {
   await build(args, (input, output) async {
@@ -38,6 +75,10 @@ void main(List<String> args) async {
     final targetArch = input.config.code.targetArchitecture;
     final packageRoot = input.packageRoot.toFilePath();
     final outDir = input.outputDirectory;
+
+    _hookLog('ENTER targetOS=$targetOS arch=$targetArch '
+        'outDir=${outDir.toFilePath()} '
+        'argv=${jsonEncode(args)}');
 
     final goos = _toGOOS(targetOS);
     final goarch = _toGOARCH(targetArch);
@@ -105,10 +146,14 @@ void main(List<String> args) async {
         .where((f) => f.path.endsWith('.go'))
         .toList(growable: false);
 
+    _hookLog('libPath=$libPath fingerprint-before=${_fileFingerprint(libPath)}');
+
     if (_outputIsUpToDate(libPath, goSources) &&
         (!isIOS || File(goOutput).existsSync())) {
+      _hookLog('SKIP (up-to-date)');
       // Skip the build; just register the asset and dependencies below.
     } else {
+      _hookLog('BUILD (running go build)');
       // Find Go binary and verify version
       final goBin = await _findGo();
       await _checkGoVersion(goBin);
@@ -144,6 +189,7 @@ void main(List<String> args) async {
       if (isIOS) {
         await _archiveToSharedLib(env, goOutput, libPath);
       }
+      _hookLog('BUILD done fingerprint-after=${_fileFingerprint(libPath)}');
     }
 
     final linkMode = DynamicLoadingBundled();
@@ -161,6 +207,7 @@ void main(List<String> args) async {
     for (final source in goSources) {
       output.dependencies.add(source.uri);
     }
+    _hookLog('EXIT fingerprint-final=${_fileFingerprint(libPath)}');
   });
 }
 

@@ -31,21 +31,11 @@ void main() {
   late String stateDir;
 
   setUpAll(() async {
-    Future<String> statSo(String label) async {
-      final r = await Process.run(
-        'stat',
-        ['-c', '%i %s %Y', '.dart_tool/lib/libtailscale.so'],
-      );
-      final line = '[diag $label] ${r.stdout.toString().trim()}'
-          ' (rc=${r.exitCode})';
-      stderr.writeln(line);
-      return line;
-    }
-
-    // First warmup — populates the framework cache and copies the .so to
-    // .dart_tool/lib/libtailscale.so.
-    await statSo('before-warmup1');
-    final warmup1 = await Process.run(
+    // Warm up the package's native build hook by invoking peer_main.dart
+    // once with PEER_WARMUP=1 (it exits immediately). This populates the
+    // hook framework's cache and materializes
+    // .dart_tool/lib/libtailscale.so before this process tries to mmap it.
+    final warmup = await Process.run(
       Platform.resolvedExecutable,
       [
         'run',
@@ -57,59 +47,42 @@ void main() {
         'PEER_WARMUP': '1',
       },
     );
-    if (warmup1.exitCode != 0) {
+    if (warmup.exitCode != 0) {
       throw StateError(
-        'Peer warmup failed (exit ${warmup1.exitCode})\n'
-        'stdout: ${warmup1.stdout}\nstderr: ${warmup1.stderr}',
+        'Peer warmup failed (exit ${warmup.exitCode})\n'
+        'stdout: ${warmup.stdout}\nstderr: ${warmup.stderr}',
       );
     }
-    await statSo('after-warmup1');
 
-    // Now load the .so via FFI in this process.
+    // Load the .so via FFI in this process.
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
     Tailscale.init(stateDir: stateDir);
     tsnet = Tailscale.instance;
-    await statSo('after-Tailscale.init');
 
-    // Atomic-replace workaround for a framework bug.
+    // Detach the loaded .so from its directory entry so subsequent
+    // subprocess `dart run` invocations can't crash this process.
     //
-    // The Dart hooks framework copies the cached .so into
-    // .dart_tool/lib/libtailscale.so on every `dart run` — in place,
-    // truncating and rewriting the existing inode. On Linux that
-    // crashes any process holding the file mmap'd (us) with SIGBUS.
-    //
-    // Mitigation: copy our currently-loaded .so to a sibling temp file
-    // and rename(2) it over the original. After this, the directory
-    // entry points to a NEW inode; the kernel keeps the OLD inode
-    // alive because we still have it open, but no future write to the
-    // path can touch our mmap. Subsequent framework re-copies hit the
-    // new inode and don't disturb us.
-    final libPath = '.dart_tool/lib/libtailscale.so';
-    final detachedPath = '$libPath.detached';
-    final cp = await Process.run('cp', ['-f', libPath, detachedPath]);
-    stderr.writeln('[diag cp → ${cp.exitCode} ${cp.stderr}]');
-    final mv = await Process.run('mv', [detachedPath, libPath]);
-    stderr.writeln('[diag mv → ${mv.exitCode} ${mv.stderr}]');
-    await statSo('after-detach');
-
-    // Second warmup — the smoke test for the fix.
-    final warmup2 = await Process.run(
-      Platform.resolvedExecutable,
-      [
-        'run',
-        '--enable-experiment=native-assets',
-        'test/e2e/peer_main.dart',
-      ],
-      environment: {
-        ...Platform.environment,
-        'PEER_WARMUP': '1',
-      },
-    );
-    stderr.writeln(
-      '[diag warmup2 exitCode=${warmup2.exitCode} '
-      'stderr=${warmup2.stderr.toString().split('\n').take(3).join(" | ")}]',
-    );
-    await statSo('after-warmup2');
+    // The Dart hooks framework re-copies the cached
+    // .so → .dart_tool/lib/libtailscale.so on every `dart run`,
+    // truncating and rewriting the existing inode in place. On Linux,
+    // overwriting an mmap'd file kills mappers with SIGBUS. We can't
+    // change the framework, so we rename a freshly-copied sibling over
+    // the original: the directory entry now points to a NEW inode, the
+    // kernel keeps the OLD inode (which we have mmap'd) alive until we
+    // exit, and any future framework copy hits the new inode without
+    // touching our mapping.
+    if (Platform.isLinux) {
+      const libPath = '.dart_tool/lib/libtailscale.so';
+      final detachedPath = '$libPath.detached';
+      final cp = await Process.run('cp', ['-f', libPath, detachedPath]);
+      if (cp.exitCode != 0) {
+        throw StateError('cp failed: ${cp.stderr}');
+      }
+      final mv = await Process.run('mv', [detachedPath, libPath]);
+      if (mv.exitCode != 0) {
+        throw StateError('mv failed: ${mv.stderr}');
+      }
+    }
   });
 
   tearDownAll(() async {

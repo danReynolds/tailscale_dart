@@ -93,22 +93,7 @@ jobs:
         env:
           HEADSCALE_URL: http://localhost:8080
           HEADSCALE_AUTH_KEY: ${{ steps.headscale.outputs.auth_key }}
-          DUNE_HOOK_LOG: '1'
         run: dart test test/e2e/e2e_test.dart --timeout=360s
-      - name: Dump build-hook diagnostic log
-        if: always()
-        run: |
-          echo "=== /tmp/dune_hook.log ==="
-          cat /tmp/dune_hook.log 2>/dev/null || echo "(no log file)"
-          echo "=== end log ==="
-          echo "=== ls /tmp ==="
-          ls -la /tmp/dune* 2>/dev/null || echo "(no /tmp/dune* files)"
-          echo "=== .dart_tool tree (depth 4) ==="
-          find .dart_tool -maxdepth 4 -type f 2>/dev/null | head -100 || true
-          echo "=== .dart_tool/hooks_runner ==="
-          find .dart_tool -path '*hook*' -type f 2>/dev/null | head -40 || true
-          echo "=== libtailscale.so locations ==="
-          find . /tmp -name 'libtailscale.so' -ls 2>/dev/null || true
       - name: Teardown
         if: always()
         run: docker compose -f test/e2e/docker-compose.yml down -v

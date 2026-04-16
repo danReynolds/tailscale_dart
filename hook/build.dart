@@ -29,17 +29,19 @@ import 'package:code_assets/code_assets.dart';
 import 'package:hooks/hooks.dart';
 import 'package:path/path.dart' as p;
 
-// Diagnostic logging — written to a known file when DUNE_HOOK_LOG=1.
-// Used to debug a Linux-only SIGBUS that crashes a parent test process
-// when a subprocess re-invokes this hook.
-const _logEnvVar = 'DUNE_HOOK_LOG';
+// Diagnostic logging — always on while we root-cause a Linux-only SIGBUS.
+// Logs both to /tmp and to stderr so we'll see SOMETHING regardless of
+// where the hook is dispatched and how its output is captured.
 final _logFile = File('/tmp/dune_hook.log');
 void _hookLog(String message) {
-  if (Platform.environment[_logEnvVar] != '1') return;
-  final line = '[${DateTime.now().toIso8601String()} pid=$pid] $message\n';
+  final line = '[${DateTime.now().toIso8601String()} pid=$pid] $message';
   try {
-    _logFile.writeAsStringSync(line, mode: FileMode.append, flush: true);
-  } catch (_) {}
+    _logFile.writeAsStringSync('$line\n',
+        mode: FileMode.append, flush: true);
+  } catch (e) {
+    stderr.writeln('DUNE_HOOK log-write failed: $e');
+  }
+  stderr.writeln('DUNE_HOOK $line');
 }
 
 String _fileFingerprint(String path) {

@@ -31,12 +31,21 @@ void main() {
   late String stateDir;
 
   setUpAll(() async {
-    // Warm up the native build hook BEFORE this process loads the .so via
-    // Tailscale.init. Subprocess `dart run` invocations later re-invoke
-    // the build hook; running it once up front means subsequent hits are
-    // no-ops (idempotent in hook/build.dart) and don't rewrite the .so
-    // the parent has mmap'd.
-    final warmup = await Process.run(
+    Future<String> statSo(String label) async {
+      final r = await Process.run(
+        'stat',
+        ['-c', '%i %s %Y', '.dart_tool/lib/libtailscale.so'],
+      );
+      final line = '[diag $label] ${r.stdout.toString().trim()}'
+          ' (rc=${r.exitCode})';
+      stderr.writeln(line);
+      return line;
+    }
+
+    // First warmup — populates the framework cache and copies the .so to
+    // .dart_tool/lib/libtailscale.so.
+    await statSo('before-warmup1');
+    final warmup1 = await Process.run(
       Platform.resolvedExecutable,
       [
         'run',
@@ -48,16 +57,38 @@ void main() {
         'PEER_WARMUP': '1',
       },
     );
-    if (warmup.exitCode != 0) {
+    if (warmup1.exitCode != 0) {
       throw StateError(
-        'Peer warmup failed (exit ${warmup.exitCode})\n'
-        'stdout: ${warmup.stdout}\nstderr: ${warmup.stderr}',
+        'Peer warmup failed (exit ${warmup1.exitCode})\n'
+        'stdout: ${warmup1.stdout}\nstderr: ${warmup1.stderr}',
       );
     }
+    await statSo('after-warmup1');
 
+    // Now load the .so via FFI in this process.
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
     Tailscale.init(stateDir: stateDir);
     tsnet = Tailscale.instance;
+    await statSo('after-Tailscale.init');
+
+    // Second warmup AFTER parent has loaded the .so. If the framework
+    // re-copies the cached .so into .dart_tool/lib/libtailscale.so on
+    // every `dart run` (rather than checking whether it's already there),
+    // this is what crashes the parent with SIGBUS on Linux.
+    final warmup2 = await Process.run(
+      Platform.resolvedExecutable,
+      [
+        'run',
+        '--enable-experiment=native-assets',
+        'test/e2e/peer_main.dart',
+      ],
+      environment: {
+        ...Platform.environment,
+        'PEER_WARMUP': '1',
+      },
+    );
+    stderr.writeln('[diag warmup2 exitCode=${warmup2.exitCode}]');
+    await statSo('after-warmup2');
   });
 
   tearDownAll(() async {

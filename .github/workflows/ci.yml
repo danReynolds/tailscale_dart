@@ -93,7 +93,7 @@ jobs:
         env:
           HEADSCALE_URL: http://localhost:8080
           HEADSCALE_AUTH_KEY: ${{ steps.headscale.outputs.auth_key }}
-        run: dart test test/e2e/e2e_test.dart --timeout=240s
+        run: dart test test/e2e/e2e_test.dart --timeout=360s
       - name: Teardown
         if: always()
         run: docker compose -f test/e2e/docker-compose.yml down -v

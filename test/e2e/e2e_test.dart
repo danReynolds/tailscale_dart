@@ -30,7 +30,32 @@ void main() {
   late Tailscale tsnet;
   late String stateDir;
 
-  setUpAll(() {
+  setUpAll(() async {
+    // Warm up the native build hook BEFORE this process loads the .so via
+    // Tailscale.init. If the subprocess's `dart run` triggers the hook
+    // concurrently with the parent having the .so mmap'd, the .so can be
+    // rewritten under the parent and crash it with SIGBUS (observed on
+    // Linux CI). A no-op invocation primes .dart_tool's native-asset cache
+    // so subsequent subprocess spawns are read-only against the .so.
+    final warmup = await Process.run(
+      Platform.resolvedExecutable,
+      [
+        'run',
+        '--enable-experiment=native-assets',
+        'test/e2e/peer_main.dart',
+      ],
+      environment: {
+        ...Platform.environment,
+        'PEER_WARMUP': '1',
+      },
+    );
+    if (warmup.exitCode != 0) {
+      throw StateError(
+        'Peer warmup failed (exit ${warmup.exitCode})\n'
+        'stdout: ${warmup.stdout}\nstderr: ${warmup.stderr}',
+      );
+    }
+
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
     Tailscale.init(stateDir: stateDir);
     tsnet = Tailscale.instance;

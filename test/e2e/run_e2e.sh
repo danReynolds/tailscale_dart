@@ -63,6 +63,6 @@ cd "$PKG_DIR"
 
 HEADSCALE_URL="http://localhost:$HEADSCALE_PORT" \
 HEADSCALE_AUTH_KEY="$AUTH_KEY" \
-    "${DART:-dart}" test test/e2e/e2e_test.dart --enable-experiment=native-assets --timeout=240s
+    "${DART:-dart}" test test/e2e/e2e_test.dart --enable-experiment=native-assets --timeout=360s
 
 echo "=== E2E tests passed ==="

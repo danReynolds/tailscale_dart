@@ -7,7 +7,7 @@
 [![Dart 3.10+](https://img.shields.io/badge/Dart-3.10+-0175C2?logo=dart&logoColor=white)](https://dart.dev)
 [![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android%20%7C%20macOS%20%7C%20Linux%20%7C%20Windows-brightgreen.svg)]()
 
-Bring a Dart or Flutter app onto your tailnet as its own node — talk to peers, expose local services, and add private connectivity without a system-wide VPN.
+Bring a Flutter or plain Dart app onto your tailnet as its own node — talk to peers, expose local services, and add private connectivity without a system-wide VPN.
 
 Works with [Tailscale](https://tailscale.com) and self-hosted [Headscale](https://github.com/juanfont/headscale).
 

@@ -47,7 +47,7 @@ void _workerEntrypoint(SendPort sendPort) {
       }
     });
 
-    commandPort.listen((dynamic message) {
+    commandPort.listen((dynamic message) async {
       if (message is! _WorkerCommand) return;
 
       try {
@@ -140,6 +140,17 @@ void _workerEntrypoint(SendPort sendPort) {
             native.duneStopWatch();
             native.duneStop();
 
+            // Go's Stop() calls publishState("Stopped") synchronously, which
+            // posts on [watcherPort]. That port is a worker-local ReceivePort
+            // whose listener forwards to main as a _WorkerStateEvent — but
+            // the listener only fires on the next event-loop iteration. If
+            // we ack now, main sees [ack, state] and `await tsnet.down()`
+            // resolves BEFORE subscribers see Stopped, leaving a race for
+            // any code that subscribes after the await. Yield here so the
+            // watcherPort drains first, then send the ack — after this the
+            // API contract is "await down() implies Stopped has been
+            // delivered to onStateChange".
+            await _drainWatcherPort();
             sendPort.send(const _WorkerAckResponse(_WorkerOperation.down));
           case _WorkerLogoutCommand request:
             native.duneStopWatch();
@@ -154,6 +165,11 @@ void _workerEntrypoint(SendPort sendPort) {
               calloc.free(stateDirPtr);
             }
 
+            // Logout's Stop() publishes Stopped (if wasRunning) and then
+            // publishState("NoState") fires — queuing up to two events on
+            // watcherPort. Drain both before ack'ing so subscribers see the
+            // full sequence before `await logout()` resolves.
+            await _drainWatcherPort();
             sendPort.send(const _WorkerAckResponse(_WorkerOperation.logout));
         }
       } catch (error) {
@@ -182,6 +198,19 @@ void _workerEntrypoint(SendPort sendPort) {
     );
   }
 }
+
+// Yields to the worker's event loop so any messages already queued on
+// watcherPort (from synchronous calls to Go's publishState inside duneStop /
+// duneLogout) are drained — i.e., their listener runs and forwards a
+// _WorkerStateEvent to main — before the caller's next `sendPort.send`.
+//
+// A single zero-duration Timer yields past all earlier-queued external
+// events: Dart's event loop processes events FIFO, so port messages posted
+// during the preceding sync native call fire before the timer does, and
+// this await resumes only after they've all been drained. This is what
+// lets the public API promise "await down()/logout() implies the state
+// event has been delivered to onStateChange subscribers."
+Future<void> _drainWatcherPort() => Future<void>.delayed(Duration.zero);
 
 // ---------------------------------------------------------------------------
 // FFI helpers — called exclusively on the worker isolate.

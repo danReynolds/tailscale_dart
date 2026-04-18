@@ -267,27 +267,23 @@ void main() {
   //     (empirically NoState for tsnet.Server, sometimes NeedsLogin on a
   //     truly empty state dir) followed by the natural Starting→Running
   //     progression. Assertions use `containsAllInOrder([starting,
-  //     running])` — that's the contract UI subscribers rely on; the
-  //     leading state the watcher happens to catch is an implementation
-  //     detail of tsnet and doesn't belong in the test contract.
+  //     running])` — the leading state the watcher happens to catch is
+  //     an implementation detail of tsnet and doesn't belong in the test
+  //     contract.
   //   - `down()` / `logout()` paths disable the IPN watcher before the
   //     synthetic publish, so the emitted sequence is fully deterministic
-  //     and asserted with `equals` (exact match).
+  //     and asserted with `equals` (exact match). The worker drains the
+  //     watcher port before ack'ing the command, so `await down()` /
+  //     `await logout()` imply the state events have already been
+  //     delivered — tests can rely on this without post-hoc draining.
   //
   // Placed at the end of the file because the logout tests wipe persisted
   // state and would break earlier tests that assume an up, authenticated
   // node. Each test inside attaches its stream listener BEFORE triggering
-  // the transition (see [_recordUntil]) and, where a preamble `down()` is
-  // needed, records it too so its synthetic `Stopped` is consumed instead
-  // of leaking into the next recording's subscription.
+  // the transition (see [_recordUntil]).
   group('onStateChange lifecycle', () {
     test('up emits Starting → Running with a fresh auth key', () async {
-      // Record the preamble down() so its synthetic Stopped is consumed
-      // by _this_ subscription — otherwise it reaches the next one and
-      // shows up as a spurious leading state in the up() sequence.
-      if ((await tsnet.status()).state == NodeState.running) {
-        await _recordUntil(tsnet, NodeState.stopped, () => tsnet.down());
-      }
+      await tsnet.down();
 
       final sequence = await _recordUntil(
         tsnet,

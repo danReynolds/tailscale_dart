@@ -100,17 +100,28 @@ void main() {
     } catch (_) {}
   });
 
-  test('up connects and reaches Running state', () async {
-    await tsnet.up(
-      hostname: 'dune-e2e-test',
-      authKey: authKey,
-      controlUrl: Uri.parse(controlUrl),
+  test('up connects and reaches Running through Starting', () async {
+    // Records the full emitted sequence (not just the Running terminal) so
+    // we catch skipped intermediates. Contract from `Tailscale.up` docs:
+    // a fresh login goes through `starting` on its way to `running`.
+    final sequence = await _recordUntil(
+      tsnet,
+      NodeState.running,
+      () => tsnet.up(
+        hostname: 'dune-e2e-test',
+        authKey: authKey,
+        controlUrl: Uri.parse(controlUrl),
+      ),
+      timeout: const Duration(seconds: 30),
     );
 
-    // up() starts the node — wait for it to reach Running via state stream.
-    await tsnet.onStateChange
-        .firstWhere((s) => s == NodeState.running)
-        .timeout(const Duration(seconds: 30));
+    expect(
+      sequence,
+      containsAllInOrder([NodeState.starting, NodeState.running]),
+      reason:
+          'a fresh up() must emit Starting before Running — skipping '
+          'Starting leaves UI subscribers without the "connecting" state',
+    );
 
     final status = await tsnet.status();
     expect(status.ipv4, startsWith('100.'));
@@ -249,14 +260,25 @@ void main() {
   // state) depend on every documented transition actually firing — a
   // missed emit leaves their mirror stuck and the UI goes out of sync.
   //
-  // Placed at the end of the file because the logout test wipes persisted
+  // Assertion flavor per transition:
+  //   - `up()` paths (watcher attached with `NotifyInitialState` before the
+  //     engine reaches Running) assert ordered `Starting → Running` via
+  //     `containsAllInOrder`. Any leading/intermediate state the watcher
+  //     catches between attach and Running is tolerated, but `NoState` /
+  //     `Stopped` mid-flight are banned — they'd imply the engine lost
+  //     creds or tore itself down.
+  //   - `down()` / `logout()` paths disable the IPN watcher before the
+  //     synthetic publish, so the emitted sequence is fully deterministic
+  //     and asserted with `equals` (exact match).
+  //
+  // Placed at the end of the file because the logout tests wipe persisted
   // state and would break earlier tests that assume an up, authenticated
   // node. Each test inside attaches its stream listener BEFORE triggering
-  // the transition (see [_recordUntil]) so events can't slip past due to
-  // ordering, and each test normalizes its entry state so the group is
-  // safe under reordering.
+  // the transition (see [_recordUntil]) so events can't slip past, and
+  // each test normalizes its entry state so the group is safe under
+  // reordering.
   group('onStateChange lifecycle', () {
-    test('up emits Running after a fresh login with an auth key', () async {
+    test('up emits Starting → Running with a fresh auth key', () async {
       await tsnet.down();
 
       final sequence = await _recordUntil(
@@ -269,7 +291,13 @@ void main() {
         ),
       );
 
-      expect(sequence.last, NodeState.running);
+      expect(
+        sequence,
+        containsAllInOrder([NodeState.starting, NodeState.running]),
+        reason:
+            'up() with an auth key must surface Starting before Running so '
+            'UI subscribers can show a "connecting" state',
+      );
       expect(
         sequence,
         isNot(contains(NodeState.noState)),
@@ -277,10 +305,16 @@ void main() {
             'a login with an auth key should not dip through NoState mid-'
             'flight — that would tell UI subscribers the node has no creds',
       );
+      expect(
+        sequence,
+        isNot(contains(NodeState.stopped)),
+        reason: 'up() must not emit Stopped mid-flight — the node is coming '
+            'online, not shutting down',
+      );
       expect((await tsnet.status()).state, NodeState.running);
     });
 
-    test('down emits Stopped when tearing a running node down', () async {
+    test('down emits exactly [Stopped] after Running', () async {
       if ((await tsnet.status()).state != NodeState.running) {
         await _recordUntil(
           tsnet,
@@ -299,18 +333,22 @@ void main() {
         () => tsnet.down(),
       );
 
+      // The worker cancels the IPN watcher before calling Stop(), so the
+      // only event that reaches subscribers is the synthetic Stopped emit
+      // from go/lib.go's Stop().
       expect(
-        sequence.last,
-        NodeState.stopped,
+        sequence,
+        equals([NodeState.stopped]),
         reason:
-            'down() must terminate in Stopped — subscribers rely on this '
-            'transition to flip UI routing away from the running surface',
+            'down() should produce exactly one emit — the synthetic '
+            'Stopped from Stop(). Any extra events indicate the IPN '
+            'watcher is leaking transitions across the teardown boundary.',
       );
       expect((await tsnet.status()).state, NodeState.stopped);
     });
 
     test(
-      'up after down emits Running again using persisted credentials',
+      'up after down emits Starting → Running via persisted credentials',
       () async {
         if ((await tsnet.status()).state == NodeState.running) {
           await _recordUntil(
@@ -333,7 +371,13 @@ void main() {
           ),
         );
 
-        expect(sequence.last, NodeState.running);
+        expect(
+          sequence,
+          containsAllInOrder([NodeState.starting, NodeState.running]),
+          reason:
+              'a reconnect must still transition through Starting — same '
+              'UI contract as a fresh login',
+        );
         expect(
           sequence,
           isNot(contains(NodeState.noState)),
@@ -341,12 +385,17 @@ void main() {
               'a reconnect with persisted credentials must never emit '
               'NoState — that would imply the engine lost its creds',
         );
+        expect(
+          sequence,
+          isNot(contains(NodeState.stopped)),
+          reason: 'mid-flight Stopped during up() would suggest the engine '
+              'bounced — not expected on a clean reconnect',
+        );
         expect((await tsnet.status()).state, NodeState.running);
       },
     );
 
-    test('down is idempotent: no Stopped re-emit when already stopped',
-        () async {
+    test('down is silent when already stopped (wasRunning guard)', () async {
       if ((await tsnet.status()).state == NodeState.running) {
         await _recordUntil(tsnet, NodeState.stopped, () => tsnet.down());
       }
@@ -364,8 +413,9 @@ void main() {
         emits,
         isEmpty,
         reason:
-            'Stop() in go/lib.go only publishes Stopped when it actually '
-            'tore a server down; a no-op down() must not reach subscribers',
+            'Stop() in go/lib.go only publishes Stopped when wasRunning '
+            '(srv != nil); a no-op down() must not reach subscribers — '
+            'otherwise cross-lifecycle subscribers see phantom emits',
       );
     });
 
@@ -405,12 +455,14 @@ void main() {
         await subB.cancel();
       }
 
+      // Both subscribers attached BEFORE up(), so both must have
+      // captured the Running event — proves broadcast delivery.
       expect(a, contains(NodeState.running));
       expect(b, contains(NodeState.running));
     });
 
     test(
-      'logout emits Stopped → NoState in order and clears persisted creds',
+      'logout from running emits exactly [Stopped, NoState] and clears creds',
       () async {
         if ((await tsnet.status()).state != NodeState.running) {
           await _recordUntil(
@@ -430,17 +482,17 @@ void main() {
           () => tsnet.logout(),
         );
 
+        // IPN watcher is cancelled before Stop(); only the two synthetic
+        // publishes reach subscribers, and in this order.
         expect(
           sequence,
-          containsAllInOrder([NodeState.stopped, NodeState.noState]),
+          equals([NodeState.stopped, NodeState.noState]),
           reason:
-              'logout from a running node must emit Stopped then NoState — '
-              'Stop() publishes Stopped when tearing the server down, and '
-              'Logout() publishes NoState after wiping persisted creds. '
-              'Subscribers (e.g. TailscaleClient in dune_gemini) rely on '
+              'logout from a running node must emit exactly Stopped then '
+              'NoState — Stop() publishes Stopped on teardown and Logout() '
+              'publishes NoState after wiping creds. Subscribers rely on '
               'this full sequence to route back to the unauthenticated UI.',
         );
-        expect(sequence.last, NodeState.noState);
         expect((await tsnet.status()).state, NodeState.noState);
 
         expect(
@@ -451,6 +503,37 @@ void main() {
         );
       },
     );
+
+    test('logout from stopped emits exactly [NoState] (no phantom Stopped)',
+        () async {
+      // Re-establish creds (prior test wiped them) and go to stopped.
+      await _recordUntil(
+        tsnet,
+        NodeState.running,
+        () => tsnet.up(
+          hostname: 'dune-e2e-state-logout-from-stopped',
+          authKey: authKey,
+          controlUrl: Uri.parse(controlUrl),
+        ),
+      );
+      await _recordUntil(tsnet, NodeState.stopped, () => tsnet.down());
+
+      final sequence = await _recordUntil(
+        tsnet,
+        NodeState.noState,
+        () => tsnet.logout(),
+      );
+
+      expect(
+        sequence,
+        equals([NodeState.noState]),
+        reason:
+            "logout from an already-stopped node must not emit Stopped — "
+            "Stop()'s wasRunning guard skips the publish when srv is nil, "
+            'so the full sequence is just NoState',
+      );
+      expect((await tsnet.status()).state, NodeState.noState);
+    });
   });
 }
 

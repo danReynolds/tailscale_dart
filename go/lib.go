@@ -82,14 +82,34 @@ func Logout(stateDir string) error {
 	if err := os.RemoveAll(stateDir); err != nil {
 		return fmt.Errorf("failed to remove state dir: %w", err)
 	}
+	// Post-logout the node has no credentials and — per NodeState.parse on
+	// the Dart side — should report NoState. Publish that explicitly so
+	// stream subscribers see the transition; if `Stop()` above had a live
+	// server to tear down it also published Stopped, so the full sequence
+	// delivered to Dart is Stopped → NoState (or just NoState if the node
+	// was already stopped).
+	publishState("NoState")
 	return nil
 }
 
 // Stop stops the server and closes all listeners.
+//
+// Publishes `Stopped` to stream subscribers iff there was actually a server
+// to tear down — tsnet.Server.Close() doesn't emit a terminal state through
+// the IPN bus, so without this explicit publish our onStateChange subscribers
+// drift from the actual engine state. No-op (and no event) when already
+// stopped, to avoid phantom emits for callers that subscribe across
+// lifecycle boundaries.
 func Stop() {
 	mu.Lock()
-	defer mu.Unlock()
+	wasRunning := srv != nil
 	stopLocked()
+	mu.Unlock()
+	// Publish after releasing the lock to keep the hold time minimal and
+	// avoid any reentrancy surprise from the native bridge.
+	if wasRunning {
+		publishState("Stopped")
+	}
 }
 
 // stopLocked tears down the server and all listeners. Caller must hold mu.

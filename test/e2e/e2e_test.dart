@@ -243,22 +243,252 @@ void main() {
     });
   });
 
-  test('down shuts down cleanly', () async {
-    await tsnet.down();
-  });
+  // Every transition that the lifecycle APIs promise in docs, verified end
+  // to end through `onStateChange`. Subscribers that mirror state via this
+  // stream (e.g. Dart app layers that bind UI routing to the engine's
+  // state) depend on every documented transition actually firing — a
+  // missed emit leaves their mirror stuck and the UI goes out of sync.
+  //
+  // Placed at the end of the file because the logout test wipes persisted
+  // state and would break earlier tests that assume an up, authenticated
+  // node. Each test inside attaches its stream listener BEFORE triggering
+  // the transition (see [_recordUntil]) so events can't slip past due to
+  // ordering, and each test normalizes its entry state so the group is
+  // safe under reordering.
+  group('onStateChange lifecycle', () {
+    test('up emits Running after a fresh login with an auth key', () async {
+      await tsnet.down();
 
-  test('logout clears persisted state', () async {
-    await tsnet.up(
-      hostname: 'dune-e2e-test',
-      authKey: authKey,
-      controlUrl: Uri.parse(controlUrl),
+      final sequence = await _recordUntil(
+        tsnet,
+        NodeState.running,
+        () => tsnet.up(
+          hostname: 'dune-e2e-state-running',
+          authKey: authKey,
+          controlUrl: Uri.parse(controlUrl),
+        ),
+      );
+
+      expect(sequence.last, NodeState.running);
+      expect(
+        sequence,
+        isNot(contains(NodeState.noState)),
+        reason:
+            'a login with an auth key should not dip through NoState mid-'
+            'flight — that would tell UI subscribers the node has no creds',
+      );
+      expect((await tsnet.status()).state, NodeState.running);
+    });
+
+    test('down emits Stopped when tearing a running node down', () async {
+      if ((await tsnet.status()).state != NodeState.running) {
+        await _recordUntil(
+          tsnet,
+          NodeState.running,
+          () => tsnet.up(
+            hostname: 'dune-e2e-state-down-setup',
+            authKey: authKey,
+            controlUrl: Uri.parse(controlUrl),
+          ),
+        );
+      }
+
+      final sequence = await _recordUntil(
+        tsnet,
+        NodeState.stopped,
+        () => tsnet.down(),
+      );
+
+      expect(
+        sequence.last,
+        NodeState.stopped,
+        reason:
+            'down() must terminate in Stopped — subscribers rely on this '
+            'transition to flip UI routing away from the running surface',
+      );
+      expect((await tsnet.status()).state, NodeState.stopped);
+    });
+
+    test(
+      'up after down emits Running again using persisted credentials',
+      () async {
+        if ((await tsnet.status()).state == NodeState.running) {
+          await _recordUntil(
+            tsnet, NodeState.stopped, () => tsnet.down());
+        }
+        expect(
+          (await tsnet.status()).state,
+          NodeState.stopped,
+          reason:
+              'need `stopped` entry state so the reconnect-without-authkey '
+              'path is what we exercise here',
+        );
+
+        final sequence = await _recordUntil(
+          tsnet,
+          NodeState.running,
+          () => tsnet.up(
+            hostname: 'dune-e2e-state-reconnect',
+            controlUrl: Uri.parse(controlUrl),
+          ),
+        );
+
+        expect(sequence.last, NodeState.running);
+        expect(
+          sequence,
+          isNot(contains(NodeState.noState)),
+          reason:
+              'a reconnect with persisted credentials must never emit '
+              'NoState — that would imply the engine lost its creds',
+        );
+        expect((await tsnet.status()).state, NodeState.running);
+      },
     );
 
-    await tsnet.logout();
+    test('down is idempotent: no Stopped re-emit when already stopped',
+        () async {
+      if ((await tsnet.status()).state == NodeState.running) {
+        await _recordUntil(tsnet, NodeState.stopped, () => tsnet.down());
+      }
 
-    expect(Directory(stateDir).existsSync(), isTrue);
-    expect(Directory(p.join(stateDir, 'tailscale')).existsSync(), isFalse);
+      final emits = <NodeState>[];
+      final sub = tsnet.onStateChange.listen(emits.add);
+
+      await tsnet.down();
+      // Give the worker→main isolate channel a window to deliver any
+      // (phantom) event before we assert it didn't happen.
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await sub.cancel();
+
+      expect(
+        emits,
+        isEmpty,
+        reason:
+            'Stop() in go/lib.go only publishes Stopped when it actually '
+            'tore a server down; a no-op down() must not reach subscribers',
+      );
+    });
+
+    test('onStateChange is a broadcast stream delivering to all subscribers',
+        () async {
+      if ((await tsnet.status()).state == NodeState.running) {
+        await _recordUntil(tsnet, NodeState.stopped, () => tsnet.down());
+      }
+
+      final a = <NodeState>[];
+      final b = <NodeState>[];
+      final aSawRunning = Completer<void>();
+      final bSawRunning = Completer<void>();
+
+      final subA = tsnet.onStateChange.listen((s) {
+        a.add(s);
+        if (s == NodeState.running && !aSawRunning.isCompleted) {
+          aSawRunning.complete();
+        }
+      });
+      final subB = tsnet.onStateChange.listen((s) {
+        b.add(s);
+        if (s == NodeState.running && !bSawRunning.isCompleted) {
+          bSawRunning.complete();
+        }
+      });
+
+      try {
+        await tsnet.up(
+          hostname: 'dune-e2e-state-broadcast',
+          controlUrl: Uri.parse(controlUrl),
+        );
+        await Future.wait([aSawRunning.future, bSawRunning.future])
+            .timeout(const Duration(seconds: 10));
+      } finally {
+        await subA.cancel();
+        await subB.cancel();
+      }
+
+      expect(a, contains(NodeState.running));
+      expect(b, contains(NodeState.running));
+    });
+
+    test(
+      'logout emits Stopped → NoState in order and clears persisted creds',
+      () async {
+        if ((await tsnet.status()).state != NodeState.running) {
+          await _recordUntil(
+            tsnet,
+            NodeState.running,
+            () => tsnet.up(
+              hostname: 'dune-e2e-state-logout-setup',
+              authKey: authKey,
+              controlUrl: Uri.parse(controlUrl),
+            ),
+          );
+        }
+
+        final sequence = await _recordUntil(
+          tsnet,
+          NodeState.noState,
+          () => tsnet.logout(),
+        );
+
+        expect(
+          sequence,
+          containsAllInOrder([NodeState.stopped, NodeState.noState]),
+          reason:
+              'logout from a running node must emit Stopped then NoState — '
+              'Stop() publishes Stopped when tearing the server down, and '
+              'Logout() publishes NoState after wiping persisted creds. '
+              'Subscribers (e.g. TailscaleClient in dune_gemini) rely on '
+              'this full sequence to route back to the unauthenticated UI.',
+        );
+        expect(sequence.last, NodeState.noState);
+        expect((await tsnet.status()).state, NodeState.noState);
+
+        expect(
+          Directory(p.join(stateDir, 'tailscale')).existsSync(),
+          isFalse,
+          reason:
+              'logout() should remove the persisted tailscale state subdir',
+        );
+      },
+    );
   });
+}
+
+/// Records every [NodeState] emitted on `onStateChange` while [action] runs,
+/// stopping once [terminal] is observed. Attaches the listener *before*
+/// invoking [action] so events can't slip past due to subscription timing.
+///
+/// Times out with a [TimeoutException] that includes the partial sequence —
+/// the partial is load-bearing when debugging a stuck transition ("we
+/// emitted Starting but never Running" is a very different failure from "we
+/// never emitted anything").
+Future<List<NodeState>> _recordUntil(
+  Tailscale tsnet,
+  NodeState terminal,
+  Future<void> Function() action, {
+  Duration timeout = const Duration(seconds: 10),
+}) async {
+  final sequence = <NodeState>[];
+  final done = Completer<void>();
+
+  final sub = tsnet.onStateChange.listen((s) {
+    sequence.add(s);
+    if (s == terminal && !done.isCompleted) done.complete();
+  });
+
+  try {
+    await action();
+    await done.future.timeout(
+      timeout,
+      onTimeout: () => throw TimeoutException(
+        'onStateChange never emitted $terminal; '
+        'got [${sequence.join(' → ')}]',
+      ),
+    );
+    return sequence;
+  } finally {
+    await sub.cancel();
+  }
 }
 
 /// Handle to a `peer_main.dart` subprocess that has reached Running and

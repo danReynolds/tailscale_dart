@@ -420,6 +420,71 @@ void main() {
       );
       expect((await tsnet.status()).state, NodeState.noState);
     });
+
+    // Consecutive-duplicate scenarios — the stream filters these via
+    // `Stream.distinct` in [Tailscale.onStateChange]. Each test attaches a
+    // single subscription across two transitions so the filter's internal
+    // "previous" state carries over; a single subscription on a fresh
+    // distinct stream would only see the second event and wouldn't prove
+    // the filter fired.
+
+    test('up() while already running does not re-emit Running', () async {
+      var runningCount = 0;
+      final sub = tsnet.onStateChange.listen((s) {
+        if (s == NodeState.running) runningCount++;
+      });
+
+      // First up — real transition, emits Running.
+      await _recordUntil(tsnet, NodeState.running, bringUp);
+      // Second up without an auth key — Go's Start returns early (srv
+      // != nil, authKey == ""), but the worker still runs
+      // duneStopWatch + duneStartWatch. The new watcher's
+      // NotifyInitialState re-emits Running, which onStateChange
+      // deduplicates.
+      await reconnect();
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await sub.cancel();
+
+      expect(
+        runningCount,
+        1,
+        reason: 'a no-op up() must not surface a second Running to the '
+            'stream — distinct() filters the watcher reattach duplicate',
+      );
+    });
+
+    test('logout() twice does not re-emit NoState', () async {
+      // Bring up *before* subscribing so the IPN watcher's initial
+      // NoState emit (during engine startup) doesn't show up in our
+      // count — we want to isolate the logout emits.
+      await _recordUntil(tsnet, NodeState.running, bringUp);
+
+      var noStateCount = 0;
+      final sub = tsnet.onStateChange.listen((s) {
+        if (s == NodeState.noState) noStateCount++;
+      });
+
+      // First logout — emits Stopped then NoState. Both pass (different
+      // from each other; _previous starts at null for this fresh
+      // distinct stream).
+      await _recordUntil(tsnet, NodeState.noState, tsnet.logout);
+
+      // Second logout — srv already nil (wasRunning guard skips Stop's
+      // Stopped publish), state dir already gone, but Logout still
+      // calls publishState("NoState"). distinct() filters the duplicate
+      // because _previous is NoState from the first logout.
+      await tsnet.logout();
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await sub.cancel();
+
+      expect(
+        noStateCount,
+        1,
+        reason: 'a redundant logout() must not surface a second NoState — '
+            'distinct() filters publishState("NoState") when it matches '
+            'the most recently emitted state',
+      );
+    });
   });
 }
 

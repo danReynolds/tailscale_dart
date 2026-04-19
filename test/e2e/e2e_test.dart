@@ -112,7 +112,6 @@ void main() {
         authKey: authKey,
         controlUrl: Uri.parse(controlUrl),
       ),
-      timeout: const Duration(seconds: 30),
     );
 
     expect(
@@ -432,11 +431,16 @@ void main() {
 /// the partial is load-bearing when debugging a stuck transition ("we
 /// emitted Starting but never Running" is a very different failure from "we
 /// never emitted anything").
+///
+/// Default 30s because the up paths wait on real network round-trips to
+/// Headscale (first-boot auth can be the slow leg on CI runners). The
+/// terminal-state paths (Stopped, NoState) are synthetic and nearly
+/// instant, so the extra headroom costs nothing when the test succeeds.
 Future<List<NodeState>> _recordUntil(
   Tailscale tsnet,
   NodeState terminal,
   Future<void> Function() action, {
-  Duration timeout = const Duration(seconds: 10),
+  Duration timeout = const Duration(seconds: 30),
 }) async {
   final sequence = <NodeState>[];
   final done = Completer<void>();

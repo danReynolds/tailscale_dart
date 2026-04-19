@@ -23,4 +23,3 @@
 - Supports iOS, Android, macOS, Linux, and Windows.
 - Works with Tailscale and self-hosted Headscale control servers.
 - Full test suite: unit, FFI integration, and E2E against Headscale in Docker.
- 

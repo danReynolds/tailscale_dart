@@ -413,6 +413,16 @@ Future<void> _configureIOS(
 ///
 /// Go doesn't support c-shared on ios/arm64, but Flutter's native assets
 /// system requires a dynamic library. This bridges the gap.
+///
+/// iOS-specific note: the resulting dylib must have an `@rpath`-relative
+/// `LC_ID_DYLIB` install name so Flutter's iOS bundler can wrap it in
+/// `tailscale.framework` and link it against `Runner.app`. Without an
+/// explicit `-install_name`, clang stamps the absolute build-time path
+/// (somewhere in `.dart_tool/hooks_runner/.../build/<hash>/`), which the
+/// Flutter pipeline silently fails to rewrite — the framework never
+/// makes it into `build/ios/.../*.framework`, and the final link against
+/// `Runner` fails with `Undefined symbol: _Dune*`. Matches the pattern
+/// used by `resqlite`'s hook (`-install_name @rpath/libresqlite.dylib`).
 Future<void> _archiveToSharedLib(
   Map<String, String> env,
   String archivePath,
@@ -424,6 +434,7 @@ Future<void> _archiveToSharedLib(
   final cflags = env['CGO_CFLAGS'] ?? '';
   final ldflags = env['CGO_LDFLAGS'] ?? '';
 
+  final dylibName = p.basename(dylibPath);
   final args = [
     ...cflags.split(' ').where((s) => s.isNotEmpty),
     '-fpic',
@@ -437,6 +448,8 @@ Future<void> _archiveToSharedLib(
     '-o',
     dylibPath,
     '-headerpad_max_install_names',
+    '-install_name',
+    '@rpath/$dylibName',
     ...ldflags.split(' ').where((s) => s.isNotEmpty),
   ];
 

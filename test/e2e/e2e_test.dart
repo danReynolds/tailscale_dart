@@ -189,7 +189,7 @@ void main() {
     });
 
     test('http.get reaches peer via tailnet', () async {
-      final resp = await tsnet.http
+      final resp = await tsnet.http.client
           .get(Uri.parse('http://${peer.ipv4}/hello'))
           .timeout(const Duration(seconds: 30));
       expect(resp.statusCode, 200);
@@ -197,7 +197,7 @@ void main() {
     });
 
     test('http.post sends body through the tailnet', () async {
-      final resp = await tsnet.http
+      final resp = await tsnet.http.client
           .post(
             Uri.parse('http://${peer.ipv4}/echo'),
             headers: {'content-type': 'text/plain'},

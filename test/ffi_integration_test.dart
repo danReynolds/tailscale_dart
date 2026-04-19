@@ -243,9 +243,9 @@ void main() {
       await expectLater(Tailscale.instance.down(), completes);
     });
 
-    test('listen() throws TailscaleListenException', () async {
+    test('http.expose() throws TailscaleListenException', () async {
       await expectLater(
-        Tailscale.instance.listen(8080),
+        Tailscale.instance.http.expose(8080),
         throwsA(isA<TailscaleListenException>()),
       );
     });

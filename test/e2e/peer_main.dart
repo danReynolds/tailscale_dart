@@ -63,7 +63,7 @@ Future<void> main(List<String> args) async {
     controlUrl: Uri.parse(controlUrl),
   );
   await running.timeout(const Duration(seconds: 60));
-  await tsnet.listen(server.port, tailnetPort: 80);
+  await tsnet.http.expose(server.port, tailnetPort: 80);
 
   final status = await tsnet.status();
   final ipv4 = status.ipv4;

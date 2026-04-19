@@ -3,19 +3,19 @@ import 'dart:io';
 /// TLS-terminated listener with auto-provisioned cert from the control plane.
 ///
 /// Reached via [Tailscale.tls]. Requires the tailnet operator to have
-/// enabled MagicDNS + HTTPS in the admin panel; [listen] will fail
-/// with a clear error if those are off. Use [domains] as a preflight
-/// to check.
+/// enabled MagicDNS + HTTPS in the admin panel; [bind] will fail with
+/// a clear error if those are off. Use [domains] as a preflight to
+/// check.
 class Tls {
   const Tls();
 
-  /// Opens a TLS listener on the tailnet. Mirrors
+  /// Binds a TLS listener on the tailnet. Wraps
   /// `tsnet.Server.ListenTLS`.
   ///
   /// The returned [SecureServerSocket] decrypts incoming traffic
   /// server-side; handlers see plaintext bytes.
-  Future<SecureServerSocket> listen(int port) =>
-      throw UnimplementedError('tls.listen not yet implemented');
+  Future<SecureServerSocket> bind(int port) =>
+      throw UnimplementedError('tls.bind not yet implemented');
 
   /// Subject Alternative Names present in the auto-provisioned certificate.
   ///

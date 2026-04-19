@@ -254,260 +254,170 @@ void main() {
     });
   });
 
-  // Every transition that the lifecycle APIs promise in docs, verified end
-  // to end through `onStateChange`. Subscribers that mirror state via this
-  // stream (e.g. Dart app layers that bind UI routing to the engine's
-  // state) depend on every documented transition actually firing — a
-  // missed emit leaves their mirror stuck and the UI goes out of sync.
+  // Every transition the lifecycle APIs promise in docs, verified end to
+  // end through `onStateChange`. Subscribers that mirror state via this
+  // stream (e.g. Dart app layers binding UI routing to engine state) depend
+  // on every documented transition actually firing — a missed emit leaves
+  // their mirror stuck and the UI goes out of sync.
   //
-  // Setup contract (see [setUp] below): every test enters with the engine
-  // in `stopped` state, credentials persisted on disk, and no in-flight
-  // state events on the Stream. This lets test bodies read linearly —
-  // arrange, act, assert — without per-test conditional preambles.
-  //
-  // Assertion flavor per transition:
+  // Two assertion flavors, matching what the implementation produces:
   //   - `up()` paths: the IPN watcher attaches with `NotifyInitialState`
-  //     after `duneStart` kicks the engine, so the first observed event
-  //     is whatever internal state the engine is in at attach time
-  //     (empirically NoState for tsnet.Server, sometimes NeedsLogin on a
-  //     truly empty state dir) followed by the natural Starting→Running
+  //     after `duneStart` kicks the engine, so the first observed event is
+  //     whatever state the engine is in at attach time (empirically
+  //     `NoState` for tsnet.Server, sometimes `NeedsLogin` on a truly
+  //     empty state dir) followed by the natural Starting→Running
   //     progression. Assertions use `containsAllInOrder([starting,
-  //     running])` — the leading state the watcher happens to catch is
-  //     an implementation detail of tsnet and doesn't belong in the test
-  //     contract.
-  //   - `down()` / `logout()` paths disable the IPN watcher before the
-  //     synthetic publish, so the emitted sequence is fully deterministic
-  //     and asserted with `equals` (exact match).
+  //     running])` — the leading state the watcher catches is a tsnet
+  //     implementation detail and doesn't belong in the test contract.
+  //   - `down()` / `logout()` paths cancel the IPN watcher before the
+  //     synthetic publish, so the sequence is fully deterministic and
+  //     asserted with `equals` (exact match).
+  //
+  // [setUp] normalizes every test to enter with the engine `stopped`,
+  // credentials on disk, and no in-flight stream events. Test bodies then
+  // read linearly — arrange, act, assert — with no defensive preambles.
   //
   // Placed at the end of the file because the logout tests wipe persisted
-  // state; [setUp] re-establishes creds between tests, but tests outside
-  // this group can't rely on them.
+  // state; setUp re-establishes them for the next test, but earlier
+  // groups outside this one can't rely on that repair.
   group('onStateChange lifecycle', () {
-    // Normalize the engine to `stopped` with creds on disk, draining any
-    // in-flight state events by routing every transition through
-    // [_recordUntil] (its subscription captures the events before they
-    // reach the test's subscription). Handles three entry states:
-    //   - `running` (prior test left us up): `down` → `stopped`.
-    //   - `noState` (prior test logged out): `up` to re-establish creds,
-    //     then `down` → `stopped`.
-    //   - `stopped`: already there; nothing to do.
-    setUp(() async {
-      var state = (await tsnet.status()).state;
-      if (state == NodeState.noState) {
-        await _recordUntil(
-          tsnet,
-          NodeState.running,
-          () => tsnet.up(
-            hostname: 'dune-e2e-lifecycle-setup',
-            authKey: authKey,
-            controlUrl: Uri.parse(controlUrl),
-          ),
+    const hostname = 'dune-e2e-lifecycle';
+    Future<void> bringUp() => tsnet.up(
+          hostname: hostname,
+          authKey: authKey,
+          controlUrl: Uri.parse(controlUrl),
         );
-        state = NodeState.running;
-      }
-      if (state == NodeState.running) {
-        await _recordUntil(tsnet, NodeState.stopped, () => tsnet.down());
+    Future<void> reconnect() => tsnet.up(
+          hostname: hostname,
+          controlUrl: Uri.parse(controlUrl),
+        );
+
+    setUp(() async {
+      // Route each normalization transition through [_recordUntil] so its
+      // events are captured by setUp's subscription instead of leaking
+      // into the test's subscription.
+      switch ((await tsnet.status()).state) {
+        case NodeState.noState:
+          // Logout wiped creds. Re-establish and shut down.
+          await _recordUntil(tsnet, NodeState.running, bringUp);
+          await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
+        case NodeState.running:
+          await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
+        case NodeState.stopped:
+          break;
+        case final unexpected:
+          fail('unexpected entry state for lifecycle setUp: $unexpected');
       }
     });
 
-    test('up emits Starting → Running with a fresh auth key', () async {
-      final sequence = await _recordUntil(
-        tsnet,
-        NodeState.running,
-        () => tsnet.up(
-          hostname: 'dune-e2e-state-running',
-          authKey: authKey,
-          controlUrl: Uri.parse(controlUrl),
-        ),
-      );
+    test('up with auth key emits Starting → Running', () async {
+      final sequence = await _recordUntil(tsnet, NodeState.running, bringUp);
 
       expect(
         sequence,
         containsAllInOrder([NodeState.starting, NodeState.running]),
-        reason:
-            'up() with an auth key must surface Starting before Running so '
-            'UI subscribers can show a "connecting" state',
+        reason: 'UI subscribers depend on Starting to show a "connecting" '
+            'state before Running',
       );
-      expect(sequence.last, NodeState.running);
       expect((await tsnet.status()).state, NodeState.running);
     });
 
-    test('down emits exactly [Stopped] after Running', () async {
-      await _recordUntil(
-        tsnet,
-        NodeState.running,
-        () => tsnet.up(
-          hostname: 'dune-e2e-state-down-setup',
-          authKey: authKey,
-          controlUrl: Uri.parse(controlUrl),
-        ),
-      );
+    test('down from running emits [Stopped]', () async {
+      await _recordUntil(tsnet, NodeState.running, bringUp);
 
-      final sequence = await _recordUntil(
-        tsnet,
-        NodeState.stopped,
-        () => tsnet.down(),
-      );
+      final sequence =
+          await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
 
-      // The worker cancels the IPN watcher before calling Stop(), so the
-      // only event that reaches subscribers is the synthetic Stopped emit
-      // from go/lib.go's Stop().
       expect(
         sequence,
         equals([NodeState.stopped]),
-        reason:
-            'down() should produce exactly one emit — the synthetic '
-            'Stopped from Stop(). Any extra events indicate the IPN '
-            'watcher is leaking transitions across the teardown boundary.',
+        reason: 'down() should emit exactly the synthetic Stopped from '
+            'Stop(); extra events mean the IPN watcher is leaking '
+            'transitions across the teardown boundary',
       );
       expect((await tsnet.status()).state, NodeState.stopped);
     });
 
-    test(
-      'up after down emits Starting → Running via persisted credentials',
-      () async {
-        // setUp leaves us in stopped with creds — the exact entry state
-        // for a reconnect-without-authkey.
-        final sequence = await _recordUntil(
-          tsnet,
-          NodeState.running,
-          () => tsnet.up(
-            hostname: 'dune-e2e-state-reconnect',
-            controlUrl: Uri.parse(controlUrl),
-          ),
-        );
+    test('up without auth key reconnects via persisted credentials',
+        () async {
+      final sequence = await _recordUntil(tsnet, NodeState.running, reconnect);
 
-        expect(
-          sequence,
-          containsAllInOrder([NodeState.starting, NodeState.running]),
-          reason:
-              'a reconnect must still transition through Starting — same '
-              'UI contract as a fresh login',
-        );
-        expect(sequence.last, NodeState.running);
-        expect((await tsnet.status()).state, NodeState.running);
-      },
-    );
+      expect(
+        sequence,
+        containsAllInOrder([NodeState.starting, NodeState.running]),
+        reason: 'reconnect must still transition through Starting — same '
+            'UI contract as a fresh login',
+      );
+      expect((await tsnet.status()).state, NodeState.running);
+    });
 
-    test('down is silent when already stopped (wasRunning guard)', () async {
-      // setUp already has us stopped.
+    test('down from stopped is silent (wasRunning guard)', () async {
       final emits = <NodeState>[];
       final sub = tsnet.onStateChange.listen(emits.add);
 
       await tsnet.down();
-      // Give the worker→main isolate channel a window to deliver any
-      // (phantom) event before we assert it didn't happen.
+      // Give any (phantom) state event time to round-trip through the
+      // worker→main isolate channel before asserting absence.
       await Future<void>.delayed(const Duration(seconds: 1));
       await sub.cancel();
 
       expect(
         emits,
         isEmpty,
-        reason:
-            'Stop() in go/lib.go only publishes Stopped when wasRunning '
-            '(srv != nil); a no-op down() must not reach subscribers — '
-            'otherwise cross-lifecycle subscribers see phantom emits',
+        reason: 'Stop() only publishes when wasRunning (srv != nil); a '
+            'no-op down() must not reach subscribers',
       );
     });
 
-    test('onStateChange is a broadcast stream delivering to all subscribers',
+    test('onStateChange delivers to multiple subscribers (broadcast)',
         () async {
-      // setUp already has us stopped — attach both subscribers, then up().
-      final a = <NodeState>[];
-      final b = <NodeState>[];
-      final aSawRunning = Completer<void>();
-      final bSawRunning = Completer<void>();
+      // Two independent `firstWhere` subscriptions attached before the
+      // transition. Each creates its own listener on the stream; on a
+      // non-broadcast stream the second would throw `Bad state: Stream
+      // has already been listened to`. If they both resolve, both
+      // subscribers saw Running — i.e. broadcast delivery works.
+      final bothSawRunning = Future.wait([
+        tsnet.onStateChange.firstWhere((s) => s == NodeState.running),
+        tsnet.onStateChange.firstWhere((s) => s == NodeState.running),
+      ]);
 
-      final subA = tsnet.onStateChange.listen((s) {
-        a.add(s);
-        if (s == NodeState.running && !aSawRunning.isCompleted) {
-          aSawRunning.complete();
-        }
-      });
-      final subB = tsnet.onStateChange.listen((s) {
-        b.add(s);
-        if (s == NodeState.running && !bSawRunning.isCompleted) {
-          bSawRunning.complete();
-        }
-      });
-
-      try {
-        await tsnet.up(
-          hostname: 'dune-e2e-state-broadcast',
-          controlUrl: Uri.parse(controlUrl),
-        );
-        await Future.wait([aSawRunning.future, bSawRunning.future])
-            .timeout(const Duration(seconds: 10));
-      } finally {
-        await subA.cancel();
-        await subB.cancel();
-      }
-
-      // Both subscribers attached BEFORE up(), so both must have
-      // captured the Running event — proves broadcast delivery.
-      expect(a, contains(NodeState.running));
-      expect(b, contains(NodeState.running));
+      await reconnect();
+      await bothSawRunning.timeout(const Duration(seconds: 10));
     });
 
-    test(
-      'logout from running emits exactly [Stopped, NoState] and clears creds',
-      () async {
-        await _recordUntil(
-          tsnet,
-          NodeState.running,
-          () => tsnet.up(
-            hostname: 'dune-e2e-state-logout-setup',
-            authKey: authKey,
-            controlUrl: Uri.parse(controlUrl),
-          ),
-        );
-
-        final sequence = await _recordUntil(
-          tsnet,
-          NodeState.noState,
-          () => tsnet.logout(),
-        );
-
-        // IPN watcher is cancelled before Stop(); only the two synthetic
-        // publishes reach subscribers, and in this order.
-        expect(
-          sequence,
-          equals([NodeState.stopped, NodeState.noState]),
-          reason:
-              'logout from a running node must emit exactly Stopped then '
-              'NoState — Stop() publishes Stopped on teardown and Logout() '
-              'publishes NoState after wiping creds. Subscribers rely on '
-              'this full sequence to route back to the unauthenticated UI.',
-        );
-        expect((await tsnet.status()).state, NodeState.noState);
-
-        expect(
-          Directory(p.join(stateDir, 'tailscale')).existsSync(),
-          isFalse,
-          reason:
-              'logout() should remove the persisted tailscale state subdir',
-        );
-      },
-    );
-
-    test('logout from stopped emits exactly [NoState] (no phantom Stopped)',
+    test('logout from running emits [Stopped, NoState] and clears creds',
         () async {
-      // setUp leaves us in stopped with creds — directly the entry state
-      // this test covers. Prior-test damage (logout wiping creds) is
-      // repaired by setUp.
-      final sequence = await _recordUntil(
-        tsnet,
-        NodeState.noState,
-        () => tsnet.logout(),
+      await _recordUntil(tsnet, NodeState.running, bringUp);
+
+      final sequence =
+          await _recordUntil(tsnet, NodeState.noState, tsnet.logout);
+
+      expect(
+        sequence,
+        equals([NodeState.stopped, NodeState.noState]),
+        reason: 'logout from running must emit Stopped then NoState — '
+            'Stop() publishes Stopped on teardown, Logout() publishes '
+            'NoState after wiping creds. Subscribers rely on this full '
+            'sequence to route back to the unauthenticated UI.',
       );
+      expect((await tsnet.status()).state, NodeState.noState);
+      expect(
+        Directory(p.join(stateDir, 'tailscale')).existsSync(),
+        isFalse,
+        reason: 'logout() should remove the persisted tailscale state subdir',
+      );
+    });
+
+    test('logout from stopped emits [NoState] (no phantom Stopped)',
+        () async {
+      final sequence =
+          await _recordUntil(tsnet, NodeState.noState, tsnet.logout);
 
       expect(
         sequence,
         equals([NodeState.noState]),
-        reason:
-            "logout from an already-stopped node must not emit Stopped — "
-            "Stop()'s wasRunning guard skips the publish when srv is nil, "
-            'so the full sequence is just NoState',
+        reason: "logout from stopped must not emit Stopped — Stop()'s "
+            'wasRunning guard skips the publish when srv is nil',
       );
       expect((await tsnet.status()).state, NodeState.noState);
     });

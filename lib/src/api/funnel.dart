@@ -9,11 +9,11 @@ class Funnel {
   const Funnel();
 
   /// Publishes a TLS listener to the public internet at the node's Funnel
-  /// hostname.
+  /// hostname. Mirrors `tsnet.Server.ListenFunnel`.
   ///
   /// If [funnelOnly] is true, connections originating from the local
   /// tailnet are rejected — use when the endpoint is intended only for
-  /// external traffic.
-  Future<SecureServerSocket> bind(int port, {bool funnelOnly = false}) =>
-      throw UnimplementedError('funnel.bind not yet implemented');
+  /// external traffic. Matches Go's `FunnelOnly()` option.
+  Future<SecureServerSocket> listen(int port, {bool funnelOnly = false}) =>
+      throw UnimplementedError('funnel.listen not yet implemented');
 }

@@ -176,8 +176,8 @@ class Tailscale {
   /// Resolves a tailnet IP to the peer's identity (owner, hostname, tags).
   ///
   /// Useful for authorization decisions on incoming connections —
-  /// combine with [tcp.bind] and check tags before handling the
-  /// connection.
+  /// combine with [tcp] `.listen(...)` and check tags before handling
+  /// the connection.
   Future<PeerIdentity> whois(String ip) =>
       throw UnimplementedError('whois not yet implemented');
 

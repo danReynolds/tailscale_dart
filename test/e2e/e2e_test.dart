@@ -272,15 +272,21 @@ void main() {
   //     contract.
   //   - `down()` / `logout()` paths disable the IPN watcher before the
   //     synthetic publish, so the emitted sequence is fully deterministic
-  //     and asserted with `equals` (exact match). The worker drains the
-  //     watcher port before ack'ing the command, so `await down()` /
-  //     `await logout()` imply the state events have already been
-  //     delivered — tests can rely on this without post-hoc draining.
+  //     and asserted with `equals` (exact match).
+  //
+  // Note that `await tsnet.down()` resolves as soon as the teardown work
+  // is complete — the synthetic state event is delivered asynchronously
+  // to `onStateChange` subscribers, which is the right behavior for a
+  // Stream. For tests with exact-match assertions, a plain `await
+  // tsnet.down()` in the preamble would leak that event into the next
+  // subscription, so those tests use `_recordUntil(stopped, ...)` in the
+  // preamble to consume it. Tests with lenient `containsAllInOrder`
+  // assertions don't care and use a plain `await`.
   //
   // Placed at the end of the file because the logout tests wipe persisted
   // state and would break earlier tests that assume an up, authenticated
   // node. Each test inside attaches its stream listener BEFORE triggering
-  // the transition (see [_recordUntil]).
+  // the measured transition (see [_recordUntil]).
   group('onStateChange lifecycle', () {
     test('up emits Starting → Running with a fresh auth key', () async {
       await tsnet.down();
@@ -342,9 +348,10 @@ void main() {
     test(
       'up after down emits Starting → Running via persisted credentials',
       () async {
+        // Lenient assertion below — a plain await is fine; any leaked
+        // Stopped just ends up as a harmless prefix in the sequence.
         if ((await tsnet.status()).state == NodeState.running) {
-          await _recordUntil(
-            tsnet, NodeState.stopped, () => tsnet.down());
+          await tsnet.down();
         }
         expect(
           (await tsnet.status()).state,
@@ -401,8 +408,10 @@ void main() {
 
     test('onStateChange is a broadcast stream delivering to all subscribers',
         () async {
+      // Lenient assertion below (both subscribers just need to contain
+      // Running) — plain await is fine.
       if ((await tsnet.status()).state == NodeState.running) {
-        await _recordUntil(tsnet, NodeState.stopped, () => tsnet.down());
+        await tsnet.down();
       }
 
       final a = <NodeState>[];

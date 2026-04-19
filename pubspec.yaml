@@ -1,6 +1,6 @@
 name: tailscale
 description: Embed Tailscale userspace networking in any Dart or Flutter app. Join a tailnet, discover peers, and communicate over encrypted WireGuard tunnels — no Tailscale app required.
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/danReynolds/tailscale_dart
 homepage: https://github.com/danReynolds/tailscale_dart
 issue_tracker: https://github.com/danReynolds/tailscale_dart/issues

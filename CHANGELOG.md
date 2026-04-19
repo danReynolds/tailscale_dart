@@ -1,3 +1,9 @@
+## 0.2.0
+
+- tsnet.Server.Close() doesn't fire a terminal state through the IPN bus, so onStateChange subscribers drifted from the engine — stuck at the pre-stop value (usually Running) and their UI routing went stale.
+- Stop() now publishes Stopped, gated on srv != nil so a no-op stop stays silent. Logout() follows up with NoState after wiping creds (full sequence on logout from a running node: Stopped → NoState).
+- Rewrites the onStateChange lifecycle e2e group around a new _recordUntil helper that captures full emitted sequences, and adds coverage for the no-op-down guard, broadcast delivery to multiple subscribers, and the ordered Stopped → NoState emit on logout.
+
 ## 0.1.0
 
 - Initial release.
@@ -17,3 +23,4 @@
 - Supports iOS, Android, macOS, Linux, and Windows.
 - Works with Tailscale and self-hosted Headscale control servers.
 - Full test suite: unit, FFI integration, and E2E against Headscale in Docker.
+ 

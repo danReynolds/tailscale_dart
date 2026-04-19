@@ -38,7 +38,7 @@ void main() {
       // start a real server, but the fact that this doesn't throw
       // "symbol not found" proves the binding works.
       // The other tests below exercise the actual FFI calls.
-      expect(native.duneGetPeers, isNotNull);
+      expect(native.dunePeers, isNotNull);
     });
   });
 
@@ -65,17 +65,6 @@ void main() {
     });
   });
 
-  group('duneGetPeers (before start)', () {
-    test('returns empty array JSON when server not running', () {
-      final ptr = native.duneGetPeers();
-      final result = ptr.toDartString();
-      native.duneFree(ptr);
-
-      expect(result, '[]');
-      expect(jsonDecode(result), isEmpty);
-    });
-  });
-
   group('dunePeers (before start)', () {
     test('returns empty array JSON when server not running', () {
       final ptr = native.dunePeers();
@@ -84,16 +73,6 @@ void main() {
 
       expect(result, '[]');
       expect(jsonDecode(result), isEmpty);
-    });
-  });
-
-  group('duneGetLocalIP (before start)', () {
-    test('returns empty string when server not running', () {
-      final ptr = native.duneGetLocalIP();
-      final result = ptr.toDartString();
-      native.duneFree(ptr);
-
-      expect(result, '');
     });
   });
 

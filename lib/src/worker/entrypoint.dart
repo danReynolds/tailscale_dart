@@ -74,20 +74,29 @@ void _workerEntrypoint(SendPort sendPort) {
               }
             }
 
-            final hostnamePtr = hostname.toNativeUtf8();
-            final authKeyPtr = authKey.toNativeUtf8();
-            final controlUrlPtr = controlUrl.toNativeUtf8();
-            final stateDirPtr = stateDir.toNativeUtf8();
+            // Allocate inside the try so any partial-allocation failure
+            // (hypothetically OOM mid-sequence) still hits the finally and
+            // frees what we managed to allocate. The locals start null and
+            // the frees guard on nullness.
+            ffi.Pointer<Utf8>? hostnamePtr;
+            ffi.Pointer<Utf8>? authKeyPtr;
+            ffi.Pointer<Utf8>? controlUrlPtr;
+            ffi.Pointer<Utf8>? stateDirPtr;
 
             try {
+              hostnamePtr = hostname.toNativeUtf8();
+              authKeyPtr = authKey.toNativeUtf8();
+              controlUrlPtr = controlUrl.toNativeUtf8();
+              stateDirPtr = stateDir.toNativeUtf8();
+
               native.duneStopWatch();
 
               final result = _callNativeJson(
                 () => native.duneStart(
-                  hostnamePtr,
-                  authKeyPtr,
-                  controlUrlPtr,
-                  stateDirPtr,
+                  hostnamePtr!,
+                  authKeyPtr!,
+                  controlUrlPtr!,
+                  stateDirPtr!,
                 ),
                 onError: TailscaleUpException.new,
               ) as Map<String, dynamic>;
@@ -111,10 +120,10 @@ void _workerEntrypoint(SendPort sendPort) {
                 ),
               );
             } finally {
-              calloc.free(hostnamePtr);
-              calloc.free(authKeyPtr);
-              calloc.free(controlUrlPtr);
-              calloc.free(stateDirPtr);
+              if (hostnamePtr != null) calloc.free(hostnamePtr);
+              if (authKeyPtr != null) calloc.free(authKeyPtr);
+              if (controlUrlPtr != null) calloc.free(controlUrlPtr);
+              if (stateDirPtr != null) calloc.free(stateDirPtr);
             }
           case _WorkerListenCommand request:
             final result = _callNativeJson(

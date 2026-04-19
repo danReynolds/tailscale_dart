@@ -35,14 +35,6 @@ external ffi.Pointer<Utf8> duneStart(
 )
 external ffi.Pointer<Utf8> duneListen(int localPort, int tailnetPort);
 
-/// Returns a JSON array of online peer IPv4 addresses.
-@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneGetPeers')
-external ffi.Pointer<Utf8> duneGetPeers();
-
-/// Returns the local Tailscale IPv4 address, or "".
-@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneGetLocalIP')
-external ffi.Pointer<Utf8> duneGetLocalIP();
-
 /// Returns 1 if the state directory has a valid machine key, 0 otherwise.
 @ffi.Native<ffi.Int32 Function(ffi.Pointer<Utf8>)>(symbol: 'DuneHasState')
 external int duneHasState(ffi.Pointer<Utf8> stateDir);

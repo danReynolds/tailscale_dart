@@ -120,6 +120,26 @@ func StopWatch() {
 	}
 }
 
+// publishState posts a synthetic state-change event to Dart subscribers.
+//
+// Used by lib.go's Stop() and Logout() to notify subscribers that the engine
+// has transitioned to Stopped / NoState respectively. tsnet.Server.Close()
+// doesn't emit a terminal state through the IPN bus — WatchIPNBus just sees
+// an error and the goroutine exits silently — so without this, callers that
+// mirror state via onStateChange (e.g. the Dart TailscaleClient) get stuck
+// at the pre-stop value (usually `Running`) and their UI routing goes
+// stale.
+//
+// `state` must be one of the strings accepted by NodeState.parse on the Dart
+// side ("NoState", "NeedsLogin", "NeedsMachineAuth", "Starting", "Running",
+// "Stopped").
+func publishState(state string) {
+	postMessage(map[string]any{
+		"type":  "status",
+		"state": state,
+	})
+}
+
 func postMessage(msg map[string]any) {
 	b, err := json.Marshal(msg)
 	if err != nil {

@@ -100,17 +100,27 @@ void main() {
     } catch (_) {}
   });
 
-  test('up connects and reaches Running state', () async {
-    await tsnet.up(
-      hostname: 'dune-e2e-test',
-      authKey: authKey,
-      controlUrl: Uri.parse(controlUrl),
+  test('up connects and reaches Running through Starting', () async {
+    // Records the full emitted sequence (not just the Running terminal) so
+    // we catch skipped intermediates. Contract from `Tailscale.up` docs:
+    // a fresh login goes through `starting` on its way to `running`.
+    final sequence = await _recordUntil(
+      tsnet,
+      NodeState.running,
+      () => tsnet.up(
+        hostname: 'dune-e2e-test',
+        authKey: authKey,
+        controlUrl: Uri.parse(controlUrl),
+      ),
     );
 
-    // up() starts the node — wait for it to reach Running via state stream.
-    await tsnet.onStateChange
-        .firstWhere((s) => s == NodeState.running)
-        .timeout(const Duration(seconds: 30));
+    expect(
+      sequence,
+      containsAllInOrder([NodeState.starting, NodeState.running]),
+      reason:
+          'a fresh up() must emit Starting before Running — skipping '
+          'Starting leaves UI subscribers without the "connecting" state',
+    );
 
     final status = await tsnet.status();
     expect(status.ipv4, startsWith('100.'));
@@ -243,22 +253,281 @@ void main() {
     });
   });
 
-  test('down shuts down cleanly', () async {
-    await tsnet.down();
+  // Every transition the lifecycle APIs promise in docs, verified end to
+  // end through `onStateChange`. Subscribers that mirror state via this
+  // stream (e.g. Dart app layers binding UI routing to engine state) depend
+  // on every documented transition actually firing — a missed emit leaves
+  // their mirror stuck and the UI goes out of sync.
+  //
+  // Two assertion flavors, matching what the implementation produces:
+  //   - `up()` paths: the IPN watcher attaches with `NotifyInitialState`
+  //     after `duneStart` kicks the engine, so the first observed event is
+  //     whatever state the engine is in at attach time (empirically
+  //     `NoState` for tsnet.Server, sometimes `NeedsLogin` on a truly
+  //     empty state dir) followed by the natural Starting→Running
+  //     progression. Assertions use `containsAllInOrder([starting,
+  //     running])` — the leading state the watcher catches is a tsnet
+  //     implementation detail and doesn't belong in the test contract.
+  //   - `down()` / `logout()` paths cancel the IPN watcher before the
+  //     synthetic publish, so the sequence is fully deterministic and
+  //     asserted with `equals` (exact match).
+  //
+  // [setUp] normalizes every test to enter with the engine `stopped`,
+  // credentials on disk, and no in-flight stream events. Test bodies then
+  // read linearly — arrange, act, assert — with no defensive preambles.
+  //
+  // Placed at the end of the file because the logout tests wipe persisted
+  // state; setUp re-establishes them for the next test, but earlier
+  // groups outside this one can't rely on that repair.
+  group('onStateChange lifecycle', () {
+    const hostname = 'dune-e2e-lifecycle';
+    Future<void> bringUp() => tsnet.up(
+          hostname: hostname,
+          authKey: authKey,
+          controlUrl: Uri.parse(controlUrl),
+        );
+    Future<void> reconnect() => tsnet.up(
+          hostname: hostname,
+          controlUrl: Uri.parse(controlUrl),
+        );
+
+    setUp(() async {
+      // Route each normalization transition through [_recordUntil] so its
+      // events are captured by setUp's subscription instead of leaking
+      // into the test's subscription.
+      switch ((await tsnet.status()).state) {
+        case NodeState.noState:
+          // Logout wiped creds. Re-establish and shut down.
+          await _recordUntil(tsnet, NodeState.running, bringUp);
+          await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
+        case NodeState.running:
+          await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
+        case NodeState.stopped:
+          break;
+        case final unexpected:
+          fail('unexpected entry state for lifecycle setUp: $unexpected');
+      }
+    });
+
+    test('up with auth key emits Starting → Running', () async {
+      final sequence = await _recordUntil(tsnet, NodeState.running, bringUp);
+
+      expect(
+        sequence,
+        containsAllInOrder([NodeState.starting, NodeState.running]),
+        reason: 'UI subscribers depend on Starting to show a "connecting" '
+            'state before Running',
+      );
+      expect((await tsnet.status()).state, NodeState.running);
+    });
+
+    test('down from running emits [Stopped]', () async {
+      await _recordUntil(tsnet, NodeState.running, bringUp);
+
+      final sequence =
+          await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
+
+      expect(
+        sequence,
+        equals([NodeState.stopped]),
+        reason: 'down() should emit exactly the synthetic Stopped from '
+            'Stop(); extra events mean the IPN watcher is leaking '
+            'transitions across the teardown boundary',
+      );
+      expect((await tsnet.status()).state, NodeState.stopped);
+    });
+
+    test('up without auth key reconnects via persisted credentials',
+        () async {
+      final sequence = await _recordUntil(tsnet, NodeState.running, reconnect);
+
+      expect(
+        sequence,
+        containsAllInOrder([NodeState.starting, NodeState.running]),
+        reason: 'reconnect must still transition through Starting — same '
+            'UI contract as a fresh login',
+      );
+      expect((await tsnet.status()).state, NodeState.running);
+    });
+
+    test('down from stopped is silent (wasRunning guard)', () async {
+      final emits = <NodeState>[];
+      final sub = tsnet.onStateChange.listen(emits.add);
+
+      await tsnet.down();
+      // Give any (phantom) state event time to round-trip through the
+      // worker→main isolate channel before asserting absence.
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await sub.cancel();
+
+      expect(
+        emits,
+        isEmpty,
+        reason: 'Stop() only publishes when wasRunning (srv != nil); a '
+            'no-op down() must not reach subscribers',
+      );
+    });
+
+    test('onStateChange delivers to multiple subscribers (broadcast)',
+        () async {
+      // Two independent `firstWhere` subscriptions attached before the
+      // transition. Each creates its own listener on the stream; on a
+      // non-broadcast stream the second would throw `Bad state: Stream
+      // has already been listened to`. If they both resolve, both
+      // subscribers saw Running — i.e. broadcast delivery works.
+      final bothSawRunning = Future.wait([
+        tsnet.onStateChange.firstWhere((s) => s == NodeState.running),
+        tsnet.onStateChange.firstWhere((s) => s == NodeState.running),
+      ]);
+
+      await reconnect();
+      await bothSawRunning.timeout(const Duration(seconds: 10));
+    });
+
+    test('logout from running emits [Stopped, NoState] and clears creds',
+        () async {
+      await _recordUntil(tsnet, NodeState.running, bringUp);
+
+      final sequence =
+          await _recordUntil(tsnet, NodeState.noState, tsnet.logout);
+
+      expect(
+        sequence,
+        equals([NodeState.stopped, NodeState.noState]),
+        reason: 'logout from running must emit Stopped then NoState — '
+            'Stop() publishes Stopped on teardown, Logout() publishes '
+            'NoState after wiping creds. Subscribers rely on this full '
+            'sequence to route back to the unauthenticated UI.',
+      );
+      expect((await tsnet.status()).state, NodeState.noState);
+      expect(
+        Directory(p.join(stateDir, 'tailscale')).existsSync(),
+        isFalse,
+        reason: 'logout() should remove the persisted tailscale state subdir',
+      );
+    });
+
+    test('logout from stopped emits [NoState] (no phantom Stopped)',
+        () async {
+      final sequence =
+          await _recordUntil(tsnet, NodeState.noState, tsnet.logout);
+
+      expect(
+        sequence,
+        equals([NodeState.noState]),
+        reason: "logout from stopped must not emit Stopped — Stop()'s "
+            'wasRunning guard skips the publish when srv is nil',
+      );
+      expect((await tsnet.status()).state, NodeState.noState);
+    });
+
+    // Consecutive-duplicate scenarios — the stream filters these via
+    // `Stream.distinct` in [Tailscale.onStateChange]. Each test attaches a
+    // single subscription across two transitions so the filter's internal
+    // "previous" state carries over; a single subscription on a fresh
+    // distinct stream would only see the second event and wouldn't prove
+    // the filter fired.
+
+    test('up() while already running does not re-emit Running', () async {
+      var runningCount = 0;
+      final sub = tsnet.onStateChange.listen((s) {
+        if (s == NodeState.running) runningCount++;
+      });
+
+      // First up — real transition, emits Running.
+      await _recordUntil(tsnet, NodeState.running, bringUp);
+      // Second up without an auth key — Go's Start returns early (srv
+      // != nil, authKey == ""), but the worker still runs
+      // duneStopWatch + duneStartWatch. The new watcher's
+      // NotifyInitialState re-emits Running, which onStateChange
+      // deduplicates.
+      await reconnect();
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await sub.cancel();
+
+      expect(
+        runningCount,
+        1,
+        reason: 'a no-op up() must not surface a second Running to the '
+            'stream — distinct() filters the watcher reattach duplicate',
+      );
+    });
+
+    test('logout() twice does not re-emit NoState', () async {
+      // Bring up *before* subscribing so the IPN watcher's initial
+      // NoState emit (during engine startup) doesn't show up in our
+      // count — we want to isolate the logout emits.
+      await _recordUntil(tsnet, NodeState.running, bringUp);
+
+      var noStateCount = 0;
+      final sub = tsnet.onStateChange.listen((s) {
+        if (s == NodeState.noState) noStateCount++;
+      });
+
+      // First logout — emits Stopped then NoState. Both pass (different
+      // from each other; _previous starts at null for this fresh
+      // distinct stream).
+      await _recordUntil(tsnet, NodeState.noState, tsnet.logout);
+
+      // Second logout — srv already nil (wasRunning guard skips Stop's
+      // Stopped publish), state dir already gone, but Logout still
+      // calls publishState("NoState"). distinct() filters the duplicate
+      // because _previous is NoState from the first logout.
+      await tsnet.logout();
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await sub.cancel();
+
+      expect(
+        noStateCount,
+        1,
+        reason: 'a redundant logout() must not surface a second NoState — '
+            'distinct() filters publishState("NoState") when it matches '
+            'the most recently emitted state',
+      );
+    });
+  });
+}
+
+/// Records every [NodeState] emitted on `onStateChange` while [action] runs,
+/// stopping once [terminal] is observed. Attaches the listener *before*
+/// invoking [action] so events can't slip past due to subscription timing.
+///
+/// Times out with a [TimeoutException] that includes the partial sequence —
+/// the partial is load-bearing when debugging a stuck transition ("we
+/// emitted Starting but never Running" is a very different failure from "we
+/// never emitted anything").
+///
+/// Default 30s because the up paths wait on real network round-trips to
+/// Headscale (first-boot auth can be the slow leg on CI runners). The
+/// terminal-state paths (Stopped, NoState) are synthetic and nearly
+/// instant, so the extra headroom costs nothing when the test succeeds.
+Future<List<NodeState>> _recordUntil(
+  Tailscale tsnet,
+  NodeState terminal,
+  Future<void> Function() action, {
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  final sequence = <NodeState>[];
+  final done = Completer<void>();
+
+  final sub = tsnet.onStateChange.listen((s) {
+    sequence.add(s);
+    if (s == terminal && !done.isCompleted) done.complete();
   });
 
-  test('logout clears persisted state', () async {
-    await tsnet.up(
-      hostname: 'dune-e2e-test',
-      authKey: authKey,
-      controlUrl: Uri.parse(controlUrl),
+  try {
+    await action();
+    await done.future.timeout(
+      timeout,
+      onTimeout: () => throw TimeoutException(
+        'onStateChange never emitted $terminal; '
+        'got [${sequence.join(' → ')}]',
+      ),
     );
-
-    await tsnet.logout();
-
-    expect(Directory(stateDir).existsSync(), isTrue);
-    expect(Directory(p.join(stateDir, 'tailscale')).existsSync(), isFalse);
-  });
+    return sequence;
+  } finally {
+    await sub.cancel();
+  }
 }
 
 /// Handle to a `peer_main.dart` subprocess that has reached Running and

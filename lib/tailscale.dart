@@ -75,11 +75,17 @@ class Tailscale {
 
   /// Emits the new [NodeState] whenever the node's lifecycle state changes.
   ///
+  /// Consecutive duplicates are filtered via `Stream.distinct`: a no-op
+  /// [up] (srv already running) reattaches the IPN bus watcher with
+  /// `NotifyInitialState`, which re-emits the current state; similarly,
+  /// a redundant [logout] would post `NoState` a second time. Subscribers
+  /// only see events for actual transitions.
+  ///
   /// Use [status] to fetch the full [TailscaleStatus] snapshot (IPs, health,
   /// etc.) when needed.
   ///
   /// Errors are reported separately through [onError].
-  Stream<NodeState> get onStateChange => _stateController.stream;
+  Stream<NodeState> get onStateChange => _stateController.stream.distinct();
 
   /// Background runtime errors pushed from the embedded node.
   ///

@@ -32,7 +32,7 @@ var (
 	mu sync.Mutex // protects srv, store, proxyPort, proxyLn, reverseProxyLn, proxyAuthToken
 
 	srv            *tsnet.Server
-	store          *SQLiteStore // owned by srv; closed alongside it in stopLocked
+	store          *SQLiteStore // package-owned; tsnet.Server doesn't close its Store, so we do in stopLocked
 	proxyPort      int
 	proxyLn        net.Listener // outgoing proxy listener
 	proxyAuthToken string
@@ -291,13 +291,15 @@ func Listen(localPort, tailnetPort int) (int, error) {
 	}
 
 	mu.Lock()
-	// Re-check srv under lock — a concurrent Stop() after our earlier
-	// read but before s.Listen's completion would leave us holding a
-	// listener attached to a torn-down server.
-	if srv == nil {
+	// Re-check srv IDENTITY under lock (not just non-nil): a concurrent
+	// Stop() would have nulled srv, but a Stop()+Start() would replace
+	// it with a different instance. In either case `ln` is attached to
+	// the old `s` we captured before lock — committing it to package
+	// state would bind the reverse proxy to a server we no longer own.
+	if srv != s {
 		mu.Unlock()
 		ln.Close()
-		return 0, fmt.Errorf("Listen raced with Stop")
+		return 0, fmt.Errorf("Listen raced with Stop or server replacement")
 	}
 	if reverseProxyLn != nil {
 		mu.Unlock()

@@ -38,7 +38,7 @@ void main() {
       // start a real server, but the fact that this doesn't throw
       // "symbol not found" proves the binding works.
       // The other tests below exercise the actual FFI calls.
-      expect(native.dunePeers, isNotNull);
+      expect(native.duneStart, isNotNull);
     });
   });
 

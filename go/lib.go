@@ -29,9 +29,10 @@ import (
 var LogLevel int32 // default 0 (silent)
 
 var (
-	mu sync.Mutex // protects srv, proxyPort, proxyLn, reverseProxyLn, proxyAuthToken
+	mu sync.Mutex // protects srv, store, proxyPort, proxyLn, reverseProxyLn, proxyAuthToken
 
 	srv            *tsnet.Server
+	store          *SQLiteStore // package-owned; tsnet.Server doesn't close its Store, so we do in stopLocked
 	proxyPort      int
 	proxyLn        net.Listener // outgoing proxy listener
 	proxyAuthToken string
@@ -131,11 +132,19 @@ func stopLocked() {
 		proxyAuthToken = ""
 		reverseProxyTailnetPort = 0
 	}
+
+	// tsnet.Server doesn't own the Store — the caller does — so Close()
+	// on srv doesn't close our SQLiteStore. Without this, every up/down
+	// cycle leaks a *sql.DB connection pool.
+	if store != nil {
+		store.Close()
+		store = nil
+	}
 }
 
 // Start initializes the Tailscale node and starts the outgoing HTTP proxy.
 // It returns the proxy port number and per-session proxy auth token.
-func Start(hostname, authKey, controlURL, stateDir string) (int, string, error) {
+func Start(hostname, authKey, controlURL, stateDir string) (port int, token string, err error) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -164,17 +173,17 @@ func Start(hostname, authKey, controlURL, stateDir string) (int, string, error) 
 	}
 
 	statePath := stateDir + "/state.db"
-	store, err := NewSQLiteStore(statePath)
+	newStore, err := NewSQLiteStore(statePath)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to create sqlite store: %v", err)
 	}
 
-	srv = &tsnet.Server{
+	newSrv := &tsnet.Server{
 		Hostname:   hostname,
 		AuthKey:    authKey,
 		ControlURL: controlURL,
 		Dir:        stateDir,
-		Store:      store,
+		Store:      newStore,
 		Logf: func(format string, args ...any) {
 			if atomic.LoadInt32(&LogLevel) >= 2 {
 				log.Printf("TSNET: "+format, args...)
@@ -182,33 +191,46 @@ func Start(hostname, authKey, controlURL, stateDir string) (int, string, error) 
 		},
 	}
 
-	if err := srv.Start(); err != nil {
-		if strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "netlink") {
-			logInfo("Ignoring expected Android permission error: %v", err)
+	// If we fail before committing newSrv/newStore/outLn to package state,
+	// release their resources. The named return `err` is the signal — any
+	// `return ..., err` with a non-nil error triggers cleanup.
+	var outLn net.Listener
+	defer func() {
+		if err == nil {
+			return
+		}
+		if outLn != nil {
+			outLn.Close()
+		}
+		newSrv.Close()
+		newStore.Close()
+	}()
+
+	if startErr := newSrv.Start(); startErr != nil {
+		if strings.Contains(startErr.Error(), "permission denied") || strings.Contains(startErr.Error(), "netlink") {
+			logInfo("Ignoring expected Android permission error: %v", startErr)
 		} else {
-			srv.Close()
-			srv = nil
-			return 0, "", fmt.Errorf("failed to start tsnet: %v", err)
+			return 0, "", fmt.Errorf("failed to start tsnet: %v", startErr)
 		}
 	}
 
-	token, err := newProxyAuthToken()
+	newToken, err := newProxyAuthToken()
 	if err != nil {
-		srv.Close()
-		srv = nil
 		return 0, "", fmt.Errorf("failed to create proxy auth token: %v", err)
 	}
 
 	// Start the outgoing HTTP proxy (Dart → tailnet peers)
-	outLn, err := net.Listen("tcp", "127.0.0.1:0")
+	outLn, err = net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		srv.Close()
-		srv = nil
 		return 0, "", fmt.Errorf("failed to listen for outgoing proxy: %v", err)
 	}
+
+	// Commit to package state only after every allocation succeeded.
+	srv = newSrv
+	store = newStore
 	proxyLn = outLn
 	proxyPort = outLn.Addr().(*net.TCPAddr).Port
-	proxyAuthToken = token
+	proxyAuthToken = newToken
 	go http.Serve(outLn, http.HandlerFunc(handleOutgoingProxy))
 
 	return proxyPort, proxyAuthToken, nil
@@ -269,6 +291,16 @@ func Listen(localPort, tailnetPort int) (int, error) {
 	}
 
 	mu.Lock()
+	// Re-check srv IDENTITY under lock (not just non-nil): a concurrent
+	// Stop() would have nulled srv, but a Stop()+Start() would replace
+	// it with a different instance. In either case `ln` is attached to
+	// the old `s` we captured before lock — committing it to package
+	// state would bind the reverse proxy to a server we no longer own.
+	if srv != s {
+		mu.Unlock()
+		ln.Close()
+		return 0, fmt.Errorf("Listen raced with Stop or server replacement")
+	}
 	if reverseProxyLn != nil {
 		mu.Unlock()
 		ln.Close()
@@ -435,64 +467,6 @@ func handleReverseProxy(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// GetLocalIP returns the first IPv4 address of the local node.
-func GetLocalIP() string {
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
-		return ""
-	}
-	lc, err := s.LocalClient()
-	if err != nil {
-		return ""
-	}
-	status, err := lc.Status(context.Background())
-	if err != nil {
-		return ""
-	}
-	for _, ip := range status.TailscaleIPs {
-		if ip.Is4() {
-			return ip.String()
-		}
-	}
-	return ""
-}
-
-// GetPeers returns a JSON string list of online peer IPv4 addresses.
-func GetPeers() string {
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
-		return "[]"
-	}
-
-	lc, err := s.LocalClient()
-	if err != nil {
-		return "[]"
-	}
-
-	status, err := lc.Status(context.Background())
-	if err != nil {
-		return "[]"
-	}
-
-	var peers []string
-	for _, peer := range status.Peer {
-		if !peer.Online {
-			continue
-		}
-		for _, ip := range peer.TailscaleIPs {
-			if ip.Is4() {
-				peers = append(peers, ip.String())
-			}
-		}
-	}
-	jsonBytes, _ := json.Marshal(peers)
-	return string(jsonBytes)
-}
-
 // DuneStatus returns the local-node status JSON from the LocalAPI.
 func DuneStatus() string {
 	mu.Lock()
@@ -555,12 +529,6 @@ func jsonError(err error) string {
 func logInfo(format string, args ...any) {
 	if atomic.LoadInt32(&LogLevel) >= 2 {
 		log.Printf("TSNET: "+format, args...)
-	}
-}
-
-func logError(format string, args ...any) {
-	if atomic.LoadInt32(&LogLevel) >= 1 {
-		log.Printf("TSNET ERROR: "+format, args...)
 	}
 }
 

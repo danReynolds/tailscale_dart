@@ -6,3 +6,7 @@ pubspec.lock
 go/libdune_tsnet.*
 go/libtailscale.*
 go/build/
+
+# Claude Code session/worktree state — runtime-only, not shared
+.claude/scheduled_tasks.lock
+.claude/worktrees/

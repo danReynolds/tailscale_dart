@@ -43,16 +43,6 @@ func DuneListen(localPort C.int, tailnetPort C.int) *C.char {
 	return C.CString(fmt.Sprintf(`{"listenPort": %d}`, port))
 }
 
-//export DuneGetPeers
-func DuneGetPeers() *C.char {
-	return C.CString(tailscale.GetPeers())
-}
-
-//export DuneGetLocalIP
-func DuneGetLocalIP() *C.char {
-	return C.CString(tailscale.GetLocalIP())
-}
-
 //export DuneHasState
 func DuneHasState(stateDir *C.char) C.int {
 	dir := C.GoString(stateDir)

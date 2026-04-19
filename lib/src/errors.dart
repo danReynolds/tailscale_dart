@@ -43,7 +43,7 @@ class TailscaleOperationException extends TailscaleException {
 }
 
 /// Thrown when `up()` fails before the node reaches Running.
-class TailscaleUpException extends TailscaleOperationException {
+final class TailscaleUpException extends TailscaleOperationException {
   const TailscaleUpException(String message, {Object? cause})
       : super('up', message, cause: cause);
 }

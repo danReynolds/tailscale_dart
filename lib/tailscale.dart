@@ -28,7 +28,7 @@ export 'src/api/prefs.dart';
 export 'src/api/profiles.dart';
 export 'src/api/serve.dart';
 export 'src/api/taildrop.dart';
-export 'src/api/tcp.dart' hide createTcp;
+export 'src/api/tcp.dart' hide createTcp, TcpDialFn, TcpBindFn, TcpUnbindFn;
 export 'src/api/tls.dart';
 export 'src/api/udp.dart';
 export 'src/errors.dart';

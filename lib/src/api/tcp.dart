@@ -6,25 +6,17 @@ import 'package:meta/meta.dart';
 
 import '../errors.dart';
 
-@internal
-Tcp createTcp({
-  required Future<({int loopbackPort, String token})> Function(
-    String host,
-    int port,
-    Duration? timeout,
-  ) dialFn,
-  required Future<int> Function(
-    int tailnetPort,
-    String tailnetHost,
-    int loopbackPort,
-  ) bindFn,
-  required Future<void> Function(int loopbackPort) unbindFn,
-}) =>
-    _Tcp(
-      dialFn: dialFn,
-      bindFn: bindFn,
-      unbindFn: unbindFn,
-    );
+typedef TcpDialFn = Future<({int loopbackPort, String token})> Function(
+  String host,
+  int port,
+  Duration? timeout,
+);
+typedef TcpBindFn = Future<int> Function(
+  int tailnetPort,
+  String tailnetHost,
+  int loopbackPort,
+);
+typedef TcpUnbindFn = Future<void> Function(int loopbackPort);
 
 /// Raw TCP primitives between tailnet peers — peer-to-peer connections
 /// tunneled over WireGuard, no TLS, no HTTP framing.
@@ -97,133 +89,87 @@ abstract class Tcp {
   Future<ServerSocket> bind(int port, {String? host});
 }
 
-final class _Tcp implements Tcp {
-  _Tcp({
-    required Future<({int loopbackPort, String token})> Function(
-      String host,
-      int port,
-      Duration? timeout,
-    ) dialFn,
-    required Future<int> Function(
-      int tailnetPort,
-      String tailnetHost,
-      int loopbackPort,
-    ) bindFn,
-    required Future<void> Function(int loopbackPort) unbindFn,
-  })  : _dialFn = dialFn,
-        _bindFn = bindFn,
-        _unbindFn = unbindFn;
+/// Library-internal factory. Reach via `Tailscale.instance.tcp`.
+@internal
+Tcp createTcp({
+  required TcpDialFn dialFn,
+  required TcpBindFn bindFn,
+  required TcpUnbindFn unbindFn,
+}) =>
+    _Tcp(dialFn, bindFn, unbindFn);
 
-  final Future<({int loopbackPort, String token})> Function(
-    String host,
-    int port,
-    Duration? timeout,
-  ) _dialFn;
-  final Future<int> Function(
-    int tailnetPort,
-    String tailnetHost,
-    int loopbackPort,
-  ) _bindFn;
-  final Future<void> Function(int loopbackPort) _unbindFn;
+final class _Tcp implements Tcp {
+  _Tcp(this._dial, this._bind, this._unbind);
+
+  final TcpDialFn _dial;
+  final TcpBindFn _bind;
+  final TcpUnbindFn _unbind;
 
   @override
   Future<Socket> dial(String host, int port, {Duration? timeout}) async {
-    Stopwatch? stopwatch;
-    if (timeout != null) {
-      stopwatch = Stopwatch()..start();
-    }
+    final deadline = timeout == null ? null : DateTime.now().add(timeout);
+    final (:loopbackPort, :token) = await _dial(host, port, timeout);
 
-    final (:loopbackPort, :token) = await _dialFn(host, port, timeout);
-
-    late Socket socket;
+    Socket? socket;
     try {
-      final remaining = _remainingTimeout(stopwatch, timeout);
       socket = await Socket.connect(
         InternetAddress.loopbackIPv4,
         loopbackPort,
-        timeout: remaining,
+        timeout: _remaining(deadline),
       );
-    } on TailscaleTcpException {
-      // Budget already exhausted by _remainingTimeout — propagate as-is.
-      rethrow;
-    } catch (e) {
-      throw TailscaleTcpException(
-        'Failed to connect to loopback bridge on port $loopbackPort',
-        cause: e,
-      );
-    }
-
-    try {
-      _remainingTimeout(stopwatch, timeout);
       socket.add(utf8.encode(token));
       await socket.flush();
-    } on TailscaleTcpException {
-      await socket.close();
-      rethrow;
+      return socket;
     } catch (e) {
-      await socket.close();
+      await socket?.close().catchError((_) {});
+      if (e is TailscaleTcpException) rethrow;
       throw TailscaleTcpException(
-        'Failed to send bridge auth token',
+        'tcp.dial loopback bridge failed on port $loopbackPort',
         cause: e,
       );
     }
-
-    return socket;
   }
 
-  static Duration? _remainingTimeout(
-    Stopwatch? stopwatch,
-    Duration? totalTimeout,
-  ) {
-    if (stopwatch == null || totalTimeout == null) return null;
-    final remaining = totalTimeout - stopwatch.elapsed;
-    if (remaining <= Duration.zero) {
+  @override
+  Future<ServerSocket> bind(int port, {String? host}) async {
+    final loopback = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    try {
+      final tailnetPort = await _bind(port, host ?? '', loopback.port);
+      return _UnbindingServerSocket(
+        loopback,
+        tailnetPort,
+        () => _unbind(loopback.port),
+      );
+    } catch (e) {
+      await loopback.close();
+      if (e is TailscaleException) rethrow;
       throw TailscaleTcpException(
+        'tcp.bind failed for tailnet port $port',
+        cause: e,
+      );
+    }
+  }
+
+  static Duration? _remaining(DateTime? deadline) {
+    if (deadline == null) return null;
+    final remaining = deadline.difference(DateTime.now());
+    if (remaining <= Duration.zero) {
+      throw const TailscaleTcpException(
         'tcp.dial exceeded its timeout budget before the loopback bridge '
         'handshake completed.',
       );
     }
     return remaining;
   }
-
-  @override
-  Future<ServerSocket> bind(int port, {String? host}) async {
-    final loopback = await ServerSocket.bind(
-      InternetAddress.loopbackIPv4,
-      0,
-    );
-
-    int boundTailnetPort;
-    try {
-      boundTailnetPort = await _bindFn(port, host ?? '', loopback.port);
-    } catch (e) {
-      await loopback.close();
-      if (e is TailscaleException) rethrow;
-      throw TailscaleTcpException(
-        'Failed to bind tailnet port $port',
-        cause: e,
-      );
-    }
-
-    return _UnbindingServerSocket(
-      loopback,
-      boundTailnetPort,
-      () => _unbindFn(loopback.port),
-    );
-  }
 }
 
 /// `ServerSocket` delegate that surfaces the tailnet port as
-/// [ServerSocket.port] and runs an extra teardown hook after
-/// `close()` so the Go-side tailnet listener is torn down when the
-/// caller closes their handle.
+/// [ServerSocket.port] and fires an unbind hook after `close()` so the
+/// Go-side tailnet listener tears down with the caller's handle.
 class _UnbindingServerSocket extends StreamView<Socket>
     implements ServerSocket {
-  _UnbindingServerSocket(
-    this._delegate,
-    this._tailnetPort,
-    this._onClose,
-  ) : super(_delegate);
+  _UnbindingServerSocket(this._delegate, this._tailnetPort, this._onClose)
+      : super(_delegate);
 
   final ServerSocket _delegate;
   final int _tailnetPort;
@@ -238,7 +184,6 @@ class _UnbindingServerSocket extends StreamView<Socket>
   @override
   Future<ServerSocket> close() async {
     await _delegate.close();
-    // Best-effort — the Go side may already be down.
     try {
       await _onClose();
     } catch (_) {}

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,37 +74,49 @@ func TcpDial(host string, port int, timeout time.Duration) (int, string, error) 
 		ctx, cancel = context.WithDeadline(ctx, overallDeadline)
 		defer cancel()
 	}
-	tailConn, err := s.Dial(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	// Single-defer cleanup: anything returned as error rolls back any
+	// resource we acquired before the failure point.
+	var (
+		tailConn net.Conn
+		ln       net.Listener
+		success  bool
+	)
+	defer func() {
+		if success {
+			return
+		}
+		if ln != nil {
+			ln.Close()
+		}
+		if tailConn != nil {
+			tailConn.Close()
+		}
+	}()
+
+	tailConn, err := s.Dial(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return 0, "", fmt.Errorf("tailnet dial %s:%d: %w", host, port, err)
 	}
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err = net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		tailConn.Close()
 		return 0, "", fmt.Errorf("open loopback bridge listener: %w", err)
 	}
-
 	token, err := randomHexToken(16)
 	if err != nil {
-		ln.Close()
-		tailConn.Close()
 		return 0, "", fmt.Errorf("generate bridge auth token: %w", err)
 	}
 
-	loopbackPort := ln.Addr().(*net.TCPAddr).Port
 	bridgeDeadline := time.Now().Add(loopbackAcceptTimeout)
 	if !overallDeadline.IsZero() && overallDeadline.Before(bridgeDeadline) {
 		bridgeDeadline = overallDeadline
 	}
-	if !bridgeDeadline.After(time.Now()) {
-		ln.Close()
-		tailConn.Close()
+	if time.Until(bridgeDeadline) <= 0 {
 		return 0, "", errors.New("tcp dial timeout elapsed before loopback bridge was ready")
 	}
 
+	loopbackPort := ln.Addr().(*net.TCPAddr).Port
 	go runDialBridgeUntil(ln, tailConn, token, bridgeDeadline)
-
+	success = true
 	return loopbackPort, token, nil
 }
 
@@ -284,10 +297,9 @@ func TcpBind(tailnetPort int, tailnetHost string, loopbackPort int) (int, error)
 		return 0, errors.New("TcpBind called before Start")
 	}
 
-	addr := fmt.Sprintf(":%d", tailnetPort)
-	if tailnetHost != "" {
-		addr = net.JoinHostPort(tailnetHost, fmt.Sprintf("%d", tailnetPort))
-	}
+	// JoinHostPort with an empty host produces ":<port>", which is
+	// what tsnet wants for "all interfaces".
+	addr := net.JoinHostPort(tailnetHost, strconv.Itoa(tailnetPort))
 
 	ln, err := s.Listen("tcp", addr)
 	if err != nil {

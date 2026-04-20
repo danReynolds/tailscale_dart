@@ -13,6 +13,17 @@ example. For the forward-looking phase plan, see
 **Convention:** all examples assume `final tsnet = Tailscale.instance;`
 and that [`Tailscale.init`](#lifecycle-top-level) has already been called.
 
+**Implementation model:** this package aligns to both upstream
+`tsnet.Server` and upstream `local.Client`. Transport primitives such as
+HTTP, TCP, UDP, TLS, Funnel, and future service listeners follow
+`tsnet`; node introspection, diagnostics, prefs, profiles, serve
+config, exit nodes, and taildrop follow LocalAPI via `local.Client`.
+
+**Version note:** the current repo pin is `tailscale.com v1.92.2`. Some
+upstream APIs documented below as planned alignment work, especially
+Tailscale Services hosting via `tsnet.Server.ListenService`, require a
+module bump before they can land here.
+
 ## Namespace overview
 
 | Namespace               | Feature                                                           | Completed in     |
@@ -84,6 +95,11 @@ an approximation of one.
 
 **Completed in:** Phase 3 — depends on the shared loopback-bridge
 helper in Go, which also unblocks TLS / UDP / Funnel / Taildrop.
+
+**Tracked upstream gap:** `tsnet.Server.ListenService` exists upstream
+as of `tailscale.com v1.94.1`, but is not yet exposed here. The roadmap
+tracks that as a future `tcp`-aligned listener once the module pin is
+bumped; it should not force a separate `services` namespace by itself.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -168,8 +184,9 @@ writer lands first, `setConfig` throws `TailscaleServeException` with
 
 **Completed in:** Phase 9. **Depends on:** Phase 2 (value types).
 **Also:** Phase 9 bumps the `tailscale.com` Go module pin to pick up
-`Services` / `AllowFunnel` / `Foreground` / `ListenService`. Headscale
-doesn't support Serve; live-Tailscale test only.
+`Services` / `AllowFunnel` / `Foreground` and the newer
+service-adjacent APIs. Headscale doesn't support Serve; live-Tailscale
+test only.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |

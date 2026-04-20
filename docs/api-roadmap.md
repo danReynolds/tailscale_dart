@@ -18,6 +18,11 @@ clean up API-hygiene issues surfaced in design review.
 Strict ordering: **parity with today first**, hygiene second, new
 capabilities third.
 
+Implementation alignment is intentional: data-plane sockets and
+listeners should stay close to `tsnet.Server`, while status,
+diagnostics, prefs, profiles, serve config, and file-transfer features
+should stay close to `local.Client` and the LocalAPI.
+
 ---
 
 ## Motivation
@@ -75,6 +80,26 @@ comments.
    Callers pattern-match on type, not string.
 7. **Identity by stable ID, not key material.** Public keys rotate on
    reinstall; `StableNodeID` / `PeerStatus` references don't.
+
+## Upstream alignment
+
+This package is aligned to two upstream surfaces, not one:
+
+- **`tsnet.Server` for embedded data-plane primitives.** Outbound and
+  inbound transport APIs should mirror `HTTPClient`, `Dial`, `Listen`,
+  `ListenPacket`, `ListenTLS`, `ListenFunnel`, and future transport
+  listeners such as `ListenService`.
+- **`local.Client` for LocalAPI-backed control-plane features.**
+  `whois`, diagnostics, prefs, exit-node control, profiles, serve
+  config, taildrop, and the generic escape hatch should map to typed
+  LocalAPI operations rather than inventing a parallel control model in
+  Dart.
+- **Prefer direct `tsnet` methods when the goal is "give me a
+  transport primitive".** Prefer `local.Client` when the goal is
+  "inspect or mutate daemon-managed state".
+- **Track upstream version skew explicitly.** The current repo pin is
+  `tailscale.com v1.92.2`. Features added in later upstream releases
+  must be called out in the roadmap rather than silently assumed.
 
 ---
 
@@ -215,7 +240,8 @@ returns).
 ### Phase 4 — LocalAPI one-shots
 
 **Goal:** expose the read-only and simple-write LocalAPI calls that
-don't require the loopback bridge. Proceeds in parallel with Phase 3.
+don't require the loopback bridge. These are thin, typed wrappers over
+`local.Client`. Proceeds in parallel with Phase 3.
 
 **Dependencies:** Phase 2.
 
@@ -264,7 +290,8 @@ since Headscale doesn't support them.
 ### Phase 6 — Prefs + Exit Node
 
 **Goal:** advanced routing config. First API surface that writes state
-beyond the engine lifecycle.
+beyond the engine lifecycle. Backed by `local.Client` preference and
+exit-node APIs, not by `tsnet.Server`.
 
 **Dependencies:** Phase 2.
 
@@ -293,7 +320,7 @@ exit node (manual + auto), and shields-up behavior.
 ### Phase 7 — Profiles
 
 **Goal:** multi-account / multi-tailnet support — one device, several
-identities.
+identities. Backed by `local.Client` profile APIs.
 
 **Dependencies:** Phase 2.
 
@@ -363,13 +390,14 @@ versions). Bump + audit the diff before modelling `ServeConfig`.
 | 8 | `serve.getConfig()` → `ServeConfig`         | Current serve config (populates ETag)                                      | [ ]  |
 | 9 | `serve.setConfig(config)`                   | Replace config atomically; throws on ETag mismatch                         | [ ]  |
 | 10| `TailscaleConflictException`                | Thrown when `setConfig` detects a concurrent modification                  | [ ]  |
+| 11| `tcp.listenService(name, mode)`             | Direct Dart mirror of `tsnet.Server.ListenService` for advertising Tailscale Services hosts. Depends on bumping `tailscale.com` to a release that includes `ListenService` (added upstream in `v1.94.1`). Keep this under `tcp`; do not create a speculative `services` namespace for a single listener primitive. | [ ]  |
 
 **Note on Services:** `Services` / `AllowFunnel` / `Foreground` are
 fields in `ipn.ServeConfig`, not a separate product surface — they live
 in this namespace, not in a new `services` namespace. `ListenService`
-(upstream's `tsnet.Server.ListenService`) is a separate method; if/when
-it stabilizes, slot it under `tcp` or a future phase. Don't create a
-speculative `services` namespace.
+(upstream's `tsnet.Server.ListenService`) is already a separate stable
+method; treat it as a transport-aligned listener that belongs under
+`tcp`, not as justification for a separate `services` namespace.
 
 **Exit criteria:** e2e publishes a static directory at `/docs/` via
 `serve.setConfig` and fetches it back over HTTPS. Live-tailnet only —
@@ -464,6 +492,11 @@ Not acting on these in this RFC, but worth tracking:
   pivoting away from our CGO-export shim, but if it stabilizes it
   could shrink the Go-export surface by ~80% and let us drop
   `go/cmd/dylib/main.go` entirely. Re-evaluate in ~6 months.
+- **Upstream feature drift.** `tsnet` and LocalAPI continue to grow
+  after the repo's current `tailscale.com v1.92.2` pin. Re-check
+  `ListenService`, `ServeConfig`, profile APIs, and taildrop flows
+  before each feature phase starts rather than assuming the old model is
+  still current.
 - **Platform-specific features.** Linux posture checks, Android
   connectivity-migration hooks, iOS background-tunnel APIs —
   platform-gated, should slot into the relevant namespace when

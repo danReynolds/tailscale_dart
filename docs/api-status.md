@@ -66,7 +66,7 @@ returning a transitional state such as `starting`.
 | `peers()` → `List<PeerStatus>` | ✅ | Current peer inventory. | `final peers = await tsnet.peers();` |
 | `onStateChange` → `Stream<NodeState>` | ✅ | Distinct-filtered state transitions. | `tsnet.onStateChange.listen(print);` |
 | `onError` → `Stream<TailscaleRuntimeError>` | ✅ | Async runtime errors pushed from Go. | `tsnet.onError.listen(report);` |
-| `onPeersChange` → `Stream<List<PeerStatus>>` | ✅ | Peer inventory changes without polling. Fires on each NetMap delta; pipe through `.distinct()` to ignore no-op updates. | `tsnet.onPeersChange.listen(render);` |
+| `onPeersChange` → `Stream<List<PeerStatus>>` | ✅ | Peer inventory changes without polling. Replays the current inventory to new subscribers, then emits only when the peer list actually changes. | `tsnet.onPeersChange.listen(render);` |
 
 ## `http`
 

@@ -254,7 +254,7 @@ No separate work item.
 | - | ---------------------------------------------- | ------------------------------------------------------------------------------- | ---- |
 | 1 | `Tailscale.whois(ip)` → `PeerIdentity?`        | Identify a tailnet IP's owner / hostname / tags                                  | [ ]  |
 | 2 | `Tailscale.onPeersChange` → `Stream<List<PeerStatus>>` | React to peer inventory changes without polling                          | [ ]  |
-| 3 | `diag.ping(ip, {timeout, type})` → `PingResult`| Round-trip + direct-vs-DERP diagnostic; accepts MagicDNS names                   | [ ]  |
+| 3 | `diag.ping(ip, {timeout, type})` → `PingResult`| Round-trip + route diagnostic (`direct` / `derp` / `unknown`); accepts MagicDNS names | [ ]  |
 | 4 | `diag.metrics()` → `String`                    | Prometheus-format metrics snapshot from the embedded runtime                     | [ ]  |
 | 5 | `diag.derpMap()` → `DERPMap`                   | Current relay region + node map                                                  | [ ]  |
 | 6 | `diag.checkUpdate()` → `ClientVersion?`        | Latest tsnet version if newer than embedded, else null                           | [ ]  |

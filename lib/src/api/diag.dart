@@ -298,9 +298,10 @@ typedef DiagCheckUpdateFn = Future<ClientVersion?> Function();
 ///
 /// Reached via [Tailscale.diag].
 abstract class Diag {
-  /// Tailscale-level ping. Reports round-trip time and whether the path
-  /// is direct peer-to-peer, DERP-relayed, or not classifiable for the
-  /// chosen ping type.
+  /// Tailscale-level ping to a tailnet IP or MagicDNS name.
+  ///
+  /// Reports round-trip time and whether the path is direct peer-to-peer,
+  /// DERP-relayed, or not classifiable for the chosen ping type.
   Future<PingResult> ping(
     String ip, {
     Duration? timeout,

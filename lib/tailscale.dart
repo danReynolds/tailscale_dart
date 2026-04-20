@@ -134,6 +134,15 @@ class Tailscale {
     return snapshot;
   }
 
+  static bool _samePeers(List<PeerStatus>? a, List<PeerStatus>? b) {
+    if (identical(a, b)) return true;
+    if (a == null || b == null || a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   // ─── Transport namespaces ───────────────────────────────────────────
   late final Tcp tcp = createTcp(
     dialFn: (host, port, timeout) =>
@@ -190,14 +199,20 @@ class Tailscale {
   /// Saves callers from polling [peers] on a timer. Derived from
   /// the same IPN bus `NotifyInitialNetMap` subscription as
   /// [onStateChange]; subscribers get the current peer inventory as
-  /// the first emission, then one emission per NetMap change.
-  /// Pipe through `.distinct()` if you only want to react when
-  /// the list has actually changed.
+  /// the first emission, then one emission per inventory change.
   Stream<List<PeerStatus>> get onPeersChange => Stream<List<PeerStatus>>.multi(
         (controller) {
           var canceled = false;
+          List<PeerStatus>? lastEmitted;
+
+          void emitIfChanged(List<PeerStatus> peers) {
+            if (_samePeers(lastEmitted, peers)) return;
+            lastEmitted = peers;
+            controller.add(peers);
+          }
+
           final subscription = _peersController.stream.listen(
-            controller.add,
+            emitIfChanged,
             onError: controller.addError,
             onDone: controller.close,
           );
@@ -206,7 +221,7 @@ class Tailscale {
             try {
               final snapshot = _latestPeers ?? await _snapshotPeers();
               if (!canceled) {
-                controller.add(snapshot);
+                emitIfChanged(snapshot);
               }
             } catch (error, stackTrace) {
               if (!canceled) {

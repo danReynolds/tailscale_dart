@@ -1,5 +1,14 @@
 ## Unreleased
 
+**Phase 3 — raw TCP between tailnet peers:**
+
+- `tcp.dial(host, port, {timeout})` → `Future<Socket>` is live. Wraps `tsnet.Server.Dial` and bridges the tailnet connection through a per-call 127.0.0.1 loopback listener so the caller gets a standard `dart:io` `Socket`. A random 32-character hex token is written as the first bytes on the loopback conn to prevent co-resident processes from hijacking the bridge.
+- `tcp.bind(port, {host})` → `Future<ServerSocket>` is live. Dart owns an ephemeral 127.0.0.1 `ServerSocket`; the Go side runs the tsnet listener and dials the loopback on each accepted tailnet connection. Closing the returned `ServerSocket` tears down the tailnet listener on the Go side too (via `DuneTcpUnbind`). No per-connection auth on this side — documented in the method's doc comment.
+- New `TailscaleTcpException` for tailnet-side dial/listen failures and loopback bridge failures.
+- E2E: two-node byte-echo test in `test/e2e/e2e_test.dart` — peer binds tailnet:7000 and echoes; main dials, sends a payload, verifies the round-trip.
+- `example/tcp_echo.dart`: runnable demo (`dart run example/tcp_echo.dart server` / `client <ip>`).
+- iOS + Android platform verification: not yet performed. Loopback binding works in the Dart VM on desktop; on iOS the tsnet runtime is known to run (PR #8 landed the `@rpath` install-name fix for that) but the loopback-bridge pattern hasn't been exercised there yet. Follow-up once this Phase 3 work ships.
+
 **Breaking — namespaced API surface (Phase 1 of the API RFC; see `docs/api-roadmap.md`):**
 
 - `Tailscale.http` (previously an `http.Client` getter) is now the `Http` namespace. Access the client via `Tailscale.http.client`.

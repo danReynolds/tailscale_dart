@@ -48,9 +48,10 @@ class ServeConfig {
 /// operations compose as transforms on [ServeConfig], not methods on
 /// this class.
 class Serve {
-  /// Library-internal. Reach via `Tailscale.instance.serve`.
-  @internal
-  const Serve.internal();
+  /// Singleton namespace instance. Reach via `Tailscale.instance.serve`.
+  static const instance = Serve._();
+
+  const Serve._();
 
   /// Current serve/funnel config for this node.
   Future<ServeConfig> getConfig() =>

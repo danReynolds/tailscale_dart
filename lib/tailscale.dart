@@ -22,13 +22,13 @@ import 'src/worker/worker.dart';
 export 'src/api/diag.dart';
 export 'src/api/exit_node.dart';
 export 'src/api/funnel.dart' hide attachFunnelMetadata;
-export 'src/api/http.dart';
+export 'src/api/http.dart' hide createHttp;
 export 'src/api/identity.dart';
 export 'src/api/prefs.dart';
 export 'src/api/profiles.dart';
 export 'src/api/serve.dart';
 export 'src/api/taildrop.dart';
-export 'src/api/tcp.dart';
+export 'src/api/tcp.dart' hide createTcp, TcpDialFn, TcpBindFn, TcpUnbindFn;
 export 'src/api/tls.dart';
 export 'src/api/udp.dart';
 export 'src/errors.dart';
@@ -54,10 +54,10 @@ enum TailscaleLogLevel {
 
 extension on TailscaleLogLevel {
   int get nativeValue => switch (this) {
-    TailscaleLogLevel.silent => 0,
-    TailscaleLogLevel.error => 1,
-    TailscaleLogLevel.info => 2,
-  };
+        TailscaleLogLevel.silent => 0,
+        TailscaleLogLevel.error => 1,
+        TailscaleLogLevel.info => 2,
+      };
 }
 
 /// Singleton embedded Tailscale node for the current Dart process.
@@ -109,25 +109,34 @@ class Tailscale {
   }
 
   // ─── Transport namespaces ───────────────────────────────────────────
-  final Tcp    tcp    = const Tcp.internal();
-  final Tls    tls    = const Tls.internal();
-  final Udp    udp    = const Udp.internal();
-  final Funnel funnel = const Funnel.internal();
-  late final Http http = Http.internal(
+  late final Tcp tcp = createTcp(
+    dialFn: (host, port, timeout) =>
+        _worker.tcpDial(host: host, port: port, timeout: timeout),
+    bindFn: (tailnetPort, tailnetHost, loopbackPort) => _worker.tcpBind(
+      tailnetPort: tailnetPort,
+      tailnetHost: tailnetHost,
+      loopbackPort: loopbackPort,
+    ),
+    unbindFn: (loopbackPort) => _worker.tcpUnbind(loopbackPort: loopbackPort),
+  );
+  final Tls tls = Tls.instance;
+  final Udp udp = Udp.instance;
+  final Funnel funnel = Funnel.instance;
+  late final Http http = createHttp(
     clientGetter: () => _http,
     exposeFn: (localPort, tailnetPort) =>
         _worker.listen(localPort: localPort, tailnetPort: tailnetPort),
   );
 
   // ─── Feature namespaces ─────────────────────────────────────────────
-  final Taildrop taildrop = const Taildrop.internal();
-  final Serve    serve    = const Serve.internal();
-  final ExitNode exitNode = const ExitNode.internal();
-  final Profiles profiles = const Profiles.internal();
-  final Prefs    prefs    = const Prefs.internal();
+  final Taildrop taildrop = Taildrop.instance;
+  final Serve serve = Serve.instance;
+  final ExitNode exitNode = ExitNode.instance;
+  final Profiles profiles = Profiles.instance;
+  final Prefs prefs = Prefs.instance;
 
   // ─── Diagnostics ────────────────────────────────────────────────────
-  final Diag diag = const Diag.internal();
+  final Diag diag = Diag.instance;
 
   // ─── Streams ────────────────────────────────────────────────────────
 
@@ -289,8 +298,7 @@ class Tailscale {
   /// Safe to call before [up] — returns [NodeState.stopped] when
   /// persisted credentials exist (ready to reconnect) and
   /// [NodeState.noState] when they don't.
-  Future<TailscaleStatus> status() async =>
-      _worker.status(stateDir: _stateDir);
+  Future<TailscaleStatus> status() async => _worker.status(stateDir: _stateDir);
 
   /// Returns the current peer inventory — every node on the tailnet
   /// this node is aware of, whether online right now or not.

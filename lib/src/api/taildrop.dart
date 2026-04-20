@@ -27,8 +27,7 @@ class FileTarget {
   int get hashCode => Object.hash(nodeId, hostName, userLoginName);
 
   @override
-  String toString() =>
-      'FileTarget(nodeId: $nodeId, hostName: $hostName, '
+  String toString() => 'FileTarget(nodeId: $nodeId, hostName: $hostName, '
       'userLoginName: $userLoginName)';
 }
 
@@ -69,9 +68,10 @@ class WaitingFile {
 /// have Taildrop enabled in ACLs (on by default); targets are
 /// filtered to the set the ACLs allow this node to send to.
 class Taildrop {
-  /// Library-internal. Reach via `Tailscale.instance.taildrop`.
-  @internal
-  const Taildrop.internal();
+  /// Singleton namespace instance. Reach via `Tailscale.instance.taildrop`.
+  static const instance = Taildrop._();
+
+  const Taildrop._();
 
   /// Peers you can send files to right now (owned-by-you + online +
   /// allowed by ACLs).
@@ -95,7 +95,8 @@ class Taildrop {
   /// Blocks until at least one received file is available, or [timeout]
   /// expires. Returns the same shape as [waitingFiles].
   Future<List<WaitingFile>> awaitWaitingFiles({Duration? timeout}) =>
-      throw UnimplementedError('taildrop.awaitWaitingFiles not yet implemented');
+      throw UnimplementedError(
+          'taildrop.awaitWaitingFiles not yet implemented');
 
   /// Opens a byte stream over a received file. The caller decides where
   /// to persist the contents. Does not delete — call [delete] (or use

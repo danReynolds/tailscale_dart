@@ -118,6 +118,17 @@ final class TailscaleHttpException extends TailscaleOperationException {
   }) : super('http', message);
 }
 
+/// Thrown when a `tcp.*` call fails — tailnet dial refused, no route
+/// to peer, loopback bridge setup failure, etc.
+final class TailscaleTcpException extends TailscaleOperationException {
+  const TailscaleTcpException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('tcp', message);
+}
+
 /// Thrown when `status()` fails to decode or fetch native status.
 final class TailscaleStatusException extends TailscaleOperationException {
   const TailscaleStatusException(

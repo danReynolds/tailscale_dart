@@ -139,6 +139,65 @@ void _workerEntrypoint(SendPort sendPort) {
             }
 
             sendPort.send(_WorkerListenResponse(listenPort: listenPort));
+          case _WorkerTcpDialCommand request:
+            final hostPtr = request.host.toNativeUtf8();
+            try {
+              final result = _callNativeJson(
+                () => native.duneTcpDial(
+                  hostPtr,
+                  request.port,
+                  request.timeoutMillis,
+                ),
+                onError: TailscaleTcpException.new,
+              ) as Map<String, dynamic>;
+
+              final loopbackPort = result['loopbackPort'] as int?;
+              final token = result['token'] as String?;
+              if (loopbackPort == null ||
+                  loopbackPort <= 0 ||
+                  token == null ||
+                  token.isEmpty) {
+                throw const TailscaleTcpException(
+                  'Native runtime did not return a usable loopback bridge.',
+                );
+              }
+
+              sendPort.send(_WorkerTcpDialResponse(
+                loopbackPort: loopbackPort,
+                token: token,
+              ));
+            } finally {
+              calloc.free(hostPtr);
+            }
+          case _WorkerTcpBindCommand request:
+            final hostPtr = request.tailnetHost.toNativeUtf8();
+            try {
+              final result = _callNativeJson(
+                () => native.duneTcpBind(
+                  request.tailnetPort,
+                  hostPtr,
+                  request.loopbackPort,
+                ),
+                onError: TailscaleTcpException.new,
+              ) as Map<String, dynamic>;
+
+              final tailnetPort = result['tailnetPort'] as int?;
+              if (tailnetPort == null || tailnetPort <= 0) {
+                throw const TailscaleTcpException(
+                  'Native runtime did not return the bound tailnet port.',
+                );
+              }
+              sendPort.send(
+                _WorkerTcpBindResponse(tailnetPort: tailnetPort),
+              );
+            } finally {
+              calloc.free(hostPtr);
+            }
+          case _WorkerTcpUnbindCommand request:
+            native.duneTcpUnbind(request.loopbackPort);
+            sendPort.send(
+              const _WorkerAckResponse(_WorkerOperation.tcpUnbind),
+            );
           case _WorkerStatusCommand(:final stateDir):
             sendPort.send(_WorkerStatusResponse(
               status: _loadStatusSnapshot(stateDir: stateDir),

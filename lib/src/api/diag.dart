@@ -81,13 +81,13 @@ class DERPMap {
 
   @override
   int get hashCode => Object.hash(
-        Object.hashAllUnordered(regions.entries.map((e) => Object.hash(e.key, e.value))),
+        Object.hashAllUnordered(
+            regions.entries.map((e) => Object.hash(e.key, e.value))),
         omitDefaultRegions,
       );
 
   @override
-  String toString() =>
-      'DERPMap(regions: ${regions.length}, '
+  String toString() => 'DERPMap(regions: ${regions.length}, '
       'omitDefaultRegions: $omitDefaultRegions)';
 }
 
@@ -180,9 +180,10 @@ class ClientVersion {
 ///
 /// Reached via [Tailscale.diag].
 class Diag {
-  /// Library-internal. Reach via `Tailscale.instance.diag`.
-  @internal
-  const Diag.internal();
+  /// Singleton namespace instance. Reach via `Tailscale.instance.diag`.
+  static const instance = Diag._();
+
+  const Diag._();
 
   /// Tailscale-level ping. Reports round-trip time and whether the path
   /// is direct peer-to-peer or DERP-relayed.

@@ -11,6 +11,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
@@ -206,6 +207,74 @@ void main() {
           .timeout(const Duration(seconds: 30));
       expect(resp.statusCode, 200);
       expect(resp.body, 'echo: ping-from-node-a');
+    });
+
+    test('tcp.dial reaches the peer echo server and round-trips bytes',
+        () async {
+      final socket = await tsnet.tcp
+          .dial(peer.ipv4, 7000, timeout: const Duration(seconds: 30))
+          .timeout(const Duration(seconds: 30));
+
+      try {
+        final payload = utf8.encode('tcp-echo-${DateTime.now().microsecondsSinceEpoch}');
+        socket.add(payload);
+        await socket.flush();
+
+        final received = BytesBuilder();
+        await for (final chunk in socket.timeout(
+          const Duration(seconds: 15),
+          onTimeout: (sink) => sink.close(),
+        )) {
+          received.add(chunk);
+          if (received.length >= payload.length) break;
+        }
+        expect(received.takeBytes(), payload);
+      } finally {
+        await socket.close();
+      }
+    });
+
+    test('tcp.dial round-trips a 1 MiB payload end-to-end', () async {
+      final socket = await tsnet.tcp
+          .dial(peer.ipv4, 7000, timeout: const Duration(seconds: 30))
+          .timeout(const Duration(seconds: 30));
+
+      try {
+        const payloadSize = 1 << 20; // 1 MiB
+        final payload = Uint8List(payloadSize);
+        for (var i = 0; i < payloadSize; i++) {
+          payload[i] = (i * 37 + 11) & 0xff; // pseudo-random, reproducible
+        }
+
+        // Fire the write off without awaiting; the echo will start
+        // flowing back immediately and we need to drain it concurrently
+        // or the peer's send buffer fills and deadlocks.
+        final writeDone = () async {
+          socket.add(payload);
+          await socket.flush();
+          await socket.close(); // half-close signal — peer stops reading
+        }();
+
+        final received = BytesBuilder();
+        await for (final chunk in socket.timeout(
+          const Duration(seconds: 60),
+          onTimeout: (sink) => sink.close(),
+        )) {
+          received.add(chunk);
+          if (received.length >= payloadSize) break;
+        }
+        await writeDone;
+
+        expect(received.length, payloadSize);
+        final got = received.takeBytes();
+        // Spot-check rather than full-equality so a mismatch message
+        // doesn't dump a megabyte of hex.
+        for (final i in [0, 1, payloadSize ~/ 2, payloadSize - 1]) {
+          expect(got[i], payload[i], reason: 'byte at offset $i');
+        }
+      } finally {
+        await socket.close();
+      }
     });
   });
 

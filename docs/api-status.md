@@ -30,7 +30,7 @@ module bump before they can land here.
 | ----------------------- | ----------------------------------------------------------------- | ---------------- |
 | [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Phase 1 ✅        |
 | [`http`](#http)         | HTTP over the tailnet + reverse-proxy helper                      | Phase 1 ✅        |
-| [`tcp`](#tcp)           | Raw TCP between tailnet peers                                      | Phase 3          |
+| [`tcp`](#tcp)           | Raw TCP between tailnet peers                                      | Phase 3 ✅        |
 | [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Phase 4–5        |
 | [`udp`](#udp)           | UDP datagram sockets on a tailnet IP                                | Phase 5          |
 | [`funnel`](#funnel)     | Public-internet HTTPS via Tailscale Funnel                         | Phase 5          |
@@ -103,8 +103,8 @@ bumped; it should not force a separate `services` namespace by itself.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `tcp.dial(host, port, {timeout})` → `Future<Socket>` | ⛔ | Outbound TCP to a tailnet peer. `host` may be IP or MagicDNS name. The timeout contract should be documented as one clear model, preferably one end-to-end budget spanning tailnet dial, loopback connect, and token handshake. | `final s = await tsnet.tcp.dial('100.64.0.5', 22);` |
-| `tcp.bind(port, {host})` → `Future<ServerSocket>` | ⛔ | Accept inbound TCP. `host` pins to one of this node's tailnet IPs. | `final srv = await tsnet.tcp.bind(1234);` |
+| `tcp.dial(host, port, {timeout})` → `Future<Socket>` | ✅ | Outbound TCP to a tailnet peer. `host` may be IP or MagicDNS name. `timeout` is **one end-to-end budget** across tailnet dial, loopback connect, and token handshake — exceeding it throws `TailscaleTcpException`. | `final s = await tsnet.tcp.dial('100.64.0.5', 22);` |
+| `tcp.bind(port, {host})` → `Future<ServerSocket>` | ✅ | Accept inbound TCP. `host` pins to one of this node's tailnet IPs. Pass `0` for `port` to request an ephemeral tailnet port; read it back from `ServerSocket.port`. | `final srv = await tsnet.tcp.bind(1234);` |
 
 ## `tls`
 

@@ -1,5 +1,3 @@
-import 'package:meta/meta.dart';
-
 import '../status.dart';
 
 /// Exit-node routing: route this node's internet-bound traffic
@@ -19,9 +17,10 @@ import '../status.dart';
 ///
 /// Reached via [Tailscale.exitNode].
 class ExitNode {
-  /// Library-internal. Reach via `Tailscale.instance.exitNode`.
-  @internal
-  const ExitNode.internal();
+  /// Singleton namespace instance. Reach via `Tailscale.instance.exitNode`.
+  static const instance = ExitNode._();
+
+  const ExitNode._();
 
   /// The peer currently being used as this node's exit, or null if none.
   Future<PeerStatus?> current() =>

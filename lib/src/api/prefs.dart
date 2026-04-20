@@ -1,5 +1,7 @@
 import 'package:meta/meta.dart';
 
+import '../_equality.dart';
+
 /// Node preferences. Mirrors a subset of `ipn.Prefs` on the Go side.
 ///
 /// Fields cover the long tail of tsnet configuration that doesn't warrant
@@ -7,6 +9,7 @@ import 'package:meta/meta.dart';
 /// setters on [Prefs] (`setAdvertisedRoutes(...)`, `setShieldsUp(true)`,
 /// etc.) for common single-field changes, or [Prefs.updateMasked] for
 /// atomic multi-field edits.
+@immutable
 class TailscalePrefs {
   const TailscalePrefs({
     required this.advertisedRoutes,
@@ -48,6 +51,38 @@ class TailscalePrefs {
 
   /// Stable node ID currently in use as an exit node, or null if none.
   final String? exitNodeId;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TailscalePrefs &&
+          listEquals(advertisedRoutes, other.advertisedRoutes) &&
+          acceptRoutes == other.acceptRoutes &&
+          shieldsUp == other.shieldsUp &&
+          listEquals(advertisedTags, other.advertisedTags) &&
+          wantRunning == other.wantRunning &&
+          autoUpdate == other.autoUpdate &&
+          hostname == other.hostname &&
+          exitNodeId == other.exitNodeId;
+
+  @override
+  int get hashCode => Object.hash(
+        Object.hashAll(advertisedRoutes),
+        acceptRoutes,
+        shieldsUp,
+        Object.hashAll(advertisedTags),
+        wantRunning,
+        autoUpdate,
+        hostname,
+        exitNodeId,
+      );
+
+  @override
+  String toString() => 'TailscalePrefs(advertisedRoutes: $advertisedRoutes, '
+      'acceptRoutes: $acceptRoutes, shieldsUp: $shieldsUp, '
+      'advertisedTags: $advertisedTags, wantRunning: $wantRunning, '
+      'autoUpdate: $autoUpdate, hostname: $hostname, '
+      'exitNodeId: $exitNodeId)';
 }
 
 /// A multi-field atomic update to [TailscalePrefs]. Only fields set on
@@ -57,6 +92,7 @@ class TailscalePrefs {
 /// this library because the "masked" terminology is a Go-isms that does
 /// not translate — in Dart, the builder-plus-mask pattern is expressed
 /// naturally as an object whose fields default to null.
+@immutable
 class PrefsUpdate {
   const PrefsUpdate({
     this.advertisedRoutes,
@@ -81,6 +117,38 @@ class PrefsUpdate {
   /// unchanged (Dart's single-null problem; use named setters on
   /// [Prefs] or [ExitNode] for clarity).
   final String? exitNodeId;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PrefsUpdate &&
+          listEquals(advertisedRoutes, other.advertisedRoutes) &&
+          acceptRoutes == other.acceptRoutes &&
+          shieldsUp == other.shieldsUp &&
+          listEquals(advertisedTags, other.advertisedTags) &&
+          wantRunning == other.wantRunning &&
+          autoUpdate == other.autoUpdate &&
+          hostname == other.hostname &&
+          exitNodeId == other.exitNodeId;
+
+  @override
+  int get hashCode => Object.hash(
+        advertisedRoutes == null ? null : Object.hashAll(advertisedRoutes!),
+        acceptRoutes,
+        shieldsUp,
+        advertisedTags == null ? null : Object.hashAll(advertisedTags!),
+        wantRunning,
+        autoUpdate,
+        hostname,
+        exitNodeId,
+      );
+
+  @override
+  String toString() => 'PrefsUpdate(advertisedRoutes: $advertisedRoutes, '
+      'acceptRoutes: $acceptRoutes, shieldsUp: $shieldsUp, '
+      'advertisedTags: $advertisedTags, wantRunning: $wantRunning, '
+      'autoUpdate: $autoUpdate, hostname: $hostname, '
+      'exitNodeId: $exitNodeId)';
 }
 
 /// Low-level escape hatch for preferences that don't have a dedicated
@@ -89,9 +157,10 @@ class PrefsUpdate {
 /// Reached via [Tailscale.prefs]. For common single-field changes prefer
 /// the named setters; for atomic multi-field edits use [updateMasked].
 class Prefs {
-  /// Library-internal. Reach via `Tailscale.instance.prefs`.
-  @internal
-  const Prefs.internal();
+  /// Singleton namespace instance. Reach via `Tailscale.instance.prefs`.
+  static const instance = Prefs._();
+
+  const Prefs._();
 
   /// Current preferences snapshot.
   Future<TailscalePrefs> get() =>

@@ -131,6 +131,42 @@ final class Worker {
     return response.listenPort;
   }
 
+  Future<({int loopbackPort, String token})> tcpDial({
+    required String host,
+    required int port,
+    Duration? timeout,
+  }) async {
+    final response = await _request<_WorkerTcpDialResponse>(
+      _WorkerTcpDialCommand(
+        host: host,
+        port: port,
+        timeoutMillis: timeout?.inMilliseconds ?? 0,
+      ),
+    );
+    return (loopbackPort: response.loopbackPort, token: response.token);
+  }
+
+  Future<int> tcpBind({
+    required int tailnetPort,
+    required String tailnetHost,
+    required int loopbackPort,
+  }) async {
+    final response = await _request<_WorkerTcpBindResponse>(
+      _WorkerTcpBindCommand(
+        tailnetPort: tailnetPort,
+        tailnetHost: tailnetHost,
+        loopbackPort: loopbackPort,
+      ),
+    );
+    return response.tailnetPort;
+  }
+
+  Future<void> tcpUnbind({required int loopbackPort}) async {
+    await _request<_WorkerAckResponse>(
+      _WorkerTcpUnbindCommand(loopbackPort: loopbackPort),
+    );
+  }
+
   Future<TailscaleStatus> status({required String stateDir}) async {
     final response = await _request<_WorkerStatusResponse>(
       _WorkerStatusCommand(stateDir: stateDir),

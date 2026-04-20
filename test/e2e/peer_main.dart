@@ -13,6 +13,7 @@
 ///   AUTH_KEY        — reusable preauth key (optional; omit to reconnect with
 ///                     previously persisted credentials in STATE_DIR)
 ///   HOSTNAME        — tailnet-visible hostname (default: dune-e2e-peer)
+///   TLS_TAILNET_PORT — optional tailnet port for a TLS echo listener
 ///   RESPONSE_BODY   — body returned by the local HTTP server for GET
 ///                     (default: 'hello from peer'). POST requests echo the
 ///                     request body as `echo: <body>`.
@@ -36,6 +37,9 @@ Future<void> main(List<String> args) async {
   final controlUrl = _requiredEnv('CONTROL_URL');
   final authKey = Platform.environment['AUTH_KEY'] ?? '';
   final hostname = Platform.environment['HOSTNAME'] ?? 'dune-e2e-peer';
+  final tlsTailnetPort = int.tryParse(
+    Platform.environment['TLS_TAILNET_PORT'] ?? '',
+  );
   final responseBody =
       Platform.environment['RESPONSE_BODY'] ?? 'hello from peer';
 
@@ -56,8 +60,7 @@ Future<void> main(List<String> args) async {
   Tailscale.init(stateDir: stateDir);
   final tsnet = Tailscale.instance;
 
-  final running =
-      tsnet.onStateChange.firstWhere((s) => s == NodeState.running);
+  final running = tsnet.onStateChange.firstWhere((s) => s == NodeState.running);
 
   await tsnet.up(
     hostname: hostname,
@@ -98,6 +101,19 @@ Future<void> main(List<String> args) async {
     udpSock.send(dg.data, dg.address, dg.port);
   });
 
+  ServerSocket? tlsServer;
+  if (tlsTailnetPort != null) {
+    tlsServer = await tsnet.tls.bind(tlsTailnetPort);
+    tlsServer.listen((socket) {
+      socket.listen(
+        socket.add,
+        onDone: () => socket.close(),
+        onError: (_) => socket.close(),
+        cancelOnError: true,
+      );
+    });
+  }
+
   // Leading newline: the Dart build hook writes `Running build hooks...`
   // without a trailing newline, so force a line break before our sentinel.
   stdout.write('\nREADY $ipv4\n');
@@ -108,6 +124,9 @@ Future<void> main(List<String> args) async {
 
   try {
     udpSock.close();
+  } catch (_) {}
+  try {
+    await tlsServer?.close();
   } catch (_) {}
   try {
     await echoServer.close();

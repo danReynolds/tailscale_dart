@@ -146,19 +146,20 @@ than core v1 functionality.
 Public-internet HTTPS via Tailscale Funnel: the node is reachable from
 the open internet at its Funnel hostname, with edge TLS termination.
 The Funnel edge attaches `publicSrc` + `sni` metadata to each accepted
-socket; read it via the `Socket.funnel` extension — this lets `bind`
-return a standard `SecureServerSocket` instead of a `dart:io` subclass.
+socket; read it via the `Socket.funnel` extension. If/when `bind`
+lands, it should return a standard `ServerSocket` for the same
+reasoning as `tls.bind`: TLS terminates in Go, not in Dart.
 
 This is explicitly optional: useful for some hosted/server apps, but
 not part of the core embedded-private-network story.
 
-**Completed in:** Phase 5. **Requires:** operator has enabled Funnel
-in ACLs for this node and an allowed Funnel port (443, 8443, 10000).
-Headscale doesn't support Funnel; live-Tailscale test only.
+**Status:** Optional follow-up (post-v1). **Requires:** operator has
+enabled Funnel in ACLs for this node and an allowed Funnel port (443,
+8443, 10000). Headscale doesn't support Funnel; live-Tailscale test only.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `funnel.bind(port, {funnelOnly})` → `Future<SecureServerSocket>` | ⛔ | Public-internet TLS listener. `funnelOnly: true` rejects same-tailnet clients. | `final srv = await tsnet.funnel.bind(443);` |
+| `funnel.bind(port, {funnelOnly})` → `Future<ServerSocket>` | ⛔ | Public-internet TLS listener. `funnelOnly: true` rejects same-tailnet clients. TLS terminates in the embedded Go runtime; Dart handlers receive plaintext `Socket`s. | `final srv = await tsnet.funnel.bind(443);` |
 | `FunnelMetadata` value type (`publicSrc`, `sni`) | ✅ | Metadata the Funnel edge attached to a socket. | `const FunnelMetadata(publicSrc: ...);` |
 | `Socket.funnel` extension getter | ✅ | Read `FunnelMetadata` off an accepted socket; null if not from Funnel. | `final meta = conn.funnel;` |
 

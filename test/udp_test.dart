@@ -13,9 +13,30 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:tailscale/tailscale.dart';
 import 'package:tailscale/src/api/udp.dart';
 
 void main() {
+  group('udp.bind glue', () {
+    test('surfaces bind failures promptly instead of hanging', () async {
+      final udp = createUdp(
+        bindFn: (_, __, ___) async =>
+            throw const TailscaleUdpException('bridge setup failed'),
+      );
+
+      await expectLater(
+        udp.bind('100.64.0.5', 4000).timeout(const Duration(seconds: 2)),
+        throwsA(
+          isA<TailscaleUdpException>().having(
+            (e) => e.message,
+            'message',
+            contains('bridge setup failed'),
+          ),
+        ),
+      );
+    });
+  });
+
   group('TailscaleUdpSocket framing', () {
     late ServerSocket server;
     late Socket goSide;
@@ -48,7 +69,8 @@ void main() {
       } catch (_) {}
     });
 
-    test('receive surfaces peer IP/port and payload from a framed IPv4 datagram',
+    test(
+        'receive surfaces peer IP/port and payload from a framed IPv4 datagram',
         () async {
       final readEvent = sock.firstWhere((e) => e == RawSocketEvent.read);
       // Go side writes: addrFam=4, ip=100.64.0.7, port=9000, len=5, "hello"
@@ -89,8 +111,7 @@ void main() {
       expect(dg.data, Uint8List.fromList([0xde, 0xad, 0xbe]));
     });
 
-    test('receive handles multiple frames coalesced into one chunk',
-        () async {
+    test('receive handles multiple frames coalesced into one chunk', () async {
       final framed = <int>[
         ..._frame('100.64.0.1', 1000, _bytes('a')),
         ..._frame('100.64.0.2', 2000, _bytes('bb')),

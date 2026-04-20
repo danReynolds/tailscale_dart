@@ -61,7 +61,14 @@ external ffi.Pointer<Utf8> duneTcpDial(
 /// accepted tailnet conn is forwarded to the Dart-owned loopback
 /// listener on `127.0.0.1:loopbackPort`.
 ///
-/// Returns JSON: {"ok": true} on success, {"error": "..."} on failure.
+/// Pass `tailnetPort = 0` to request an ephemeral tailnet port; the
+/// assigned port comes back in the response JSON.
+///
+/// Returns JSON:
+///   {"tailnetPort": N} on success (`N` is the actual bound port —
+///   useful when `0` was passed).
+///   {"error": "..."} on failure.
+///
 /// Pass empty string for `tailnetHost` to accept on all of this
 /// node's tailnet IPs.
 @ffi.Native<

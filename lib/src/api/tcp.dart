@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:meta/meta.dart';
@@ -27,7 +28,7 @@ class Tcp {
       int port,
       Duration? timeout,
     ) dialFn,
-    required Future<void> Function(
+    required Future<int> Function(
       int tailnetPort,
       String tailnetHost,
       int loopbackPort,
@@ -42,7 +43,7 @@ class Tcp {
     int port,
     Duration? timeout,
   ) _dialFn;
-  final Future<void> Function(
+  final Future<int> Function(
     int tailnetPort,
     String tailnetHost,
     int loopbackPort,
@@ -62,7 +63,10 @@ class Tcp {
   /// runtime opens the tailnet conn and pipes bytes through a
   /// per-call 127.0.0.1 listener. A random per-call token is written
   /// as the first bytes on the wire so co-resident processes can't
-  /// hijack the bridge.
+  /// hijack the bridge. The Go-side listener keeps accepting until
+  /// a valid-token client arrives or the overall timeout elapses —
+  /// a co-resident attacker sending a bad token wastes their own
+  /// socket but doesn't consume the bridge.
   ///
   /// Throws [TailscaleTcpException] on tailnet-side failures (no
   /// route, connection refused, etc.) or if the loopback bridge
@@ -85,7 +89,7 @@ class Tcp {
     }
 
     try {
-      socket.add(token.codeUnits);
+      socket.add(utf8.encode(token));
       await socket.flush();
     } catch (e) {
       await socket.close();
@@ -102,6 +106,10 @@ class Tcp {
   /// `tsnet.Server.Listen("tcp", addr)` and returns a `dart:io`
   /// [ServerSocket] so the accept loop is standard Dart.
   ///
+  /// [port] is the tailnet port to bind — pass `0` to request an
+  /// ephemeral port, then read it back from the returned
+  /// [ServerSocket.port].
+  ///
   /// [host] restricts the listener to a specific tailnet IP of this
   /// node; leave null to accept on all tailnet IPs this node holds.
   /// Pair with [Tailscale.whois] on `conn.remoteAddress` to authorize
@@ -110,8 +118,14 @@ class Tcp {
   /// Implementation: Dart owns an ephemeral 127.0.0.1 [ServerSocket];
   /// the Go side runs the tsnet listener and dials the loopback on
   /// each accepted tailnet connection. Closing the returned
-  /// [ServerSocket] tears down the tailnet listener on the next Go
-  /// accept (or sooner if the caller pairs it with `down()`).
+  /// [ServerSocket] tears down the tailnet listener via a proactive
+  /// unbind call.
+  ///
+  /// The returned [ServerSocket.port] reports the **tailnet port**
+  /// (what peers connect to), not the internal loopback port. The
+  /// [ServerSocket.address] still reflects the local loopback
+  /// (127.0.0.1), since the tailnet side is the tsnet runtime's
+  /// abstraction, not a local interface.
   ///
   /// Note: no per-connection authentication on the loopback side.
   /// Co-resident processes could theoretically connect to the
@@ -124,8 +138,9 @@ class Tcp {
       0,
     );
 
+    int boundTailnetPort;
     try {
-      await _bindFn(port, host ?? '', loopback.port);
+      boundTailnetPort = await _bindFn(port, host ?? '', loopback.port);
     } catch (e) {
       await loopback.close();
       if (e is TailscaleException) rethrow;
@@ -135,36 +150,43 @@ class Tcp {
       );
     }
 
-    // Wrap so we can hook close(): tell Go to tear down the tailnet
-    // listener proactively rather than waiting for the next accept
-    // to notice the loopback is gone.
-    return _UnbindingServerSocket(loopback, () => _unbindFn(loopback.port));
+    return _UnbindingServerSocket(
+      loopback,
+      boundTailnetPort,
+      () => _unbindFn(loopback.port),
+    );
   }
 }
 
-/// `ServerSocket` delegate that runs an extra teardown hook after
-/// `close()`. Used by [Tcp.bind] to stop the Go-side tailnet listener
-/// when the caller closes their handle.
+/// `ServerSocket` delegate that surfaces the tailnet port as
+/// [ServerSocket.port] and runs an extra teardown hook after
+/// `close()` so the Go-side tailnet listener is torn down when the
+/// caller closes their handle.
 class _UnbindingServerSocket extends StreamView<Socket>
     implements ServerSocket {
-  _UnbindingServerSocket(this._delegate, this._onClose) : super(_delegate);
+  _UnbindingServerSocket(
+    this._delegate,
+    this._tailnetPort,
+    this._onClose,
+  ) : super(_delegate);
 
   final ServerSocket _delegate;
+  final int _tailnetPort;
   final Future<void> Function() _onClose;
 
   @override
   InternetAddress get address => _delegate.address;
 
   @override
-  int get port => _delegate.port;
+  int get port => _tailnetPort;
 
   @override
   Future<ServerSocket> close() async {
-    final closed = await _delegate.close();
+    await _delegate.close();
     // Best-effort — the Go side may already be down.
     try {
       await _onClose();
     } catch (_) {}
-    return closed;
+    return this;
   }
 }

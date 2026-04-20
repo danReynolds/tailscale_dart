@@ -146,16 +146,19 @@ final class Worker {
     return (loopbackPort: response.loopbackPort, token: response.token);
   }
 
-  Future<void> tcpBind({
+  Future<int> tcpBind({
     required int tailnetPort,
     required String tailnetHost,
     required int loopbackPort,
   }) async {
-    await _request<_WorkerAckResponse>(_WorkerTcpBindCommand(
-      tailnetPort: tailnetPort,
-      tailnetHost: tailnetHost,
-      loopbackPort: loopbackPort,
-    ));
+    final response = await _request<_WorkerTcpBindResponse>(
+      _WorkerTcpBindCommand(
+        tailnetPort: tailnetPort,
+        tailnetHost: tailnetHost,
+        loopbackPort: loopbackPort,
+      ),
+    );
+    return response.tailnetPort;
   }
 
   Future<void> tcpUnbind({required int loopbackPort}) async {

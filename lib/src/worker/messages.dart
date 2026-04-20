@@ -78,6 +78,13 @@ final class _WorkerTcpBindCommand extends _WorkerCommand {
   final int loopbackPort;
 }
 
+final class _WorkerTcpBindResponse extends _WorkerResponse {
+  const _WorkerTcpBindResponse({required this.tailnetPort})
+      : super(_WorkerOperation.tcpBind);
+
+  final int tailnetPort;
+}
+
 final class _WorkerTcpUnbindCommand extends _WorkerCommand {
   const _WorkerTcpUnbindCommand({required this.loopbackPort})
       : super(_WorkerOperation.tcpUnbind);

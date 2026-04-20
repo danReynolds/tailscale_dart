@@ -172,15 +172,24 @@ void _workerEntrypoint(SendPort sendPort) {
           case _WorkerTcpBindCommand request:
             final hostPtr = request.tailnetHost.toNativeUtf8();
             try {
-              _callNativeJson(
+              final result = _callNativeJson(
                 () => native.duneTcpBind(
                   request.tailnetPort,
                   hostPtr,
                   request.loopbackPort,
                 ),
                 onError: TailscaleTcpException.new,
+              ) as Map<String, dynamic>;
+
+              final tailnetPort = result['tailnetPort'] as int?;
+              if (tailnetPort == null || tailnetPort <= 0) {
+                throw const TailscaleTcpException(
+                  'Native runtime did not return the bound tailnet port.',
+                );
+              }
+              sendPort.send(
+                _WorkerTcpBindResponse(tailnetPort: tailnetPort),
               );
-              sendPort.send(const _WorkerAckResponse(_WorkerOperation.tcpBind));
             } finally {
               calloc.free(hostPtr);
             }

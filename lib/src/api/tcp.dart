@@ -88,6 +88,9 @@ class Tcp {
         loopbackPort,
         timeout: remaining,
       );
+    } on TailscaleTcpException {
+      // Budget already exhausted by _remainingTimeout — propagate as-is.
+      rethrow;
     } catch (e) {
       throw TailscaleTcpException(
         'Failed to connect to loopback bridge on port $loopbackPort',
@@ -99,6 +102,9 @@ class Tcp {
       _remainingTimeout(stopwatch, timeout);
       socket.add(utf8.encode(token));
       await socket.flush();
+    } on TailscaleTcpException {
+      await socket.close();
+      rethrow;
     } catch (e) {
       await socket.close();
       throw TailscaleTcpException(

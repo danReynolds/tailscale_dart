@@ -13,6 +13,17 @@ example. For the forward-looking phase plan, see
 **Convention:** all examples assume `final tsnet = Tailscale.instance;`
 and that [`Tailscale.init`](#lifecycle-top-level) has already been called.
 
+**Implementation model:** this package aligns to both upstream
+`tsnet.Server` and upstream `local.Client`. Transport primitives such as
+HTTP, TCP, UDP, TLS, Funnel, and future service listeners follow
+`tsnet`; node introspection, diagnostics, prefs, profiles, serve
+config, exit nodes, and taildrop follow LocalAPI via `local.Client`.
+
+**Version note:** the current repo pin is `tailscale.com v1.92.2`. Some
+upstream APIs documented below as planned alignment work, especially
+Tailscale Services hosting via `tsnet.Server.ListenService`, require a
+module bump before they can land here.
+
 ## Namespace overview
 
 | Namespace               | Feature                                                           | Completed in     |
@@ -36,16 +47,19 @@ and that [`Tailscale.init`](#lifecycle-top-level) has already been called.
 
 Engine lifecycle and reactive streams. These live directly on
 `Tailscale.instance` rather than under a namespace because they don't
-fit one topic. `up()` resolves on the **first stable state** (`running`
-/ `needsLogin` / `needsMachineAuth`) so interactive auth flows can
-branch on the returned status without re-calling `up()`.
+fit one topic. `up()` resolves on the **first stable state only**
+(`running` / `needsLogin` / `needsMachineAuth`) so interactive auth
+flows can branch on the returned status without re-calling `up()`. If
+startup fails or the implementation gives up waiting before a stable
+state is reached, it should throw `TailscaleUpException` rather than
+returning a transitional state such as `starting`.
 
 **Completed in:** Phase 1 (parity) — fully working.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
 | `Tailscale.init({stateDir, logLevel})` | ✅ | One-time library configuration at app startup. | `Tailscale.init(stateDir: '/app/state');` |
-| `up({hostname, authKey, controlUrl})` → `TailscaleStatus` | ✅ | Start engine; resolves on first stable state. | `final s = await tsnet.up(authKey: 'tskey-...');` |
+| `up({hostname, authKey, controlUrl})` → `TailscaleStatus` | ✅ | Start engine; resolves on the first stable state only. Throws `TailscaleUpException` if startup fails before that. | `final s = await tsnet.up(authKey: 'tskey-...');` |
 | `down()` | ✅ | Stop engine, keep persisted credentials. | `await tsnet.down();` |
 | `logout()` | ✅ | Stop + wipe persisted credentials. | `await tsnet.logout();` |
 | `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. | `final s = await tsnet.status();` |
@@ -73,15 +87,24 @@ stacks work unchanged.
 Raw TCP between tailnet peers. Verb split: `dial` for outbound (mirrors
 Go's `tsnet.Server.Dial`), `bind` for inbound (mirrors
 `ServerSocket.bind` in `dart:io`). Returns standard `dart:io` types so
-accept loops are just `await for (conn in server)`.
+accept loops are just `await for (conn in server)`. The bridge
+implementation is expected to preserve normal TCP half-close behavior
+and to close its loopback listener immediately after the first accepted
+bridge connection so the public API behaves like a standard socket, not
+an approximation of one.
 
 **Completed in:** Phase 3 — depends on the shared loopback-bridge
 helper in Go, which also unblocks TLS / UDP / Funnel / Taildrop.
 
+**Tracked upstream gap:** `tsnet.Server.ListenService` exists upstream
+as of `tailscale.com v1.94.1`, but is not yet exposed here. The roadmap
+tracks that as a future `tcp`-aligned listener once the module pin is
+bumped; it should not force a separate `services` namespace by itself.
+
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `tcp.dial(host, port, {timeout})` → `Future<Socket>` | ✅ | Outbound TCP to a tailnet peer. `host` may be IP or MagicDNS name. | `final s = await tsnet.tcp.dial('100.64.0.5', 22);` |
-| `tcp.bind(port, {host})` → `Future<ServerSocket>` | ✅ | Accept inbound TCP. `host` pins to one of this node's tailnet IPs. | `final srv = await tsnet.tcp.bind(1234);` |
+| `tcp.dial(host, port, {timeout})` → `Future<Socket>` | ✅ | Outbound TCP to a tailnet peer. `host` may be IP or MagicDNS name. `timeout` is **one end-to-end budget** across tailnet dial, loopback connect, and token handshake — exceeding it throws `TailscaleTcpException`. | `final s = await tsnet.tcp.dial('100.64.0.5', 22);` |
+| `tcp.bind(port, {host})` → `Future<ServerSocket>` | ✅ | Accept inbound TCP. `host` pins to one of this node's tailnet IPs. Pass `0` for `port` to request an ephemeral tailnet port; read it back from `ServerSocket.port`. | `final srv = await tsnet.tcp.bind(1234);` |
 
 ## `tls`
 
@@ -135,7 +158,9 @@ mobile-to-desktop sync, collab tools, anywhere you'd otherwise stand up
 a file server. Byte streams use `Stream<Uint8List>` throughout so
 producer/consumer can pipe without intermediate buffering.
 
-**Completed in:** Phase 8. **Depends on:** Phase 3 loopback bridge.
+**Completed in:** Phase 8. **Depends on:** Phase 3 loopback bridge or
+an equivalent LocalAPI-backed byte-stream path, whichever yields the
+simpler stream-safe implementation first.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -159,8 +184,9 @@ writer lands first, `setConfig` throws `TailscaleServeException` with
 
 **Completed in:** Phase 9. **Depends on:** Phase 2 (value types).
 **Also:** Phase 9 bumps the `tailscale.com` Go module pin to pick up
-`Services` / `AllowFunnel` / `Foreground` / `ListenService`. Headscale
-doesn't support Serve; live-Tailscale test only.
+`Services` / `AllowFunnel` / `Foreground` and the newer
+service-adjacent APIs. Headscale doesn't support Serve; live-Tailscale
+test only.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |

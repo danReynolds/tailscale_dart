@@ -18,6 +18,11 @@ clean up API-hygiene issues surfaced in design review.
 Strict ordering: **parity with today first**, hygiene second, new
 capabilities third.
 
+Implementation alignment is intentional: data-plane sockets and
+listeners should stay close to `tsnet.Server`, while status,
+diagnostics, prefs, profiles, serve config, and file-transfer features
+should stay close to `local.Client` and the LocalAPI.
+
 ---
 
 ## Motivation
@@ -75,6 +80,26 @@ comments.
    Callers pattern-match on type, not string.
 7. **Identity by stable ID, not key material.** Public keys rotate on
    reinstall; `StableNodeID` / `PeerStatus` references don't.
+
+## Upstream alignment
+
+This package is aligned to two upstream surfaces, not one:
+
+- **`tsnet.Server` for embedded data-plane primitives.** Outbound and
+  inbound transport APIs should mirror `HTTPClient`, `Dial`, `Listen`,
+  `ListenPacket`, `ListenTLS`, `ListenFunnel`, and future transport
+  listeners such as `ListenService`.
+- **`local.Client` for LocalAPI-backed control-plane features.**
+  `whois`, diagnostics, prefs, exit-node control, profiles, serve
+  config, taildrop, and the generic escape hatch should map to typed
+  LocalAPI operations rather than inventing a parallel control model in
+  Dart.
+- **Prefer direct `tsnet` methods when the goal is "give me a
+  transport primitive".** Prefer `local.Client` when the goal is
+  "inspect or mutate daemon-managed state".
+- **Track upstream version skew explicitly.** The current repo pin is
+  `tailscale.com v1.92.2`. Features added in later upstream releases
+  must be called out in the roadmap rather than silently assumed.
 
 ---
 
@@ -151,7 +176,7 @@ one sweep, so later phases don't re-open the same debates.
 | 2 | Add `stableNodeId` to `PeerStatus`                       | Upstream `ipnstate.PeerStatus` has `ID tailcfg.StableNodeID`; we dropped it. Required for type-safe `exitNode.use(peer)` | [ ]  |
 | 3 | `Tailscale.whois(ip)` returns `Future<PeerIdentity?>`   | Unknown IP returns null instead of forcing try/catch                                | [ ]  |
 | 4 | `profiles.current()` returns `Future<LoginProfile?>`    | Fresh install has no current profile — express it in the type                        | [ ]  |
-| 5 | `Tailscale.up()` returns `Future<TailscaleStatus>`, resolving on **first stable state** | Resolves on `running`, `needsLogin`, or `needsMachineAuth`. Caller inspects `status.state` + `authUrl` to route next (interactive login, admin approval, or proceed). **Diverges from Go's `tsnet.Server.Up` which waits only on Running** — intentional; a Dart app can't hang until a human clicks a browser link. | [ ]  |
+| 5 | `Tailscale.up()` returns `Future<TailscaleStatus>`, resolving on **first stable state only** | Resolves on `running`, `needsLogin`, or `needsMachineAuth`. Caller inspects `status.state` + `authUrl` to route next (interactive login, admin approval, or proceed). **Diverges from Go's `tsnet.Server.Up` which waits only on Running** — intentional; a Dart app can't hang until a human clicks a browser link. If startup fails or the implementation gives up waiting before a stable state is reached, throw `TailscaleUpException`; never return a transitional state such as `starting`. | [ ]  |
 | 6 | Prefs setter naming: all `set*` prefix                  | `setAdvertisedRoutes`, `setAcceptRoutes`, `setShieldsUp`, `setAutoUpdate`           | [ ]  |
 | 7 | `taildrop.get` → `taildrop.openRead` + `Stream<Uint8List>` | Matches `File.openRead`; efficient byte streaming                                | [ ]  |
 | 8 | `exitNode.use(PeerStatus peer)`                         | Type-safe exit-node selection                                                       | [ ]  |
@@ -177,7 +202,8 @@ one sweep, so later phases don't re-open the same debates.
 ### Phase 3 — Loopback bridge + `tcp` primitives
 
 **Goal:** enable non-HTTP peer communication. Establishes the Go-side
-foundation every socket-shaped API depends on.
+foundation every socket-shaped API depends on, without weakening the
+`dart:io` socket contract the Dart surface promises.
 
 **Dependencies:** Phase 2 (data-type shapes must be settled for error
 returns).
@@ -190,19 +216,32 @@ returns).
 | 4 | `tcp.dial(host, port, {timeout})` → `Future<Socket>`    | Open TCP connection to a tailnet peer; wraps `tsnet.Server.Dial`                     | [ ]  |
 | 5 | `tcp.bind(port, {host})` → `Future<ServerSocket>`       | Accept TCP connections on the tailnet; wraps `tsnet.Server.Listen("tcp", ...)`       | [ ]  |
 | 6 | Per-dial auth token                                     | Loopback port is auth-gated so co-resident processes can't hijack                    | [ ]  |
-| 7 | **Platform verification: iOS + Android**                 | Confirm the loopback-bridge helper works under the existing native-assets hook on both mobile platforms. If loopback binding is kernel-gated on iOS in a way that blocks this pattern, that needs to surface here — not in Phase 5 when three transports are downstream. | [ ]  |
-| 8 | E2E byte-echo test                                      | Two nodes exchange arbitrary bytes via `tcp.dial` + `tcp.bind`                       | [ ]  |
-| 9 | Example: raw-TCP echo server/client                     | `/example/tcp_echo.dart`                                                             | [ ]  |
+| 7 | Bridge preserves TCP half-close semantics               | One side reaching EOF closes only that write direction; the opposite direction remains readable/writable until it closes too. Use `CloseWrite` / `CloseRead` (or the closest available platform equivalent) instead of unconditional full-close on first `io.Copy` completion. | [ ]  |
+| 8 | Listener is truly single-use                            | The loopback listener closes immediately after the first successful `Accept`, regardless of how long the proxied session lives, so later local connects cannot race a dead bridge. | [ ]  |
+| 9 | Timeout contract is explicit and tested                 | `tcp.dial(timeout: X)` must document and enforce one timeout model. Preferred contract: one end-to-end budget spanning tailnet dial, loopback connect, and token handshake, rather than reusing `X` independently at each stage. | [ ]  |
+| 10| **Platform verification: iOS + Android**                | Confirm the loopback-bridge helper works under the existing native-assets hook on both mobile platforms. If loopback binding is kernel-gated on iOS in a way that blocks this pattern, that needs to surface here — not in Phase 5 when three transports are downstream. | [ ]  |
+| 11| E2E byte-echo test                                      | Two nodes exchange arbitrary bytes via `tcp.dial` + `tcp.bind`                       | [ ]  |
+| 12| Go regression tests for bridge invariants               | Cover token rejection, accept-timeout cleanup, half-close propagation, and single-use listener behavior under second-connector contention. | [ ]  |
+| 13| Example: raw-TCP echo server/client                     | `/example/tcp_echo.dart`                                                             | [ ]  |
 
-**Exit criteria:** `dart test test/e2e/e2e_test.dart` passes a new
-`tcp lifecycle` group with byte-level assertions.
+**Exit criteria:**
+
+- `dart test test/e2e/e2e_test.dart` passes a new `tcp lifecycle`
+  group with byte-level assertions.
+- Go tests cover token rejection, accept-timeout cleanup,
+  half-close propagation, and listener single-use behavior.
+- The timeout contract is documented in Dart doc comments and matched
+  by tests; `tcp.dial(timeout: X)` must not silently take ~2x `X`
+  unless the docs explicitly define timeout as per-stage rather than
+  end-to-end.
 
 ---
 
 ### Phase 4 — LocalAPI one-shots
 
 **Goal:** expose the read-only and simple-write LocalAPI calls that
-don't require the loopback bridge. Proceeds in parallel with Phase 3.
+don't require the loopback bridge. These are thin, typed wrappers over
+`local.Client`. Proceeds in parallel with Phase 3.
 
 **Dependencies:** Phase 2.
 
@@ -251,7 +290,8 @@ since Headscale doesn't support them.
 ### Phase 6 — Prefs + Exit Node
 
 **Goal:** advanced routing config. First API surface that writes state
-beyond the engine lifecycle.
+beyond the engine lifecycle. Backed by `local.Client` preference and
+exit-node APIs, not by `tsnet.Server`.
 
 **Dependencies:** Phase 2.
 
@@ -262,14 +302,15 @@ beyond the engine lifecycle.
 | 3 | `prefs.setAcceptRoutes(bool)`                              | Accept subnet routes advertised by other nodes                          | [ ]  |
 | 4 | `prefs.setShieldsUp(bool)`                                 | Block all inbound connections                                            | [ ]  |
 | 5 | `prefs.setAutoUpdate(bool)`                                | Opt in/out of automatic tsnet updates                                   | [ ]  |
-| 6 | `prefs.updateMasked(PrefsUpdate)`                          | Atomic multi-field prefs edit                                            | [ ]  |
-| 7 | `exitNode.current()` → `PeerStatus?`                       | Peer currently being used as exit, or null                              | [ ]  |
-| 8 | `exitNode.suggest()` → `PeerStatus?`                       | Control-plane-recommended exit node (latency-based)                     | [ ]  |
-| 9 | `exitNode.use(PeerStatus)`                                 | Route all outbound traffic through this peer                            | [ ]  |
-| 10| `exitNode.useById(String stableNodeId)`                    | Same as `use`, but for the case where only the stable ID is known       | [ ]  |
-| 11| `exitNode.useAuto()`                                       | Set `AutoExitNode` / `auto:any` mode — let the control plane pick. Upstream prefs support this; future-proofs the API against requiring a user-facing "auto" button to land as a breaking redesign. | [ ]  |
-| 12| `exitNode.clear()`                                         | Stop routing through an exit node                                        | [ ]  |
-| 13| `exitNode.onCurrentChange` → `Stream<PeerStatus?>`         | React to exit-node changes (including external)                          | [ ]  |
+| 6 | `prefs.setAdvertisedTags(tags)`                            | Replace advertised ACL tags                                             | [ ]  |
+| 7 | `prefs.updateMasked(PrefsUpdate)`                          | Atomic multi-field prefs edit                                            | [ ]  |
+| 8 | `exitNode.current()` → `PeerStatus?`                       | Peer currently being used as exit, or null                              | [ ]  |
+| 9 | `exitNode.suggest()` → `PeerStatus?`                       | Control-plane-recommended exit node (latency-based)                     | [ ]  |
+| 10| `exitNode.use(PeerStatus)`                                 | Route all outbound traffic through this peer                            | [ ]  |
+| 11| `exitNode.useById(String stableNodeId)`                    | Same as `use`, but for the case where only the stable ID is known       | [ ]  |
+| 12| `exitNode.useAuto()`                                       | Set `AutoExitNode` / `auto:any` mode — let the control plane pick. Upstream prefs support this; future-proofs the API against requiring a user-facing "auto" button to land as a breaking redesign. | [ ]  |
+| 13| `exitNode.clear()`                                         | Stop routing through an exit node                                        | [ ]  |
+| 14| `exitNode.onCurrentChange` → `Stream<PeerStatus?>`         | React to exit-node changes (including external)                          | [ ]  |
 
 **Exit criteria:** e2e covers advertising a route, using/clearing an
 exit node (manual + auto), and shields-up behavior.
@@ -279,7 +320,7 @@ exit node (manual + auto), and shields-up behavior.
 ### Phase 7 — Profiles
 
 **Goal:** multi-account / multi-tailnet support — one device, several
-identities.
+identities. Backed by `local.Client` profile APIs.
 
 **Dependencies:** Phase 2.
 
@@ -290,7 +331,8 @@ identities.
 | 3 | `profiles.switchTo(LoginProfile)`                  | Disconnect + reconnect with the target profile's credentials          | [ ]  |
 | 4 | `profiles.switchToId(String id)`                   | Escape hatch when only the ID is available                            | [ ]  |
 | 5 | `profiles.delete(LoginProfile)`                    | Remove a profile and its persisted credentials                        | [ ]  |
-| 6 | `profiles.newEmpty()`                              | Create an empty slot for the next `up()` with a fresh authkey          | [ ]  |
+| 6 | `profiles.deleteById(String id)`                   | Escape hatch when only the ID is available                            | [ ]  |
+| 7 | `profiles.newEmpty()`                              | Create an empty slot for the next `up()` with a fresh authkey         | [ ]  |
 
 **Exit criteria:** e2e creates two profiles, switches between them,
 deletes one.
@@ -301,7 +343,13 @@ deletes one.
 
 **Goal:** peer-to-peer file transfer.
 
-**Dependencies:** Phase 3 (byte-stream bridging pattern).
+**Dependencies:** Phase 3 or an equivalent LocalAPI-backed
+byte-stream path.
+
+Taildrop should follow the simplest stream-safe implementation path
+available at the time. If LocalAPI-backed streaming lands cleanly
+before the general socket bridge is mature enough, Taildrop can move
+earlier rather than waiting on unrelated transport work.
 
 | # | API                                                                      | Purpose                                                                                     | Done |
 | - | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- | ---- |
@@ -342,13 +390,14 @@ versions). Bump + audit the diff before modelling `ServeConfig`.
 | 8 | `serve.getConfig()` → `ServeConfig`         | Current serve config (populates ETag)                                      | [ ]  |
 | 9 | `serve.setConfig(config)`                   | Replace config atomically; throws on ETag mismatch                         | [ ]  |
 | 10| `TailscaleConflictException`                | Thrown when `setConfig` detects a concurrent modification                  | [ ]  |
+| 11| `tcp.listenService(name, mode)`             | Direct Dart mirror of `tsnet.Server.ListenService` for advertising Tailscale Services hosts. Depends on bumping `tailscale.com` to a release that includes `ListenService` (added upstream in `v1.94.1`). Keep this under `tcp`; do not create a speculative `services` namespace for a single listener primitive. | [ ]  |
 
 **Note on Services:** `Services` / `AllowFunnel` / `Foreground` are
 fields in `ipn.ServeConfig`, not a separate product surface — they live
 in this namespace, not in a new `services` namespace. `ListenService`
-(upstream's `tsnet.Server.ListenService`) is a separate method; if/when
-it stabilizes, slot it under `tcp` or a future phase. Don't create a
-speculative `services` namespace.
+(upstream's `tsnet.Server.ListenService`) is already a separate stable
+method; treat it as a transport-aligned listener that belongs under
+`tcp`, not as justification for a separate `services` namespace.
 
 **Exit criteria:** e2e publishes a static directory at `/docs/` via
 `serve.setConfig` and fetches it back over HTTPS. Live-tailnet only —
@@ -443,6 +492,11 @@ Not acting on these in this RFC, but worth tracking:
   pivoting away from our CGO-export shim, but if it stabilizes it
   could shrink the Go-export surface by ~80% and let us drop
   `go/cmd/dylib/main.go` entirely. Re-evaluate in ~6 months.
+- **Upstream feature drift.** `tsnet` and LocalAPI continue to grow
+  after the repo's current `tailscale.com v1.92.2` pin. Re-check
+  `ListenService`, `ServeConfig`, profile APIs, and taildrop flows
+  before each feature phase starts rather than assuming the old model is
+  still current.
 - **Platform-specific features.** Linux posture checks, Android
   connectivity-migration hooks, iOS background-tunnel APIs —
   platform-gated, should slot into the relevant namespace when

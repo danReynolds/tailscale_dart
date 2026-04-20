@@ -38,7 +38,7 @@ export 'src/api/taildrop.dart';
 export 'src/api/tcp.dart' hide createTcp, TcpDialFn, TcpBindFn, TcpUnbindFn;
 export 'src/api/tls.dart'
     hide createTls, TlsBindFn, TlsUnbindFn, TlsDomainsFn;
-export 'src/api/udp.dart';
+export 'src/api/udp.dart' hide createUdp, UdpBindFn, TailscaleUdpSocket;
 export 'src/errors.dart';
 export 'src/status.dart';
 
@@ -165,7 +165,13 @@ class Tailscale {
     unbindFn: (loopbackPort) => _worker.tcpUnbind(loopbackPort: loopbackPort),
     domainsFn: _worker.tlsDomains,
   );
-  final Udp udp = Udp.instance;
+  late final Udp udp = createUdp(
+    bindFn: (tailnetHost, tailnetPort, loopbackPort) => _worker.udpBind(
+      tailnetHost: tailnetHost,
+      tailnetPort: tailnetPort,
+      loopbackPort: loopbackPort,
+    ),
+  );
   final Funnel funnel = Funnel.instance;
   late final Http http = createHttp(
     clientGetter: () => _http,

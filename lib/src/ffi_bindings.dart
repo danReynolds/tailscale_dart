@@ -88,6 +88,42 @@ external ffi.Pointer<Utf8> duneTcpBind(
 @ffi.Native<ffi.Void Function(ffi.Int32)>(symbol: 'DuneTcpUnbind')
 external void duneTcpUnbind(int loopbackPort);
 
+/// Starts an inbound UDP bridge: this node's tsnet.Server opens a
+/// `PacketConn` at `tailnetHost:tailnetPort`, then dials the
+/// Dart-owned loopback TCP listener at `127.0.0.1:loopbackPort` and
+/// pumps framed datagrams between them.
+///
+/// Frame wire format (both directions):
+///   1 byte        addr family marker (4=IPv4, 16=IPv6; also the byte
+///                 count of the IP field that follows)
+///   4/16 bytes    raw IP
+///   2 bytes BE    port
+///   2 bytes BE    payload length (0..65535)
+///   N bytes       payload
+///
+/// Pass `tailnetPort = 0` for an ephemeral port; the assigned port
+/// comes back in the response JSON.
+///
+/// Returns JSON:
+///   {"tailnetPort": N} on success.
+///   {"error": "..."} on failure (tailnet host isn't a valid IP,
+///   port is in use, loopback dial-in fails, etc.).
+///
+/// tsnet.Server.ListenPacket requires a specific tailnet IP —
+/// wildcard binds are not supported, so `tailnetHost` is required.
+///
+/// Teardown: the bridge tears itself down when the loopback conn
+/// closes — no separate Unbind RPC.
+@ffi.Native<
+    ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int32)>(
+  symbol: 'DuneUdpBind',
+)
+external ffi.Pointer<Utf8> duneUdpBind(
+  ffi.Pointer<Utf8> tailnetHost,
+  int tailnetPort,
+  int loopbackPort,
+);
+
 /// Starts an inbound TLS-terminated bridge: this node's tsnet.Server
 /// listens on `tailnetPort` with its auto-provisioned Let's Encrypt
 /// cert, terminates TLS in Go, and forwards the resulting plaintext

@@ -189,6 +189,21 @@ final class Worker {
     return response.tailnetPort;
   }
 
+  Future<int> udpBind({
+    required String tailnetHost,
+    required int tailnetPort,
+    required int loopbackPort,
+  }) async {
+    final response = await _request<_WorkerUdpBindResponse>(
+      _WorkerUdpBindCommand(
+        tailnetHost: tailnetHost,
+        tailnetPort: tailnetPort,
+        loopbackPort: loopbackPort,
+      ),
+    );
+    return response.tailnetPort;
+  }
+
   Future<PeerIdentity?> whois(String ip) async {
     final response = await _request<_WorkerWhoIsResponse>(
       _WorkerWhoIsCommand(ip: ip),

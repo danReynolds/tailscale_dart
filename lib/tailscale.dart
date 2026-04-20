@@ -22,13 +22,13 @@ import 'src/worker/worker.dart';
 export 'src/api/diag.dart';
 export 'src/api/exit_node.dart';
 export 'src/api/funnel.dart' hide attachFunnelMetadata;
-export 'src/api/http.dart';
+export 'src/api/http.dart' hide createHttp;
 export 'src/api/identity.dart';
 export 'src/api/prefs.dart';
 export 'src/api/profiles.dart';
 export 'src/api/serve.dart';
 export 'src/api/taildrop.dart';
-export 'src/api/tcp.dart';
+export 'src/api/tcp.dart' hide createTcp;
 export 'src/api/tls.dart';
 export 'src/api/udp.dart';
 export 'src/errors.dart';
@@ -109,7 +109,7 @@ class Tailscale {
   }
 
   // ─── Transport namespaces ───────────────────────────────────────────
-  late final Tcp tcp = Tcp.internal(
+  late final Tcp tcp = createTcp(
     dialFn: (host, port, timeout) =>
         _worker.tcpDial(host: host, port: port, timeout: timeout),
     bindFn: (tailnetPort, tailnetHost, loopbackPort) => _worker.tcpBind(
@@ -122,7 +122,7 @@ class Tailscale {
   final Tls tls = Tls.instance;
   final Udp udp = Udp.instance;
   final Funnel funnel = Funnel.instance;
-  late final Http http = Http.internal(
+  late final Http http = createHttp(
     clientGetter: () => _http,
     exposeFn: (localPort, tailnetPort) =>
         _worker.listen(localPort: localPort, tailnetPort: tailnetPort),

@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tailscale/tailscale.dart';
+import 'package:tailscale/src/api/tcp.dart' show createTcp;
 import 'package:tailscale/src/ffi_bindings.dart' as native;
 
 void main() {
@@ -53,7 +54,7 @@ void main() {
       final loopback = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(loopback.close);
 
-      final tcp = Tcp.internal(
+      final tcp = createTcp(
         dialFn: (_, __, ___) async {
           await Future<void>.delayed(const Duration(milliseconds: 40));
           return (loopbackPort: loopback.port, token: 'token');

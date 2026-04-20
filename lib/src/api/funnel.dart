@@ -35,20 +35,28 @@ class FunnelMetadata {
   String toString() => 'FunnelMetadata(publicSrc: $publicSrc, sni: $sni)';
 }
 
-/// Side-channel for attaching [FunnelMetadata] to accepted [Socket]s
-/// without subclassing `dart:io` types.
-///
-/// Exposed on the library surface (not private) so the Phase 3
-/// implementation in this package can populate it; consumers only read
+/// Side-channel Expando keyed by accepted [Socket]. Private so consumers
+/// can only read it through the [FunnelSocket] extension; writes go
+/// through [attachFunnelMetadata] which is marked `@internal`.
+final _funnelMetadata = Expando<FunnelMetadata>('FunnelMetadata');
+
+/// Attach [metadata] to an accepted Funnel [socket] so callers can read
 /// it via `socket.funnel`.
-final funnelMetadata = Expando<FunnelMetadata>('FunnelMetadata');
+///
+/// Library-internal — called by this package's Phase 5 Funnel
+/// implementation when yielding accepted sockets on the
+/// [SecureServerSocket] stream. Consumers never need to call this.
+@internal
+void attachFunnelMetadata(Socket socket, FunnelMetadata metadata) {
+  _funnelMetadata[socket] = metadata;
+}
 
 /// Read-only accessor for Funnel metadata on an accepted [Socket].
 extension FunnelSocket on Socket {
   /// The [FunnelMetadata] observed by the Funnel edge for this
   /// connection, or null when the socket was not accepted via
   /// [Funnel.bind].
-  FunnelMetadata? get funnel => funnelMetadata[this];
+  FunnelMetadata? get funnel => _funnelMetadata[this];
 }
 
 /// Public-internet HTTPS via Tailscale Funnel.
@@ -62,7 +70,9 @@ extension FunnelSocket on Socket {
 /// internet-facing source address and TLS SNI without subclassing
 /// `dart:io` types.
 class Funnel {
-  const Funnel();
+  /// Library-internal. Reach via `Tailscale.instance.funnel`.
+  @internal
+  const Funnel.internal();
 
   /// Binds a TLS listener to the public internet at the node's Funnel
   /// hostname. Wraps `tsnet.Server.ListenFunnel`.

@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:meta/meta.dart';
+
 /// TLS-terminated listener with auto-provisioned cert from the control plane.
 ///
 /// Reached via [Tailscale.tls]. Requires the tailnet operator to have
@@ -7,7 +9,9 @@ import 'dart:io';
 /// a clear error if those are off. Use [domains] as a preflight to
 /// check.
 class Tls {
-  const Tls();
+  /// Library-internal. Reach via `Tailscale.instance.tls`.
+  @internal
+  const Tls.internal();
 
   /// Binds a TLS listener on the tailnet. Wraps
   /// `tsnet.Server.ListenTLS`.

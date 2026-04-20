@@ -1,3 +1,5 @@
+import 'package:meta/meta.dart';
+
 import '../status.dart';
 
 /// Exit-node routing: route all outbound traffic from this node through
@@ -5,7 +7,9 @@ import '../status.dart';
 ///
 /// Reached via [Tailscale.exitNode].
 class ExitNode {
-  const ExitNode();
+  /// Library-internal. Reach via `Tailscale.instance.exitNode`.
+  @internal
+  const ExitNode.internal();
 
   /// The peer currently being used as this node's exit, or null if none.
   Future<PeerStatus?> current() =>

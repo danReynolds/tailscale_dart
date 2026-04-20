@@ -21,7 +21,7 @@ import 'src/worker/worker.dart';
 
 export 'src/api/diag.dart';
 export 'src/api/exit_node.dart';
-export 'src/api/funnel.dart';
+export 'src/api/funnel.dart' hide attachFunnelMetadata;
 export 'src/api/http.dart';
 export 'src/api/identity.dart';
 export 'src/api/prefs.dart';
@@ -94,10 +94,10 @@ class Tailscale {
   }
 
   // ─── Transport namespaces ───────────────────────────────────────────
-  final Tcp    tcp    = const Tcp();
-  final Tls    tls    = const Tls();
-  final Udp    udp    = const Udp();
-  final Funnel funnel = const Funnel();
+  final Tcp    tcp    = const Tcp.internal();
+  final Tls    tls    = const Tls.internal();
+  final Udp    udp    = const Udp.internal();
+  final Funnel funnel = const Funnel.internal();
   late final Http http = Http.internal(
     clientGetter: () => _http,
     exposeFn: (localPort, tailnetPort) =>
@@ -105,14 +105,14 @@ class Tailscale {
   );
 
   // ─── Feature namespaces ─────────────────────────────────────────────
-  final Taildrop taildrop = const Taildrop();
-  final Serve    serve    = const Serve();
-  final ExitNode exitNode = const ExitNode();
-  final Profiles profiles = const Profiles();
-  final Prefs    prefs    = const Prefs();
+  final Taildrop taildrop = const Taildrop.internal();
+  final Serve    serve    = const Serve.internal();
+  final ExitNode exitNode = const ExitNode.internal();
+  final Profiles profiles = const Profiles.internal();
+  final Prefs    prefs    = const Prefs.internal();
 
   // ─── Diagnostics ────────────────────────────────────────────────────
-  final Diag diag = const Diag();
+  final Diag diag = const Diag.internal();
 
   // ─── Streams ────────────────────────────────────────────────────────
 
@@ -179,9 +179,14 @@ class Tailscale {
   }) async {
     final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
 
-    // Subscribe before start() so we don't miss an early Running emission.
+    // Only count stable states that arrive AFTER start() returns. If up()
+    // is called on an already-running node (with a new authKey), the old
+    // engine's lingering `running` emission would otherwise satisfy the
+    // "first stable state" check before the restart completes.
     final stable = Completer<void>();
+    var startReturned = false;
     final sub = onStateChange.listen((state) {
+      if (!startReturned) return;
       if (_isStableState(state) && !stable.isCompleted) {
         stable.complete();
       }
@@ -195,6 +200,15 @@ class Tailscale {
         stateDir: _stateDir,
       );
       _http = TailscaleProxyClient(proxyPort, proxyAuthToken);
+      startReturned = true;
+
+      // No-op up() case: the engine is already at a stable state and
+      // won't emit another event. Check once post-start so we don't
+      // wait on a state change that will never come.
+      final postStart = await status();
+      if (_isStableState(postStart.state) && !stable.isCompleted) {
+        stable.complete();
+      }
 
       await stable.future.timeout(
         const Duration(seconds: 30),

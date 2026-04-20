@@ -1,6 +1,7 @@
 import 'package:meta/meta.dart';
 
 /// A saved login profile — one per account/tailnet stored on this node.
+
 @immutable
 class LoginProfile {
   const LoginProfile({
@@ -40,7 +41,9 @@ class LoginProfile {
 /// Reached via [Tailscale.profiles]. Useful for a single app that needs to
 /// operate in both a personal and a work tailnet, or dev vs. prod.
 class Profiles {
-  const Profiles();
+  /// Library-internal. Reach via `Tailscale.instance.profiles`.
+  @internal
+  const Profiles.internal();
 
   /// The currently active profile, or null if no profile is active on
   /// this node (e.g. the node has never logged in).

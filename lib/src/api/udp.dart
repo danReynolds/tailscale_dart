@@ -1,10 +1,14 @@
 import 'dart:io';
 
+import 'package:meta/meta.dart';
+
 /// UDP datagram primitives over the tailnet.
 ///
 /// Reached via [Tailscale.udp].
 class Udp {
-  const Udp();
+  /// Library-internal. Reach via `Tailscale.instance.udp`.
+  @internal
+  const Udp.internal();
 
   /// Binds a UDP datagram socket on a specific tailnet IP of this node.
   /// Wraps `tsnet.Server.ListenPacket`.

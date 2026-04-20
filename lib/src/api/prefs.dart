@@ -1,3 +1,5 @@
+import 'package:meta/meta.dart';
+
 /// Node preferences. Mirrors a subset of `ipn.Prefs` on the Go side.
 ///
 /// Fields cover the long tail of tsnet configuration that doesn't warrant
@@ -81,7 +83,9 @@ class PrefsUpdate {
 /// Reached via [Tailscale.prefs]. For common single-field changes prefer
 /// the named setters; for atomic multi-field edits use [updateMasked].
 class Prefs {
-  const Prefs();
+  /// Library-internal. Reach via `Tailscale.instance.prefs`.
+  @internal
+  const Prefs.internal();
 
   /// Current preferences snapshot.
   Future<TailscalePrefs> get() =>

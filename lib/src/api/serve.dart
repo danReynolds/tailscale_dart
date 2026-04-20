@@ -44,7 +44,9 @@ class ServeConfig {
 /// push the new one. All the addRoute/removeRoute operations compose as
 /// transforms on [ServeConfig], not methods on this class.
 class Serve {
-  const Serve();
+  /// Library-internal. Reach via `Tailscale.instance.serve`.
+  @internal
+  const Serve.internal();
 
   /// Current serve/funnel config for this node.
   Future<ServeConfig> getConfig() =>

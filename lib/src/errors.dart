@@ -104,14 +104,15 @@ final class TailscaleUpException extends TailscaleOperationException {
   }) : super('up', message);
 }
 
-/// Thrown when `http.expose()` fails to forward tailnet traffic.
-final class TailscaleListenException extends TailscaleOperationException {
-  const TailscaleListenException(
+/// Thrown when an `http.*` call fails — notably `http.expose()` failing
+/// to forward tailnet traffic, or `http.client` accessed before `up()`.
+final class TailscaleHttpException extends TailscaleOperationException {
+  const TailscaleHttpException(
     String message, {
     super.code,
     super.statusCode,
     super.cause,
-  }) : super('listen', message);
+  }) : super('http', message);
 }
 
 /// Thrown when `status()` fails to decode or fetch native status.

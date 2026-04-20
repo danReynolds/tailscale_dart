@@ -30,7 +30,7 @@ void main() {
     test('every namespace has its own exception subtype', () {
       const errors = <TailscaleOperationException>[
         TailscaleUpException('_'),
-        TailscaleListenException('_'),
+        TailscaleHttpException('_'),
         TailscaleStatusException('_'),
         TailscaleLogoutException('_'),
         TailscaleTaildropException('_'),

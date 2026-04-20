@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:meta/meta.dart';
+
 /// Raw TCP primitives over the tailnet.
 ///
 /// Verb split: [dial] for outbound connections matches Go / tsnet
@@ -8,7 +10,9 @@ import 'dart:io';
 /// with `ServerSocket.listen(callback)` — the Dart stream subscription
 /// that's the idiomatic accept loop.
 class Tcp {
-  const Tcp();
+  /// Library-internal. Reach via `Tailscale.instance.tcp`.
+  @internal
+  const Tcp.internal();
 
   /// Opens a TCP connection to a peer on the tailnet. Mirrors
   /// `tsnet.Server.Dial`.

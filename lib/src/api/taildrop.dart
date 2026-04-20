@@ -61,7 +61,9 @@ class WaitingFile {
 /// with no intermediary — good fit for mobile-to-desktop sync, collab
 /// tools, and anywhere you'd otherwise set up a file server.
 class Taildrop {
-  const Taildrop();
+  /// Library-internal. Reach via `Tailscale.instance.taildrop`.
+  @internal
+  const Taildrop.internal();
 
   /// Peers you can send files to right now (owned-by-you + online +
   /// allowed by ACLs).

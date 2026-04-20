@@ -169,7 +169,9 @@ class ClientVersion {
 ///
 /// Reached via [Tailscale.diag].
 class Diag {
-  const Diag();
+  /// Library-internal. Reach via `Tailscale.instance.diag`.
+  @internal
+  const Diag.internal();
 
   /// Tailscale-level ping. Reports round-trip time and whether the path
   /// is direct peer-to-peer or DERP-relayed.

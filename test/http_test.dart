@@ -43,10 +43,10 @@ void main() {
       );
     });
 
-    test('http.expose() throws TailscaleListenException', () async {
+    test('http.expose() throws TailscaleHttpException', () async {
       await expectLater(
         Tailscale.instance.http.expose(8080),
-        throwsA(isA<TailscaleListenException>()),
+        throwsA(isA<TailscaleHttpException>()),
       );
     });
   });

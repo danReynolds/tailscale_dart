@@ -128,12 +128,12 @@ void _workerEntrypoint(SendPort sendPort) {
           case _WorkerListenCommand request:
             final result = _callNativeJson(
               () => native.duneListen(request.localPort, request.tailnetPort),
-              onError: TailscaleListenException.new,
+              onError: TailscaleHttpException.new,
             ) as Map<String, dynamic>;
 
             final listenPort = result['listenPort'] as int?;
             if (listenPort == null || listenPort <= 0) {
-              throw const TailscaleListenException(
+              throw const TailscaleHttpException(
                 'Native runtime did not return a usable local listen port.',
               );
             }

@@ -10,7 +10,7 @@ enum _WorkerOperation {
 
   TailscaleException exceptionForMessage(String message) => switch (this) {
         start => TailscaleUpException(message),
-        listen => TailscaleListenException(message),
+        listen => TailscaleHttpException(message),
         status => TailscaleStatusException(message),
         peers => TailscaleStatusException(message),
         down => TailscaleOperationException('down', message),

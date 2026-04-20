@@ -1,4 +1,5 @@
 import 'package:http/http.dart' as http;
+import 'package:meta/meta.dart';
 
 import '../errors.dart';
 
@@ -6,7 +7,8 @@ import '../errors.dart';
 ///
 /// Reached via [Tailscale.http].
 class Http {
-  /// Library-internal. Consumers reach this via [Tailscale.http].
+  /// Library-internal. Reach via `Tailscale.instance.http`.
+  @internal
   Http.internal({
     required http.Client? Function() clientGetter,
     required Future<int> Function(int localPort, int tailnetPort) exposeFn,

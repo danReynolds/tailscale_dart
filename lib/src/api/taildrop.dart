@@ -7,12 +7,12 @@ import 'package:meta/meta.dart';
 class FileTarget {
   const FileTarget({
     required this.nodeId,
-    required this.hostname,
+    required this.hostName,
     required this.userLoginName,
   });
 
   final String nodeId;
-  final String hostname;
+  final String hostName;
   final String userLoginName;
 
   @override
@@ -20,15 +20,15 @@ class FileTarget {
       identical(this, other) ||
       other is FileTarget &&
           nodeId == other.nodeId &&
-          hostname == other.hostname &&
+          hostName == other.hostName &&
           userLoginName == other.userLoginName;
 
   @override
-  int get hashCode => Object.hash(nodeId, hostname, userLoginName);
+  int get hashCode => Object.hash(nodeId, hostName, userLoginName);
 
   @override
   String toString() =>
-      'FileTarget(nodeId: $nodeId, hostname: $hostname, '
+      'FileTarget(nodeId: $nodeId, hostName: $hostName, '
       'userLoginName: $userLoginName)';
 }
 

@@ -12,17 +12,17 @@ void main() {
     test('==', () {
       const a = FileTarget(
         nodeId: 'n1',
-        hostname: 'peer',
+        hostName: 'peer',
         userLoginName: 'alice',
       );
       const b = FileTarget(
         nodeId: 'n1',
-        hostname: 'peer',
+        hostName: 'peer',
         userLoginName: 'alice',
       );
       const different = FileTarget(
         nodeId: 'n2',
-        hostname: 'peer',
+        hostName: 'peer',
         userLoginName: 'alice',
       );
 

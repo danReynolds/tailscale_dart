@@ -21,8 +21,14 @@ import (
 )
 
 var (
-	dartPort    C.Dart_Port_DL
-	dartPortMu  sync.Mutex
+	dartPort   C.Dart_Port_DL
+	dartPortMu sync.Mutex
+
+	// watchMu guards watchCancel. StartWatch / StopWatch are normally
+	// called serially from the Dart worker isolate, but the mutex
+	// keeps the invariant explicit so a future caller can't race us
+	// into a double-free on the cancel func.
+	watchMu     sync.Mutex
 	watchCancel context.CancelFunc
 )
 
@@ -61,10 +67,12 @@ func StartWatch() {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Cancel any previous watcher.
+	watchMu.Lock()
 	if watchCancel != nil {
 		watchCancel()
 	}
 	watchCancel = cancel
+	watchMu.Unlock()
 
 	watcher, err := lc.WatchIPNBus(ctx,
 		ipn.NotifyInitialState|ipn.NotifyInitialNetMap)
@@ -140,6 +148,8 @@ func publishPeerSnapshot(ctx context.Context, lc *local.Client) {
 
 // StopWatch cancels the state watcher goroutine.
 func StopWatch() {
+	watchMu.Lock()
+	defer watchMu.Unlock()
 	if watchCancel != nil {
 		watchCancel()
 		watchCancel = nil

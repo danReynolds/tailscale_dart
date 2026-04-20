@@ -62,6 +62,12 @@ func WhoIs(ip string) string {
 		}
 		return jsonError(err)
 	}
+	// A successful response without a Node would be a LocalAPI
+	// contract violation, but guard anyway so we don't panic.
+	if resp == nil || resp.Node == nil {
+		b, _ := json.Marshal(map[string]any{"found": false})
+		return string(b)
+	}
 
 	ips := make([]string, 0, len(resp.Node.Addresses))
 	for _, p := range resp.Node.Addresses {
@@ -168,6 +174,11 @@ func DiagPing(ip string, timeoutMillis int, pingType string) string {
 		return jsonError(errors.New(pr.Err))
 	}
 
+	// "direct" is most meaningful for disco pings (the default), which
+	// report Endpoint whenever a direct UDP path was used. TSMP / ICMP
+	// pings don't always populate Endpoint even when the path is
+	// direct, so for those types a false value should be read as
+	// "unknown / not reported" rather than "definitely relayed".
 	out := map[string]any{
 		"latencyMicros": int64(pr.LatencySeconds * 1_000_000),
 		"direct":        pr.Endpoint != "" && pr.DERPRegionID == 0,

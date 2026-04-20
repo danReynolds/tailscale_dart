@@ -31,13 +31,13 @@ void main() async {
   // 3. Make requests to peers using the built-in HTTP client.
   //    It transparently routes through the Tailscale tunnel.
   final peer = peers.firstWhere((peer) => peer.online);
-  final response = await tsnet.http.get(
+  final response = await tsnet.http.client.get(
     Uri.parse('http://${peer.ipv4}/api/data'),
   );
   print('Response: ${response.body}');
 
   // Expose a local HTTP server to the tailnet
-  await tsnet.listen(8080);
+  await tsnet.http.expose(8080);
 
   // Clean shutdown
   await tsnet.down();

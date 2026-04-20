@@ -93,11 +93,11 @@ Future<void> main() async {
     results.add(await _bench('status()', () => tsnet.status()));
     results.add(await _bench('peers()', () => tsnet.peers()));
     results.add(
-      await _bench('listen()', () => tsnet.listen(backend.port)),
+      await _bench('http.expose()', () => tsnet.http.expose(backend.port)),
     );
     results.add(
-      _benchSync('http getter', () {
-        final _ = tsnet.http;
+      _benchSync('http.client getter', () {
+        final _ = tsnet.http.client;
       }),
     );
     results.add(await _benchOnce('down()', () => tsnet.down()));

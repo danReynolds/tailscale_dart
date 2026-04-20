@@ -65,6 +65,22 @@ func DuneTcpDial(host *C.char, port C.int, timeoutMillis C.int) *C.char {
 	return C.CString(string(result))
 }
 
+//export DuneTcpBind
+func DuneTcpBind(tailnetPort C.int, tailnetHost *C.char, loopbackPort C.int) *C.char {
+	host := C.GoString(tailnetHost)
+	if err := tailscale.TcpBind(int(tailnetPort), host, int(loopbackPort)); err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneTcpUnbind
+func DuneTcpUnbind(loopbackPort C.int) {
+	tailscale.TcpUnbind(int(loopbackPort))
+}
+
 //export DuneHasState
 func DuneHasState(stateDir *C.char) C.int {
 	dir := C.GoString(stateDir)

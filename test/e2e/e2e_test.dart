@@ -11,6 +11,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
@@ -206,6 +207,31 @@ void main() {
           .timeout(const Duration(seconds: 30));
       expect(resp.statusCode, 200);
       expect(resp.body, 'echo: ping-from-node-a');
+    });
+
+    test('tcp.dial reaches the peer echo server and round-trips bytes',
+        () async {
+      final socket = await tsnet.tcp
+          .dial(peer.ipv4, 7000, timeout: const Duration(seconds: 30))
+          .timeout(const Duration(seconds: 30));
+
+      try {
+        final payload = utf8.encode('tcp-echo-${DateTime.now().microsecondsSinceEpoch}');
+        socket.add(payload);
+        await socket.flush();
+
+        final received = BytesBuilder();
+        await for (final chunk in socket.timeout(
+          const Duration(seconds: 15),
+          onTimeout: (sink) => sink.close(),
+        )) {
+          received.add(chunk);
+          if (received.length >= payload.length) break;
+        }
+        expect(received.takeBytes(), payload);
+      } finally {
+        await socket.close();
+      }
     });
   });
 

@@ -149,3 +149,132 @@ func TestRandomHexToken_UniqueAndWellFormed(t *testing.T) {
 		t.Fatalf("token length = %d, want 32", len(a))
 	}
 }
+
+// TestBindAcceptLoop_ForwardsBytes emulates the Dart side with a real
+// loopback listener and the "tailnet" side with another listener; a
+// client connects to the tailnet side and bytes flow through the
+// bridge to an accepted loopback conn.
+func TestBindAcceptLoop_ForwardsBytes(t *testing.T) {
+	// "Dart" loopback listener.
+	dartLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("dart listen: %v", err)
+	}
+	defer dartLn.Close()
+	dartPort := dartLn.Addr().(*net.TCPAddr).Port
+
+	// "Tailnet" listener — stands in for s.Listen(...).
+	tailnetLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("tailnet listen: %v", err)
+	}
+	tailnetPort := tailnetLn.Addr().(*net.TCPAddr).Port
+
+	go bindAcceptLoop(tailnetLn, dartPort)
+
+	// "Tailnet client" — what a peer on the tailnet would be.
+	peerConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", tailnetPort))
+	if err != nil {
+		t.Fatalf("peer dial: %v", err)
+	}
+	defer peerConn.Close()
+
+	// "Dart server" — accept the bridge's loopback dial and echo.
+	dartLn.(*net.TCPListener).SetDeadline(time.Now().Add(2 * time.Second))
+	dartConn, err := dartLn.Accept()
+	if err != nil {
+		t.Fatalf("dart accept: %v", err)
+	}
+	defer dartConn.Close()
+
+	go func() {
+		buf := make([]byte, 64)
+		n, err := dartConn.Read(buf)
+		if err != nil {
+			return
+		}
+		dartConn.Write(buf[:n])
+	}()
+
+	payload := []byte("bind-ok")
+	if _, err := peerConn.Write(payload); err != nil {
+		t.Fatalf("peer write: %v", err)
+	}
+	if err := peerConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(peerConn, got); err != nil {
+		t.Fatalf("peer echo read: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("echo mismatch: got %q, want %q", got, payload)
+	}
+}
+
+// TestBindAcceptLoop_TearsDownWhenDartIsGone verifies that closing
+// the Dart loopback listener causes the bridge to stop accepting
+// after the next tailnet connection attempt.
+func TestBindAcceptLoop_TearsDownWhenDartIsGone(t *testing.T) {
+	dartLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("dart listen: %v", err)
+	}
+	dartPort := dartLn.Addr().(*net.TCPAddr).Port
+	dartLn.Close() // Dart side already gone.
+
+	tailnetLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("tailnet listen: %v", err)
+	}
+	tailnetPort := tailnetLn.Addr().(*net.TCPAddr).Port
+
+	done := make(chan struct{})
+	go func() {
+		bindAcceptLoop(tailnetLn, dartPort)
+		close(done)
+	}()
+
+	// Trigger one tailnet accept so the bridge tries to dial loopback.
+	peerConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", tailnetPort))
+	if err != nil {
+		t.Fatalf("peer dial: %v", err)
+	}
+	peerConn.Close()
+
+	select {
+	case <-done:
+		// Expected — bridge tore itself down.
+	case <-time.After(bindLoopbackDialTimeout + time.Second):
+		t.Fatal("bridge did not tear down when loopback was unreachable")
+	}
+}
+
+// TestTcpUnbind_IsIdempotent confirms calling TcpUnbind on an
+// unregistered port does nothing (doesn't panic, doesn't leave
+// garbage).
+func TestTcpUnbind_IsIdempotent(t *testing.T) {
+	TcpUnbind(65535) // never registered
+	TcpUnbind(65535)
+
+	// Register and unregister explicitly.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	tcpBindRegistryMu.Lock()
+	tcpBindRegistry[port] = ln
+	tcpBindRegistryMu.Unlock()
+
+	TcpUnbind(port)
+	tcpBindRegistryMu.Lock()
+	_, stillPresent := tcpBindRegistry[port]
+	tcpBindRegistryMu.Unlock()
+	if stillPresent {
+		t.Fatal("TcpUnbind did not remove registry entry")
+	}
+
+	// Double unbind should be harmless.
+	TcpUnbind(port)
+}

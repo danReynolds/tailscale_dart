@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -147,4 +148,128 @@ func randomHexToken(byteLen int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+// bindLoopbackDialTimeout bounds how long Go waits to reach the
+// Dart-owned loopback listener per accepted tailnet conn. Short — if
+// the Dart side isn't reachable it almost certainly means the Dart
+// process closed its ServerSocket.
+const bindLoopbackDialTimeout = 5 * time.Second
+
+// tcpBindRegistry tracks active inbound TCP bridges so TcpUnbind can
+// tear down a specific one without affecting others. Keyed by the
+// Dart-owned loopback port (which is unique per bind on a given node).
+var (
+	tcpBindRegistry   = map[int]net.Listener{}
+	tcpBindRegistryMu sync.Mutex
+)
+
+// TcpBind starts an inbound TCP bridge: this node's tsnet.Server
+// listens on `tailnetPort` (optionally restricted to `tailnetHost`,
+// one of this node's tailnet IPs), and every accepted tailnet
+// connection is forwarded to the Dart-owned loopback listener at
+// `127.0.0.1:loopbackPort`.
+//
+// Dart is expected to have already bound the loopback ServerSocket
+// before this call so the very first tailnet accept has somewhere to
+// go. Tear down with TcpUnbind(loopbackPort); the bridge also tears
+// itself down if the next accepted tailnet conn can't reach the
+// loopback (i.e. Dart closed its ServerSocket).
+//
+// Note on auth: no per-connection token. Inbound connections are
+// initiated by Go to the Dart loopback, so a co-resident process
+// *could* connect to the same loopback port and impersonate a
+// tailnet peer to the Dart server. Defense-in-depth would require
+// either UDS (non-Windows) or wrapping the ServerSocket stream with
+// a handshake that the Dart library filters before yielding each
+// Socket. Both are plausible follow-ups; shipping the loopback
+// variant first keeps the Socket type clean.
+func TcpBind(tailnetPort int, tailnetHost string, loopbackPort int) error {
+	if tailnetPort < 1 || tailnetPort > 65535 {
+		return fmt.Errorf("invalid tailnet port %d", tailnetPort)
+	}
+	if loopbackPort < 1 || loopbackPort > 65535 {
+		return fmt.Errorf("invalid loopback port %d", loopbackPort)
+	}
+
+	mu.Lock()
+	s := srv
+	mu.Unlock()
+	if s == nil {
+		return errors.New("TcpBind called before Start")
+	}
+
+	addr := fmt.Sprintf(":%d", tailnetPort)
+	if tailnetHost != "" {
+		addr = net.JoinHostPort(tailnetHost, fmt.Sprintf("%d", tailnetPort))
+	}
+
+	ln, err := s.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("tsnet listen %s: %w", addr, err)
+	}
+
+	tcpBindRegistryMu.Lock()
+	// Replace any stale entry on the same loopback port (should be
+	// rare — the Dart side gets a new ephemeral port per bind call).
+	if prev, ok := tcpBindRegistry[loopbackPort]; ok {
+		prev.Close()
+	}
+	tcpBindRegistry[loopbackPort] = ln
+	tcpBindRegistryMu.Unlock()
+
+	go bindAcceptLoop(ln, loopbackPort)
+	return nil
+}
+
+// TcpUnbind tears down the inbound bridge registered against
+// `loopbackPort`. Idempotent — unknown ports are a no-op.
+func TcpUnbind(loopbackPort int) {
+	tcpBindRegistryMu.Lock()
+	ln, ok := tcpBindRegistry[loopbackPort]
+	delete(tcpBindRegistry, loopbackPort)
+	tcpBindRegistryMu.Unlock()
+	if ok {
+		ln.Close()
+	}
+}
+
+// bindAcceptLoop forwards each tailnet Accept to the Dart-owned
+// loopback listener. If the loopback dial fails, we assume the Dart
+// side shut down and tear ourselves out of the registry so the
+// tailnet listener doesn't linger forever.
+func bindAcceptLoop(tailnetLn net.Listener, loopbackPort int) {
+	for {
+		tailConn, err := tailnetLn.Accept()
+		if err != nil {
+			// Accept failed because the listener was closed (by us
+			// via TcpUnbind, or by tsnet.Server teardown).
+			break
+		}
+
+		dartConn, err := net.DialTimeout(
+			"tcp",
+			fmt.Sprintf("127.0.0.1:%d", loopbackPort),
+			bindLoopbackDialTimeout,
+		)
+		if err != nil {
+			tailConn.Close()
+			// Dart closed its loopback listener. Deregister and stop.
+			tcpBindRegistryMu.Lock()
+			delete(tcpBindRegistry, loopbackPort)
+			tcpBindRegistryMu.Unlock()
+			tailnetLn.Close()
+			return
+		}
+
+		go pipe(tailConn, dartConn)
+	}
+
+	// Normal teardown — make sure the registry doesn't reference a
+	// closed listener.
+	tcpBindRegistryMu.Lock()
+	if tcpBindRegistry[loopbackPort] == tailnetLn {
+		delete(tcpBindRegistry, loopbackPort)
+	}
+	tcpBindRegistryMu.Unlock()
 }

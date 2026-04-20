@@ -112,6 +112,13 @@ class Tailscale {
   late final Tcp tcp = Tcp.internal(
     dialFn: (host, port, timeout) =>
         _worker.tcpDial(host: host, port: port, timeout: timeout),
+    bindFn: (tailnetPort, tailnetHost, loopbackPort) => _worker.tcpBind(
+      tailnetPort: tailnetPort,
+      tailnetHost: tailnetHost,
+      loopbackPort: loopbackPort,
+    ),
+    unbindFn: (loopbackPort) =>
+        _worker.tcpUnbind(loopbackPort: loopbackPort),
   );
   final Tls    tls    = const Tls.internal();
   final Udp    udp    = const Udp.internal();

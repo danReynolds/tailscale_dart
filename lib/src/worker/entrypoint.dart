@@ -169,6 +169,26 @@ void _workerEntrypoint(SendPort sendPort) {
             } finally {
               calloc.free(hostPtr);
             }
+          case _WorkerTcpBindCommand request:
+            final hostPtr = request.tailnetHost.toNativeUtf8();
+            try {
+              _callNativeJson(
+                () => native.duneTcpBind(
+                  request.tailnetPort,
+                  hostPtr,
+                  request.loopbackPort,
+                ),
+                onError: TailscaleTcpException.new,
+              );
+              sendPort.send(const _WorkerAckResponse(_WorkerOperation.tcpBind));
+            } finally {
+              calloc.free(hostPtr);
+            }
+          case _WorkerTcpUnbindCommand request:
+            native.duneTcpUnbind(request.loopbackPort);
+            sendPort.send(
+              const _WorkerAckResponse(_WorkerOperation.tcpUnbind),
+            );
           case _WorkerStatusCommand(:final stateDir):
             sendPort.send(_WorkerStatusResponse(
               status: _loadStatusSnapshot(stateDir: stateDir),

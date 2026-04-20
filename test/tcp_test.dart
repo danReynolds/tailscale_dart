@@ -1,7 +1,5 @@
-/// Coverage for the `tcp` namespace.
-///
-/// Phase 3 ships `tcp.dial` (outbound loopback bridge). `tcp.bind`
-/// arrives in a follow-up.
+/// Coverage for the `tcp` namespace — both the outbound `dial` and
+/// inbound `bind` loopback bridges.
 @TestOn('mac-os || linux')
 library;
 
@@ -41,11 +39,11 @@ void main() {
     });
   });
 
-  group('tcp.bind', () {
-    test('throws UnimplementedError (arrives in a follow-up)', () {
-      expect(
-        () => Tailscale.instance.tcp.bind(1234),
-        throwsA(isA<UnimplementedError>()),
+  group('tcp.bind before up()', () {
+    test('throws TailscaleTcpException', () async {
+      await expectLater(
+        Tailscale.instance.tcp.bind(12345),
+        throwsA(isA<TailscaleTcpException>()),
       );
     });
   });

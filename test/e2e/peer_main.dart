@@ -1,9 +1,11 @@
 /// Peer node for multi-node E2E tests.
 ///
 /// Spawned as a subprocess by [test/e2e/e2e_test.dart]. Brings up an embedded
-/// Tailscale node, exposes a trivial local HTTP server on the tailnet via
-/// [Tailscale.listen], prints `READY <ipv4>` on stdout once the node is
-/// Running, then shuts down cleanly when stdin closes.
+/// Tailscale node, exposes:
+///   - a trivial local HTTP server on tailnet port 80 (via `http.expose`), and
+///   - a raw TCP byte-echo server on tailnet port 7000 (via `tcp.bind`),
+/// prints `READY <ipv4>` on stdout once the node is Running, then shuts down
+/// cleanly when stdin closes.
 ///
 /// Configured via environment variables:
 ///   STATE_DIR       — directory the peer owns for its Tailscale state
@@ -65,6 +67,18 @@ Future<void> main(List<String> args) async {
   await running.timeout(const Duration(seconds: 60));
   await tsnet.http.expose(server.port, tailnetPort: 80);
 
+  // Raw TCP byte-echo server on tailnet:7000 — used by the E2E
+  // `tcp.dial` test to validate the loopback bridge end to end.
+  final echoServer = await tsnet.tcp.bind(7000);
+  echoServer.listen((socket) {
+    socket.listen(
+      socket.add,
+      onDone: () => socket.close(),
+      onError: (_) => socket.close(),
+      cancelOnError: true,
+    );
+  });
+
   final status = await tsnet.status();
   final ipv4 = status.ipv4;
   if (ipv4 == null) {
@@ -81,6 +95,9 @@ Future<void> main(List<String> args) async {
   // Shut down when the parent closes stdin.
   await stdin.drain<void>();
 
+  try {
+    await echoServer.close();
+  } catch (_) {}
   try {
     await tsnet.down();
   } catch (_) {}

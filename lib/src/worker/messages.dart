@@ -4,6 +4,8 @@ enum _WorkerOperation {
   start,
   listen,
   tcpDial,
+  tcpBind,
+  tcpUnbind,
   status,
   peers,
   down,
@@ -13,6 +15,8 @@ enum _WorkerOperation {
         start => TailscaleUpException(message),
         listen => TailscaleHttpException(message),
         tcpDial => TailscaleTcpException(message),
+        tcpBind => TailscaleTcpException(message),
+        tcpUnbind => TailscaleTcpException(message),
         status => TailscaleStatusException(message),
         peers => TailscaleStatusException(message),
         down => TailscaleOperationException('down', message),
@@ -60,6 +64,25 @@ final class _WorkerTcpDialCommand extends _WorkerCommand {
   final String host;
   final int port;
   final int timeoutMillis;
+}
+
+final class _WorkerTcpBindCommand extends _WorkerCommand {
+  const _WorkerTcpBindCommand({
+    required this.tailnetPort,
+    required this.tailnetHost,
+    required this.loopbackPort,
+  }) : super(_WorkerOperation.tcpBind);
+
+  final int tailnetPort;
+  final String tailnetHost;
+  final int loopbackPort;
+}
+
+final class _WorkerTcpUnbindCommand extends _WorkerCommand {
+  const _WorkerTcpUnbindCommand({required this.loopbackPort})
+      : super(_WorkerOperation.tcpUnbind);
+
+  final int loopbackPort;
 }
 
 final class _WorkerStatusCommand extends _WorkerCommand {

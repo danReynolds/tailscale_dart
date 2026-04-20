@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:meta/meta.dart';
@@ -26,13 +27,27 @@ class Tcp {
       int port,
       Duration? timeout,
     ) dialFn,
-  }) : _dialFn = dialFn;
+    required Future<void> Function(
+      int tailnetPort,
+      String tailnetHost,
+      int loopbackPort,
+    ) bindFn,
+    required Future<void> Function(int loopbackPort) unbindFn,
+  })  : _dialFn = dialFn,
+        _bindFn = bindFn,
+        _unbindFn = unbindFn;
 
   final Future<({int loopbackPort, String token})> Function(
     String host,
     int port,
     Duration? timeout,
   ) _dialFn;
+  final Future<void> Function(
+    int tailnetPort,
+    String tailnetHost,
+    int loopbackPort,
+  ) _bindFn;
+  final Future<void> Function(int loopbackPort) _unbindFn;
 
   /// Opens a TCP connection to a peer on the tailnet. Mirrors
   /// `tsnet.Server.Dial`.
@@ -91,6 +106,65 @@ class Tcp {
   /// node; leave null to accept on all tailnet IPs this node holds.
   /// Pair with [Tailscale.whois] on `conn.remoteAddress` to authorize
   /// accepted connections by ACL tag.
-  Future<ServerSocket> bind(int port, {String? host}) =>
-      throw UnimplementedError('tcp.bind not yet implemented');
+  ///
+  /// Implementation: Dart owns an ephemeral 127.0.0.1 [ServerSocket];
+  /// the Go side runs the tsnet listener and dials the loopback on
+  /// each accepted tailnet connection. Closing the returned
+  /// [ServerSocket] tears down the tailnet listener on the next Go
+  /// accept (or sooner if the caller pairs it with `down()`).
+  ///
+  /// Note: no per-connection authentication on the loopback side.
+  /// Co-resident processes could theoretically connect to the
+  /// ephemeral loopback port and impersonate a tailnet peer. If
+  /// this matters for your threat model, add an application-level
+  /// handshake on top.
+  Future<ServerSocket> bind(int port, {String? host}) async {
+    final loopback = await ServerSocket.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+
+    try {
+      await _bindFn(port, host ?? '', loopback.port);
+    } catch (e) {
+      await loopback.close();
+      if (e is TailscaleException) rethrow;
+      throw TailscaleTcpException(
+        'Failed to bind tailnet port $port',
+        cause: e,
+      );
+    }
+
+    // Wrap so we can hook close(): tell Go to tear down the tailnet
+    // listener proactively rather than waiting for the next accept
+    // to notice the loopback is gone.
+    return _UnbindingServerSocket(loopback, () => _unbindFn(loopback.port));
+  }
+}
+
+/// `ServerSocket` delegate that runs an extra teardown hook after
+/// `close()`. Used by [Tcp.bind] to stop the Go-side tailnet listener
+/// when the caller closes their handle.
+class _UnbindingServerSocket extends StreamView<Socket>
+    implements ServerSocket {
+  _UnbindingServerSocket(this._delegate, this._onClose) : super(_delegate);
+
+  final ServerSocket _delegate;
+  final Future<void> Function() _onClose;
+
+  @override
+  InternetAddress get address => _delegate.address;
+
+  @override
+  int get port => _delegate.port;
+
+  @override
+  Future<ServerSocket> close() async {
+    final closed = await _delegate.close();
+    // Best-effort — the Go side may already be down.
+    try {
+      await _onClose();
+    } catch (_) {}
+    return closed;
+  }
 }

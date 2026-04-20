@@ -56,6 +56,29 @@ external ffi.Pointer<Utf8> duneTcpDial(
   int timeoutMillis,
 );
 
+/// Starts an inbound TCP bridge: this node's tsnet.Server listens on
+/// `tailnetPort` (optionally pinned to `tailnetHost`), and every
+/// accepted tailnet conn is forwarded to the Dart-owned loopback
+/// listener on `127.0.0.1:loopbackPort`.
+///
+/// Returns JSON: {"ok": true} on success, {"error": "..."} on failure.
+/// Pass empty string for `tailnetHost` to accept on all of this
+/// node's tailnet IPs.
+@ffi.Native<
+    ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Pointer<Utf8>, ffi.Int32)>(
+  symbol: 'DuneTcpBind',
+)
+external ffi.Pointer<Utf8> duneTcpBind(
+  int tailnetPort,
+  ffi.Pointer<Utf8> tailnetHost,
+  int loopbackPort,
+);
+
+/// Tears down the inbound TCP bridge registered against
+/// `loopbackPort`. Idempotent — unknown ports are a no-op.
+@ffi.Native<ffi.Void Function(ffi.Int32)>(symbol: 'DuneTcpUnbind')
+external void duneTcpUnbind(int loopbackPort);
+
 /// Returns 1 if the state directory has a valid machine key, 0 otherwise.
 @ffi.Native<ffi.Int32 Function(ffi.Pointer<Utf8>)>(symbol: 'DuneHasState')
 external int duneHasState(ffi.Pointer<Utf8> stateDir);

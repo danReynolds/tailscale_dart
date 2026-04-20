@@ -1,10 +1,16 @@
 import 'dart:io';
 
-/// UDP datagram primitives over the tailnet.
+import 'package:meta/meta.dart';
+
+/// UDP datagram sockets over the tailnet — tunneled over WireGuard,
+/// same direct-or-DERP fallback as TCP (see
+/// <https://tailscale.com/kb/1257/connection-types>).
 ///
 /// Reached via [Tailscale.udp].
 class Udp {
-  const Udp();
+  /// Library-internal. Reach via `Tailscale.instance.udp`.
+  @internal
+  const Udp.internal();
 
   /// Binds a UDP datagram socket on a specific tailnet IP of this node.
   /// Wraps `tsnet.Server.ListenPacket`.

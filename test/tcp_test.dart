@@ -47,4 +47,31 @@ void main() {
       );
     });
   });
+
+  group('tcp.dial timeout budget', () {
+    test('counts time spent before the loopback connect stage', () async {
+      final loopback = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(loopback.close);
+
+      final tcp = Tcp.internal(
+        dialFn: (_, __, ___) async {
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+          return (loopbackPort: loopback.port, token: 'token');
+        },
+        bindFn: (_, __, ___) async => throw UnimplementedError(),
+        unbindFn: (_) async {},
+      );
+
+      await expectLater(
+        tcp.dial('peer', 443, timeout: const Duration(milliseconds: 10)),
+        throwsA(
+          isA<TailscaleTcpException>().having(
+            (e) => e.message,
+            'message',
+            contains('timeout budget'),
+          ),
+        ),
+      );
+    });
+  });
 }

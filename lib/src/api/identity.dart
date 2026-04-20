@@ -1,5 +1,7 @@
 import 'package:meta/meta.dart';
 
+import '../_equality.dart';
+
 /// Identity of a tailnet node — the result of [Tailscale.whois].
 ///
 /// Combine with [Tailscale.tcp] `.bind(...)` to authorize incoming
@@ -40,7 +42,26 @@ class PeerIdentity {
   final List<String> tailscaleIPs;
 
   @override
-  String toString() =>
-      'PeerIdentity(nodeId: $nodeId, hostName: $hostName, '
-      'userLoginName: $userLoginName, tags: $tags)';
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PeerIdentity &&
+          nodeId == other.nodeId &&
+          hostName == other.hostName &&
+          userLoginName == other.userLoginName &&
+          listEquals(tags, other.tags) &&
+          listEquals(tailscaleIPs, other.tailscaleIPs);
+
+  @override
+  int get hashCode => Object.hash(
+        nodeId,
+        hostName,
+        userLoginName,
+        Object.hashAll(tags),
+        Object.hashAll(tailscaleIPs),
+      );
+
+  @override
+  String toString() => 'PeerIdentity(nodeId: $nodeId, hostName: $hostName, '
+      'userLoginName: $userLoginName, tags: $tags, '
+      'tailscaleIPs: $tailscaleIPs)';
 }

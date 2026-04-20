@@ -127,6 +127,55 @@ func TestRunDialBridge_SurvivesBadTokenAttacker(t *testing.T) {
 	}
 }
 
+// TestRunDialBridge_ClosesListenerAfterAuthenticatedClient confirms the
+// loopback listener is closed immediately after the legitimate Dart
+// connector authenticates, rather than staying connectable for the life
+// of the proxied session.
+func TestRunDialBridge_ClosesListenerAfterAuthenticatedClient(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("loopback listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	ourSide, peerSide := net.Pipe()
+	defer peerSide.Close()
+	token := "feedfacecafebeef"
+
+	go runDialBridge(ln, ourSide, token)
+
+	dart, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("dart dial: %v", err)
+	}
+	defer dart.Close()
+	if _, err := dart.Write([]byte(token)); err != nil {
+		t.Fatalf("token write: %v", err)
+	}
+
+	payload := []byte("listener-claimed")
+	if _, err := dart.Write(payload); err != nil {
+		t.Fatalf("payload write: %v", err)
+	}
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(peerSide, got); err != nil {
+		t.Fatalf("peer read: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("peer got %q, want %q", got, payload)
+	}
+
+	second, err := net.DialTimeout(
+		"tcp",
+		fmt.Sprintf("127.0.0.1:%d", port),
+		200*time.Millisecond,
+	)
+	if err == nil {
+		second.Close()
+		t.Fatal("second connector reached an already-claimed loopback bridge")
+	}
+}
+
 // TestRunDialBridge_RejectsAllBadTokensUntilTimeout confirms the
 // bridge tears itself down (closing the tailnet conn) if only
 // bad-token clients show up within the accept window.

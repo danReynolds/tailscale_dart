@@ -55,9 +55,10 @@ class Tcp {
   ///
   /// [host] may be a tailnet IP (e.g. `100.64.0.5`) or a
   /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) name
-  /// (e.g. `my-peer` or `my-peer.tailnet.ts.net`). [timeout] applies
-  /// to the tailnet dial and the loopback handshake only — not to
-  /// the lifetime of the returned socket.
+  /// (e.g. `my-peer` or `my-peer.tailnet.ts.net`). [timeout] is one
+  /// end-to-end budget across the native tailnet dial, the Dart-side
+  /// loopback connect, and the token handshake only — not the lifetime
+  /// of the returned socket.
   ///
   /// Implemented as a one-shot loopback bridge: the embedded Go
   /// runtime opens the tailnet conn and pipes bytes through a
@@ -72,14 +73,20 @@ class Tcp {
   /// route, connection refused, etc.) or if the loopback bridge
   /// handshake fails.
   Future<Socket> dial(String host, int port, {Duration? timeout}) async {
+    Stopwatch? stopwatch;
+    if (timeout != null) {
+      stopwatch = Stopwatch()..start();
+    }
+
     final (:loopbackPort, :token) = await _dialFn(host, port, timeout);
 
     late Socket socket;
     try {
+      final remaining = _remainingTimeout(stopwatch, timeout);
       socket = await Socket.connect(
         InternetAddress.loopbackIPv4,
         loopbackPort,
-        timeout: timeout,
+        timeout: remaining,
       );
     } catch (e) {
       throw TailscaleTcpException(
@@ -89,6 +96,7 @@ class Tcp {
     }
 
     try {
+      _remainingTimeout(stopwatch, timeout);
       socket.add(utf8.encode(token));
       await socket.flush();
     } catch (e) {
@@ -100,6 +108,21 @@ class Tcp {
     }
 
     return socket;
+  }
+
+  static Duration? _remainingTimeout(
+    Stopwatch? stopwatch,
+    Duration? totalTimeout,
+  ) {
+    if (stopwatch == null || totalTimeout == null) return null;
+    final remaining = totalTimeout - stopwatch.elapsed;
+    if (remaining <= Duration.zero) {
+      throw TailscaleTcpException(
+        'tcp.dial exceeded its timeout budget before the loopback bridge '
+        'handshake completed.',
+      );
+    }
+    return remaining;
   }
 
   /// Accepts inbound TCP connections on the tailnet. Wraps

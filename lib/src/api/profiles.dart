@@ -31,8 +31,7 @@ class LoginProfile {
   int get hashCode => Object.hash(id, userLoginName, tailnetName);
 
   @override
-  String toString() =>
-      'LoginProfile(id: $id, userLoginName: $userLoginName, '
+  String toString() => 'LoginProfile(id: $id, userLoginName: $userLoginName, '
       'tailnetName: $tailnetName)';
 }
 
@@ -48,9 +47,10 @@ class LoginProfile {
 ///
 /// Reached via [Tailscale.profiles].
 class Profiles {
-  /// Library-internal. Reach via `Tailscale.instance.profiles`.
-  @internal
-  const Profiles.internal();
+  /// Singleton namespace instance. Reach via `Tailscale.instance.profiles`.
+  static const instance = Profiles._();
+
+  const Profiles._();
 
   /// The currently active profile, or null if no profile is active on
   /// this node (e.g. the node has never logged in).

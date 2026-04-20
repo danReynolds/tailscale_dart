@@ -45,7 +45,7 @@ func DuneListen(localPort C.int, tailnetPort C.int) *C.char {
 }
 
 //export DuneTcpDial
-func DuneTcpDial(host *C.char, port C.int, timeoutMillis C.int) *C.char {
+func DuneTcpDial(host *C.char, port C.int, timeoutMillis C.longlong) *C.char {
 	h := C.GoString(host)
 	var timeout time.Duration
 	if timeoutMillis > 0 {

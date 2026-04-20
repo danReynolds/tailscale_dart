@@ -66,9 +66,11 @@ func TcpDial(host string, port int, timeout time.Duration) (int, string, error) 
 	// Dial the tailnet peer first — if this fails, we don't bother
 	// opening a loopback listener.
 	ctx := context.Background()
+	var overallDeadline time.Time
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		overallDeadline = time.Now().Add(timeout)
+		ctx, cancel = context.WithDeadline(ctx, overallDeadline)
 		defer cancel()
 	}
 	tailConn, err := s.Dial(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
@@ -90,8 +92,17 @@ func TcpDial(host string, port int, timeout time.Duration) (int, string, error) 
 	}
 
 	loopbackPort := ln.Addr().(*net.TCPAddr).Port
+	bridgeDeadline := time.Now().Add(loopbackAcceptTimeout)
+	if !overallDeadline.IsZero() && overallDeadline.Before(bridgeDeadline) {
+		bridgeDeadline = overallDeadline
+	}
+	if !bridgeDeadline.After(time.Now()) {
+		ln.Close()
+		tailConn.Close()
+		return 0, "", errors.New("tcp dial timeout elapsed before loopback bridge was ready")
+	}
 
-	go runDialBridge(ln, tailConn, token)
+	go runDialBridgeUntil(ln, tailConn, token, bridgeDeadline)
 
 	return loopbackPort, token, nil
 }
@@ -100,8 +111,11 @@ func TcpDial(host string, port int, timeout time.Duration) (int, string, error) 
 // successfully, then hands off to pipe. Unauthenticated clients get
 // their conn closed but don't consume the bridge.
 func runDialBridge(ln net.Listener, tailConn net.Conn, expectedToken string) {
+	runDialBridgeUntil(ln, tailConn, expectedToken, time.Now().Add(loopbackAcceptTimeout))
+}
+
+func runDialBridgeUntil(ln net.Listener, tailConn net.Conn, expectedToken string, deadline time.Time) {
 	defer ln.Close()
-	deadline := time.Now().Add(loopbackAcceptTimeout)
 
 	for {
 		remaining := time.Until(deadline)
@@ -124,7 +138,11 @@ func runDialBridge(ln net.Listener, tailConn net.Conn, expectedToken string) {
 			return
 		}
 
-		if authenticateLoopbackConn(conn, expectedToken) {
+		if authenticateLoopbackConn(conn, expectedToken, deadline) {
+			// The bridge is now claimed by the authenticated connector.
+			// Close the listener immediately so later local connects can't
+			// race a session that is already in flight.
+			_ = ln.Close()
 			configureTCP(conn)
 			configureTCP(tailConn)
 			pipe(conn, tailConn)
@@ -141,9 +159,13 @@ func runDialBridge(ln net.Listener, tailConn net.Conn, expectedToken string) {
 // bounded window and returns whether it matched expectedToken. On
 // success the read deadline is cleared so subsequent pipe reads are
 // unbounded.
-func authenticateLoopbackConn(conn net.Conn, expectedToken string) bool {
+func authenticateLoopbackConn(conn net.Conn, expectedToken string, deadline time.Time) bool {
 	if tc, ok := conn.(*net.TCPConn); ok {
-		tc.SetReadDeadline(time.Now().Add(loopbackAuthTimeout))
+		readDeadline := time.Now().Add(loopbackAuthTimeout)
+		if !deadline.IsZero() && deadline.Before(readDeadline) {
+			readDeadline = deadline
+		}
+		tc.SetReadDeadline(readDeadline)
 	}
 	received := make([]byte, len(expectedToken))
 	if _, err := io.ReadFull(conn, received); err != nil {

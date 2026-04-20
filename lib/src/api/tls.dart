@@ -1,7 +1,5 @@
 import 'dart:io';
 
-import 'package:meta/meta.dart';
-
 /// TLS-terminated listener for this node, with a cert auto-provisioned
 /// from Let's Encrypt by the control plane. Peers on the tailnet reach
 /// the endpoint at `https://<node>.<tailnet>.ts.net` with no manual
@@ -13,9 +11,10 @@ import 'package:meta/meta.dart';
 /// panel; [bind] will fail with a clear error if either is off. Use
 /// [domains] as a preflight to check.
 class Tls {
-  /// Library-internal. Reach via `Tailscale.instance.tls`.
-  @internal
-  const Tls.internal();
+  /// Singleton namespace instance. Reach via `Tailscale.instance.tls`.
+  static const instance = Tls._();
+
+  const Tls._();
 
   /// Binds a TLS listener on the tailnet. Wraps
   /// `tsnet.Server.ListenTLS`.

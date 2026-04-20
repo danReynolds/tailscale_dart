@@ -8,6 +8,34 @@ import 'package:tailscale/tailscale.dart';
 
 void main() {
   group('PeerIdentity', () {
+    test('==', () {
+      const a = PeerIdentity(
+        nodeId: 'n1',
+        hostName: 'h',
+        userLoginName: 'alice@example.com',
+        tags: ['tag:server'],
+        tailscaleIPs: ['100.64.0.2'],
+      );
+      const b = PeerIdentity(
+        nodeId: 'n1',
+        hostName: 'h',
+        userLoginName: 'alice@example.com',
+        tags: ['tag:server'],
+        tailscaleIPs: ['100.64.0.2'],
+      );
+      const different = PeerIdentity(
+        nodeId: 'n2',
+        hostName: 'h',
+        userLoginName: 'alice@example.com',
+        tags: ['tag:server'],
+        tailscaleIPs: ['100.64.0.2'],
+      );
+
+      expect(a, equals(b));
+      expect(a.hashCode, b.hashCode);
+      expect(a, isNot(equals(different)));
+    });
+
     test('toString summarizes identity fields', () {
       const identity = PeerIdentity(
         nodeId: 'n1',

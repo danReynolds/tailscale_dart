@@ -46,8 +46,10 @@ external ffi.Pointer<Utf8> duneListen(int localPort, int tailnetPort);
 /// the first bytes on the wire. After that the socket is a
 /// transparent pipe to the peer.
 ///
-/// `timeoutMillis` bounds the tailnet dial; 0 means no timeout.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int32)>(
+/// `timeoutMillis` is the total `tcp.dial` bridge budget; 0 means no
+/// timeout.
+@ffi.Native<
+    ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int64)>(
   symbol: 'DuneTcpDial',
 )
 external ffi.Pointer<Utf8> duneTcpDial(

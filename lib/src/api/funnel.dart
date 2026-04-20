@@ -80,9 +80,10 @@ extension FunnelSocket on Socket {
 /// internet-facing source address and TLS SNI without subclassing
 /// `dart:io` types.
 class Funnel {
-  /// Library-internal. Reach via `Tailscale.instance.funnel`.
-  @internal
-  const Funnel.internal();
+  /// Singleton namespace instance. Reach via `Tailscale.instance.funnel`.
+  static const instance = Funnel._();
+
+  const Funnel._();
 
   /// Binds a TLS listener to the public internet at the node's Funnel
   /// hostname. Wraps `tsnet.Server.ListenFunnel`.

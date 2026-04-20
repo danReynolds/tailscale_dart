@@ -139,6 +139,36 @@ void _workerEntrypoint(SendPort sendPort) {
             }
 
             sendPort.send(_WorkerListenResponse(listenPort: listenPort));
+          case _WorkerTcpDialCommand request:
+            final hostPtr = request.host.toNativeUtf8();
+            try {
+              final result = _callNativeJson(
+                () => native.duneTcpDial(
+                  hostPtr,
+                  request.port,
+                  request.timeoutMillis,
+                ),
+                onError: TailscaleTcpException.new,
+              ) as Map<String, dynamic>;
+
+              final loopbackPort = result['loopbackPort'] as int?;
+              final token = result['token'] as String?;
+              if (loopbackPort == null ||
+                  loopbackPort <= 0 ||
+                  token == null ||
+                  token.isEmpty) {
+                throw const TailscaleTcpException(
+                  'Native runtime did not return a usable loopback bridge.',
+                );
+              }
+
+              sendPort.send(_WorkerTcpDialResponse(
+                loopbackPort: loopbackPort,
+                token: token,
+              ));
+            } finally {
+              calloc.free(hostPtr);
+            }
           case _WorkerStatusCommand(:final stateDir):
             sendPort.send(_WorkerStatusResponse(
               status: _loadStatusSnapshot(stateDir: stateDir),

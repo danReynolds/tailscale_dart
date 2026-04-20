@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:meta/meta.dart';
 
+import '../errors.dart';
+
 /// Raw TCP primitives between tailnet peers — peer-to-peer connections
 /// tunneled over WireGuard, no TLS, no HTTP framing.
 ///
@@ -18,7 +20,19 @@ import 'package:meta/meta.dart';
 class Tcp {
   /// Library-internal. Reach via `Tailscale.instance.tcp`.
   @internal
-  const Tcp.internal();
+  Tcp.internal({
+    required Future<({int loopbackPort, String token})> Function(
+      String host,
+      int port,
+      Duration? timeout,
+    ) dialFn,
+  }) : _dialFn = dialFn;
+
+  final Future<({int loopbackPort, String token})> Function(
+    String host,
+    int port,
+    Duration? timeout,
+  ) _dialFn;
 
   /// Opens a TCP connection to a peer on the tailnet. Mirrors
   /// `tsnet.Server.Dial`.
@@ -26,9 +40,48 @@ class Tcp {
   /// [host] may be a tailnet IP (e.g. `100.64.0.5`) or a
   /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) name
   /// (e.g. `my-peer` or `my-peer.tailnet.ts.net`). [timeout] applies
-  /// to the dial only, not to the lifetime of the returned socket.
-  Future<Socket> dial(String host, int port, {Duration? timeout}) =>
-      throw UnimplementedError('tcp.dial not yet implemented');
+  /// to the tailnet dial and the loopback handshake only — not to
+  /// the lifetime of the returned socket.
+  ///
+  /// Implemented as a one-shot loopback bridge: the embedded Go
+  /// runtime opens the tailnet conn and pipes bytes through a
+  /// per-call 127.0.0.1 listener. A random per-call token is written
+  /// as the first bytes on the wire so co-resident processes can't
+  /// hijack the bridge.
+  ///
+  /// Throws [TailscaleTcpException] on tailnet-side failures (no
+  /// route, connection refused, etc.) or if the loopback bridge
+  /// handshake fails.
+  Future<Socket> dial(String host, int port, {Duration? timeout}) async {
+    final (:loopbackPort, :token) = await _dialFn(host, port, timeout);
+
+    late Socket socket;
+    try {
+      socket = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        loopbackPort,
+        timeout: timeout,
+      );
+    } catch (e) {
+      throw TailscaleTcpException(
+        'Failed to connect to loopback bridge on port $loopbackPort',
+        cause: e,
+      );
+    }
+
+    try {
+      socket.add(token.codeUnits);
+      await socket.flush();
+    } catch (e) {
+      await socket.close();
+      throw TailscaleTcpException(
+        'Failed to send bridge auth token',
+        cause: e,
+      );
+    }
+
+    return socket;
+  }
 
   /// Accepts inbound TCP connections on the tailnet. Wraps
   /// `tsnet.Server.Listen("tcp", addr)` and returns a `dart:io`

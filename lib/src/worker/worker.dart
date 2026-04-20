@@ -131,6 +131,21 @@ final class Worker {
     return response.listenPort;
   }
 
+  Future<({int loopbackPort, String token})> tcpDial({
+    required String host,
+    required int port,
+    Duration? timeout,
+  }) async {
+    final response = await _request<_WorkerTcpDialResponse>(
+      _WorkerTcpDialCommand(
+        host: host,
+        port: port,
+        timeoutMillis: timeout?.inMilliseconds ?? 0,
+      ),
+    );
+    return (loopbackPort: response.loopbackPort, token: response.token);
+  }
+
   Future<TailscaleStatus> status({required String stateDir}) async {
     final response = await _request<_WorkerStatusResponse>(
       _WorkerStatusCommand(stateDir: stateDir),

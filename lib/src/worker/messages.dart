@@ -3,6 +3,7 @@ part of 'worker.dart';
 enum _WorkerOperation {
   start,
   listen,
+  tcpDial,
   status,
   peers,
   down,
@@ -11,6 +12,7 @@ enum _WorkerOperation {
   TailscaleException exceptionForMessage(String message) => switch (this) {
         start => TailscaleUpException(message),
         listen => TailscaleHttpException(message),
+        tcpDial => TailscaleTcpException(message),
         status => TailscaleStatusException(message),
         peers => TailscaleStatusException(message),
         down => TailscaleOperationException('down', message),
@@ -46,6 +48,18 @@ final class _WorkerListenCommand extends _WorkerCommand {
 
   final int localPort;
   final int tailnetPort;
+}
+
+final class _WorkerTcpDialCommand extends _WorkerCommand {
+  const _WorkerTcpDialCommand({
+    required this.host,
+    required this.port,
+    required this.timeoutMillis,
+  }) : super(_WorkerOperation.tcpDial);
+
+  final String host;
+  final int port;
+  final int timeoutMillis;
 }
 
 final class _WorkerStatusCommand extends _WorkerCommand {
@@ -123,6 +137,16 @@ final class _WorkerListenResponse extends _WorkerResponse {
       : super(_WorkerOperation.listen);
 
   final int listenPort;
+}
+
+final class _WorkerTcpDialResponse extends _WorkerResponse {
+  const _WorkerTcpDialResponse({
+    required this.loopbackPort,
+    required this.token,
+  }) : super(_WorkerOperation.tcpDial);
+
+  final int loopbackPort;
+  final String token;
 }
 
 final class _WorkerStatusResponse extends _WorkerResponse {

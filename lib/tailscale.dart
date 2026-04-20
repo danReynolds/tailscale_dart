@@ -109,7 +109,10 @@ class Tailscale {
   }
 
   // ─── Transport namespaces ───────────────────────────────────────────
-  final Tcp    tcp    = const Tcp.internal();
+  late final Tcp tcp = Tcp.internal(
+    dialFn: (host, port, timeout) =>
+        _worker.tcpDial(host: host, port: port, timeout: timeout),
+  );
   final Tls    tls    = const Tls.internal();
   final Udp    udp    = const Udp.internal();
   final Funnel funnel = const Funnel.internal();

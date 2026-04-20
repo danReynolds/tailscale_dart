@@ -35,6 +35,27 @@ external ffi.Pointer<Utf8> duneStart(
 )
 external ffi.Pointer<Utf8> duneListen(int localPort, int tailnetPort);
 
+/// Opens an outbound TCP connection to a tailnet peer and sets up a
+/// one-shot loopback bridge for the Dart side.
+///
+/// Returns JSON:
+///   {"loopbackPort": N, "token": "..."} on success.
+///   {"error": "..."} on failure.
+///
+/// Dart connects to `127.0.0.1:loopbackPort` and writes `token` as
+/// the first bytes on the wire. After that the socket is a
+/// transparent pipe to the peer.
+///
+/// `timeoutMillis` bounds the tailnet dial; 0 means no timeout.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int32)>(
+  symbol: 'DuneTcpDial',
+)
+external ffi.Pointer<Utf8> duneTcpDial(
+  ffi.Pointer<Utf8> host,
+  int port,
+  int timeoutMillis,
+);
+
 /// Returns 1 if the state directory has a valid machine key, 0 otherwise.
 @ffi.Native<ffi.Int32 Function(ffi.Pointer<Utf8>)>(symbol: 'DuneHasState')
 external int duneHasState(ffi.Pointer<Utf8> stateDir);

@@ -1,5 +1,11 @@
 ## Unreleased
 
+**Phase 3 — outbound TCP between tailnet peers:**
+
+- `tcp.dial(host, port, {timeout})` → `Future<Socket>` is live. Wraps `tsnet.Server.Dial` and bridges the tailnet connection through a per-call 127.0.0.1 loopback listener so the caller gets a standard `dart:io` `Socket`. A random 32-character hex token is written as the first bytes on the loopback conn to prevent co-resident processes from hijacking the bridge.
+- New `TailscaleTcpException` for tailnet-side dial failures (no route, refused) and loopback bridge handshake failures.
+- `tcp.bind` remains a stub — arrives in a follow-up.
+
 **Breaking — namespaced API surface (Phase 1 of the API RFC; see `docs/api-roadmap.md`):**
 
 - `Tailscale.http` (previously an `http.Client` getter) is now the `Http` namespace. Access the client via `Tailscale.http.client`.

@@ -118,11 +118,37 @@ class DERPRegion {
     required this.regionCode,
     required this.regionName,
     required this.nodes,
+    this.latitude = 0,
+    this.longitude = 0,
+    this.avoid = false,
+    this.noMeasureNoHome = false,
   });
 
+  /// Stable numeric ID (non-zero).
   final int regionId;
+
+  /// Short airport-style code, e.g. `nyc`, `fra`, `sin`.
   final String regionCode;
+
+  /// Long human-readable name.
   final String regionName;
+
+  /// Optional geographic coordinates. Both zero when the control
+  /// plane doesn't publish them.
+  final double latitude;
+  final double longitude;
+
+  /// Deprecated upstream in favor of [noMeasureNoHome]; included
+  /// for completeness. When true, older clients avoid selecting
+  /// this region as home.
+  final bool avoid;
+
+  /// When true, this region should not be measured or selected
+  /// as the node's home; it's only used if a peer declares it as
+  /// their home.
+  final bool noMeasureNoHome;
+
+  /// DERP nodes running in this region, in priority order.
   final List<DERPNode> nodes;
 
   @override
@@ -132,6 +158,10 @@ class DERPRegion {
           regionId == other.regionId &&
           regionCode == other.regionCode &&
           regionName == other.regionName &&
+          latitude == other.latitude &&
+          longitude == other.longitude &&
+          avoid == other.avoid &&
+          noMeasureNoHome == other.noMeasureNoHome &&
           listEquals(nodes, other.nodes);
 
   @override
@@ -139,6 +169,10 @@ class DERPRegion {
         regionId,
         regionCode,
         regionName,
+        latitude,
+        longitude,
+        avoid,
+        noMeasureNoHome,
         Object.hashAll(nodes),
       );
 
@@ -149,18 +183,62 @@ class DERPRegion {
 
 @immutable
 class DERPNode {
-  const DERPNode({required this.name, required this.hostName});
+  const DERPNode({
+    required this.name,
+    required this.hostName,
+    this.ipv4,
+    this.ipv6,
+    this.derpPort = 0,
+    this.stunPort = 0,
+    this.canPort80 = false,
+  });
 
+  /// Unique node name across all regions (e.g. `1b`, `2a`).
   final String name;
+
+  /// DNS hostname of this DERP node.
   final String hostName;
+
+  /// Optional IPv4 override (skips DNS when non-empty). The
+  /// conventional string `"none"` disables IPv4 entirely.
+  final String? ipv4;
+
+  /// Optional IPv6 override; same semantics as [ipv4].
+  final String? ipv6;
+
+  /// Non-zero DERP service port override. `0` means use the
+  /// upstream default.
+  final int derpPort;
+
+  /// Non-zero STUN service port override.
+  final int stunPort;
+
+  /// True when this node accepts DERP connections on port 80 (used
+  /// when outbound 443 is blocked by a captive portal).
+  final bool canPort80;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is DERPNode && name == other.name && hostName == other.hostName;
+      other is DERPNode &&
+          name == other.name &&
+          hostName == other.hostName &&
+          ipv4 == other.ipv4 &&
+          ipv6 == other.ipv6 &&
+          derpPort == other.derpPort &&
+          stunPort == other.stunPort &&
+          canPort80 == other.canPort80;
 
   @override
-  int get hashCode => Object.hash(name, hostName);
+  int get hashCode => Object.hash(
+        name,
+        hostName,
+        ipv4,
+        ipv6,
+        derpPort,
+        stunPort,
+        canPort80,
+      );
 
   @override
   String toString() => 'DERPNode(name: $name, hostName: $hostName)';

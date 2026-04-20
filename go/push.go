@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 	"unsafe"
 
 	"tailscale.com/client/local"
@@ -20,16 +21,24 @@ import (
 	"tailscale.com/ipn/ipnstate"
 )
 
+// peerPublishDebounce coalesces rapid NetMap deltas into a single
+// Dart-bound publish. Endpoint changes, relay flaps, and hostinfo
+// updates can fire several NetMap events in a burst; without this,
+// we'd serialize + push the full peer list for each one.
+const peerPublishDebounce = 100 * time.Millisecond
+
 var (
 	dartPort   C.Dart_Port_DL
 	dartPortMu sync.Mutex
 
-	// watchMu guards watchCancel. StartWatch / StopWatch are normally
-	// called serially from the Dart worker isolate, but the mutex
-	// keeps the invariant explicit so a future caller can't race us
-	// into a double-free on the cancel func.
-	watchMu     sync.Mutex
-	watchCancel context.CancelFunc
+	// watchMu guards watchCancel + publishTimer. StartWatch /
+	// StopWatch are normally called serially from the Dart worker
+	// isolate, but the mutex keeps the invariant explicit so a
+	// future caller can't race us into a double-free on the
+	// cancel func.
+	watchMu      sync.Mutex
+	watchCancel  context.CancelFunc
+	publishTimer *time.Timer
 )
 
 // InitializeDartAPI must be called once with NativeApi.initializeApiDLData.
@@ -116,15 +125,35 @@ func StartWatch() {
 				})
 			}
 			if n.NetMap != nil {
-				publishPeerSnapshot(ctx, lc)
+				schedulePeerPublish(ctx, lc)
 			}
 		}
 	}()
 }
 
+// schedulePeerPublish debounces publishPeerSnapshot so a burst of
+// NetMap deltas (endpoint reshuffles, relay flaps, etc.) collapses
+// into a single serialize-and-push. Called from the IPN bus watcher
+// goroutine on every NetMap tick; only the last tick in a
+// peerPublishDebounce-width window actually produces a message.
+func schedulePeerPublish(ctx context.Context, lc *local.Client) {
+	watchMu.Lock()
+	defer watchMu.Unlock()
+	if publishTimer != nil {
+		publishTimer.Stop()
+	}
+	publishTimer = time.AfterFunc(peerPublishDebounce, func() {
+		// Re-check cancellation: StopWatch may have fired after the
+		// timer was armed and before it ran.
+		if ctx.Err() != nil {
+			return
+		}
+		publishPeerSnapshot(ctx, lc)
+	})
+}
+
 // publishPeerSnapshot fetches the current peer list via LocalAPI and
-// pushes it to Dart. Called from the IPN bus watcher whenever the
-// NetMap changes — dedup/distinct is left to Dart subscribers.
+// pushes it to Dart. Dedup/distinct is left to Dart subscribers.
 func publishPeerSnapshot(ctx context.Context, lc *local.Client) {
 	status, err := lc.Status(ctx)
 	if err != nil {
@@ -146,13 +175,18 @@ func publishPeerSnapshot(ctx context.Context, lc *local.Client) {
 	})
 }
 
-// StopWatch cancels the state watcher goroutine.
+// StopWatch cancels the state watcher goroutine and drains any
+// pending debounced peer publish.
 func StopWatch() {
 	watchMu.Lock()
 	defer watchMu.Unlock()
 	if watchCancel != nil {
 		watchCancel()
 		watchCancel = nil
+	}
+	if publishTimer != nil {
+		publishTimer.Stop()
+		publishTimer = nil
 	}
 }
 

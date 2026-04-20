@@ -57,6 +57,32 @@ void main() {
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(equals(different)));
     });
+
+    test('extended fields participate in equality', () {
+      const base = DERPNode(name: 'nyc-1', hostName: 'derp1.example');
+      const sameWithDefaults = DERPNode(
+        name: 'nyc-1',
+        hostName: 'derp1.example',
+        derpPort: 0,
+        stunPort: 0,
+        canPort80: false,
+      );
+      const withAddrs = DERPNode(
+        name: 'nyc-1',
+        hostName: 'derp1.example',
+        ipv4: '1.2.3.4',
+        ipv6: '2001:db8::1',
+      );
+      const port80 = DERPNode(
+        name: 'nyc-1',
+        hostName: 'derp1.example',
+        canPort80: true,
+      );
+
+      expect(base, equals(sameWithDefaults));
+      expect(base, isNot(equals(withAddrs)));
+      expect(base, isNot(equals(port80)));
+    });
   });
 
   group('DERPRegion', () {

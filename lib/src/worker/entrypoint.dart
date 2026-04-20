@@ -337,17 +337,43 @@ String _callNativeString(ffi.Pointer<Utf8> Function() fn) {
 /// Calls a native function that returns JSON, decodes it, and checks for an
 /// `error` key if the result is a map. Throws via [onError] if an error key is
 /// present; otherwise returns the decoded value.
+/// Factory that wraps a native error-response message with the right
+/// operation-specific exception subtype. `code` + `statusCode` plumb
+/// through from the Go-side error classification in
+/// [tailscale.classifyLocalAPIError] so callers can pattern-match on
+/// [TailscaleErrorCode].
+typedef _ErrorFactory = TailscaleException Function(
+  String message, {
+  TailscaleErrorCode code,
+  int? statusCode,
+});
+
 dynamic _callNativeJson(
   ffi.Pointer<Utf8> Function() fn, {
-  required TailscaleException Function(String) onError,
+  required _ErrorFactory onError,
 }) {
   final result = jsonDecode(_callNativeString(fn));
   if (result is Map<String, dynamic>) {
     final error = result['error'] as String?;
-    if (error != null) throw onError(error);
+    if (error != null) {
+      throw onError(
+        error,
+        code: _parseErrorCode(result['code'] as String?),
+        statusCode: result['statusCode'] as int?,
+      );
+    }
   }
   return result;
 }
+
+TailscaleErrorCode _parseErrorCode(String? raw) => switch (raw) {
+      'notFound' => TailscaleErrorCode.notFound,
+      'forbidden' => TailscaleErrorCode.forbidden,
+      'conflict' => TailscaleErrorCode.conflict,
+      'preconditionFailed' => TailscaleErrorCode.preconditionFailed,
+      'featureDisabled' => TailscaleErrorCode.featureDisabled,
+      _ => TailscaleErrorCode.unknown,
+    };
 
 TailscaleStatus _loadStatusSnapshot({String? stateDir}) {
   try {
@@ -437,12 +463,13 @@ DERPMap _parseDERPMap(Map<String, dynamic> json) {
       regionId: (value['regionId'] as num?)?.toInt() ?? regionId,
       regionCode: value['regionCode'] as String? ?? '',
       regionName: value['regionName'] as String? ?? '',
+      latitude: (value['latitude'] as num?)?.toDouble() ?? 0,
+      longitude: (value['longitude'] as num?)?.toDouble() ?? 0,
+      avoid: value['avoid'] as bool? ?? false,
+      noMeasureNoHome: value['noMeasureNoHome'] as bool? ?? false,
       nodes: ((value['nodes'] as List?) ?? const [])
           .whereType<Map<String, dynamic>>()
-          .map((n) => DERPNode(
-                name: n['name'] as String? ?? '',
-                hostName: n['hostName'] as String? ?? '',
-              ))
+          .map(_parseDERPNode)
           .toList(growable: false),
     );
   });
@@ -451,6 +478,16 @@ DERPMap _parseDERPMap(Map<String, dynamic> json) {
     omitDefaultRegions: json['omitDefaultRegions'] as bool? ?? false,
   );
 }
+
+DERPNode _parseDERPNode(Map<String, dynamic> n) => DERPNode(
+      name: n['name'] as String? ?? '',
+      hostName: n['hostName'] as String? ?? '',
+      ipv4: n['ipv4'] as String?,
+      ipv6: n['ipv6'] as String?,
+      derpPort: (n['derpPort'] as num?)?.toInt() ?? 0,
+      stunPort: (n['stunPort'] as num?)?.toInt() ?? 0,
+      canPort80: n['canPort80'] as bool? ?? false,
+    );
 
 ClientVersion? _parseClientVersion(Map<String, dynamic> json) {
   if (json['available'] != true) return null;

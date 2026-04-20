@@ -61,7 +61,7 @@ func WhoIs(ip string) string {
 			b, _ := json.Marshal(map[string]any{"found": false})
 			return string(b)
 		}
-		return jsonError(err)
+		return localAPIError(err)
 	}
 	// A successful response without a Node would be a LocalAPI
 	// contract violation, but guard anyway so we don't panic.
@@ -106,6 +106,64 @@ func isNotFound(err error) bool {
 	return strings.Contains(err.Error(), "404")
 }
 
+// classifyLocalAPIError maps a LocalAPI error to the
+// TailscaleErrorCode the Dart side will throw. Returns the empty
+// string when the error doesn't fit any known category — the Dart
+// side falls back to `TailscaleErrorCode.unknown` in that case.
+//
+// `status` is the HTTP status extracted from apitype.HTTPErr when
+// available, zero otherwise. Used as a secondary signal for the
+// Dart side.
+func classifyLocalAPIError(err error) (code string, status int) {
+	var herr interface{ Status() int }
+	if errors.As(err, &herr) {
+		status = herr.Status()
+	}
+	switch status {
+	case http.StatusNotFound:
+		code = "notFound"
+	case http.StatusForbidden:
+		code = "forbidden"
+	case http.StatusConflict:
+		code = "conflict"
+	case http.StatusPreconditionFailed:
+		code = "preconditionFailed"
+	}
+	// String match as a backstop for 4xx errors that LocalAPI
+	// returns without HTTP status propagation (e.g. taildrop
+	// disabled). These messages are stable enough in practice to
+	// hinge a feature-disabled signal on — wrapped in a helper so
+	// the fragility stays local.
+	if code == "" {
+		lower := strings.ToLower(err.Error())
+		switch {
+		case strings.Contains(lower, "not enabled"),
+			strings.Contains(lower, "is disabled"),
+			strings.Contains(lower, "disabled by"):
+			code = "featureDisabled"
+		}
+	}
+	return
+}
+
+// localAPIError serializes err as `{"error": "...", "code": "...",
+// "statusCode": N}` where the code/statusCode fields are populated
+// when classifyLocalAPIError can extract them. Replaces jsonError
+// for Phase 4+ LocalAPI call sites so the Dart side throws typed
+// exceptions with the right TailscaleErrorCode.
+func localAPIError(err error) string {
+	code, status := classifyLocalAPIError(err)
+	m := map[string]any{"error": err.Error()}
+	if code != "" {
+		m["code"] = code
+	}
+	if status != 0 {
+		m["statusCode"] = status
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
 // TlsDomains returns the Subject Alternative Names baked into the
 // auto-provisioned TLS cert for this node — typically
 // `<node>.<tailnet>.ts.net`. Empty when the tailnet operator has
@@ -120,7 +178,7 @@ func TlsDomains() string {
 	}
 	status, err := lc.Status(context.Background())
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 
 	domains := status.CertDomains
@@ -170,10 +228,10 @@ func DiagPing(ip string, timeoutMillis int, pingType string) string {
 
 	pr, err := lc.Ping(ctx, addr, pt)
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 	if pr.Err != "" {
-		return jsonError(errors.New(pr.Err))
+		return localAPIError(errors.New(pr.Err))
 	}
 
 	path := pingPath(pr)
@@ -256,7 +314,7 @@ func DiagMetrics() string {
 	}
 	body, err := lc.UserMetrics(context.Background())
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 	b, _ := json.Marshal(map[string]any{"metrics": string(body)})
 	return string(b)
@@ -270,7 +328,7 @@ func DiagDERPMap() string {
 	}
 	m, err := lc.CurrentDERPMap(context.Background())
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 	regions := map[string]any{}
 	for id, r := range m.Regions {
@@ -282,16 +340,36 @@ func DiagDERPMap() string {
 			if n == nil {
 				continue
 			}
-			nodes = append(nodes, map[string]any{
+			node := map[string]any{
 				"name":     n.Name,
 				"hostName": n.HostName,
-			})
+			}
+			if n.IPv4 != "" {
+				node["ipv4"] = n.IPv4
+			}
+			if n.IPv6 != "" {
+				node["ipv6"] = n.IPv6
+			}
+			if n.DERPPort != 0 {
+				node["derpPort"] = n.DERPPort
+			}
+			if n.STUNPort != 0 {
+				node["stunPort"] = n.STUNPort
+			}
+			if n.CanPort80 {
+				node["canPort80"] = true
+			}
+			nodes = append(nodes, node)
 		}
 		regions[strconv.Itoa(id)] = map[string]any{
-			"regionId":   r.RegionID,
-			"regionCode": r.RegionCode,
-			"regionName": r.RegionName,
-			"nodes":      nodes,
+			"regionId":        r.RegionID,
+			"regionCode":      r.RegionCode,
+			"regionName":      r.RegionName,
+			"latitude":        r.Latitude,
+			"longitude":       r.Longitude,
+			"avoid":           r.Avoid,
+			"noMeasureNoHome": r.NoMeasureNoHome,
+			"nodes":           nodes,
 		}
 	}
 	b, _ := json.Marshal(map[string]any{
@@ -312,7 +390,7 @@ func DiagCheckUpdate() string {
 	}
 	cv, err := lc.CheckUpdate(context.Background())
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 	// Nil, RunningLatest, or empty LatestVersion all mean "no update".
 	if cv == nil || cv.RunningLatest || cv.LatestVersion == "" {

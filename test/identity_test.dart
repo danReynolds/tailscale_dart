@@ -1,13 +1,16 @@
 /// Coverage for the `whois` top-level call and the [PeerIdentity]
-/// value type it returns. `whois` itself is a stub in Phase 2; this
-/// file will grow as later phases wire up LocalAPI-backed lookups.
+/// value type it returns.
+@TestOn('mac-os || linux')
 library;
+
+import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tailscale/tailscale.dart';
+import 'package:tailscale/src/ffi_bindings.dart' as native;
 
 void main() {
-  group('PeerIdentity', () {
+  group('PeerIdentity value type', () {
     test('==', () {
       const a = PeerIdentity(
         nodeId: 'n1',
@@ -50,6 +53,40 @@ void main() {
       expect(s, contains('h'));
       expect(s, contains('alice@example.com'));
       expect(s, contains('tag:server'));
+    });
+  });
+
+  group('Tailscale.whois', () {
+    late Directory stateDir;
+
+    setUpAll(() {
+      native.duneSetLogLevel(0);
+      stateDir = Directory.systemTemp.createTempSync('tailscale_whois_');
+      Tailscale.init(stateDir: stateDir.path);
+    });
+
+    tearDownAll(() async {
+      try {
+        await Tailscale.instance.down();
+      } catch (_) {}
+      native.duneStop();
+      if (stateDir.existsSync()) {
+        stateDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('rejects obviously-invalid IPs', () async {
+      await expectLater(
+        Tailscale.instance.whois('not-an-ip'),
+        throwsA(isA<TailscaleException>()),
+      );
+    });
+
+    test('before up() throws', () async {
+      await expectLater(
+        Tailscale.instance.whois('100.64.0.5'),
+        throwsA(isA<TailscaleException>()),
+      );
     });
   });
 }

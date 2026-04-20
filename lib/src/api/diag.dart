@@ -22,23 +22,43 @@ enum PingType {
   icmp,
 }
 
+/// How confidently [Diag.ping] could classify the route to the peer.
+enum PingPath {
+  /// The ping result positively identified a direct peer-to-peer path.
+  direct,
+
+  /// The ping result positively identified a DERP-relayed path.
+  derp,
+
+  /// The ping succeeded, but the chosen ping type did not expose enough
+  /// routing metadata to classify the path confidently.
+  unknown,
+}
+
 /// Result of a [Diag.ping].
 @immutable
 class PingResult {
   const PingResult({
     required this.latency,
-    required this.direct,
+    required this.path,
     this.derpRegion,
   });
 
   /// Round-trip time to the peer.
   final Duration latency;
 
-  /// True if the path is direct peer-to-peer (WireGuard), false if routed
-  /// through a DERP relay.
-  final bool direct;
+  /// Best-effort classification of the route to the peer.
+  final PingPath path;
 
-  /// DERP region code (e.g. `nyc`, `sfo`) when [direct] is false.
+  /// Convenience getter for callers that only care about the positive case.
+  ///
+  /// Returns true only when [path] is definitively [PingPath.direct].
+  bool get direct => path == PingPath.direct;
+
+  /// True when the ping was definitively routed through DERP.
+  bool get isRelayed => path == PingPath.derp;
+
+  /// DERP region code (e.g. `nyc`, `sfo`) when [path] is [PingPath.derp].
   final String? derpRegion;
 
   @override
@@ -46,15 +66,15 @@ class PingResult {
       identical(this, other) ||
       other is PingResult &&
           latency == other.latency &&
-          direct == other.direct &&
+          path == other.path &&
           derpRegion == other.derpRegion;
 
   @override
-  int get hashCode => Object.hash(latency, direct, derpRegion);
+  int get hashCode => Object.hash(latency, path, derpRegion);
 
   @override
   String toString() =>
-      'PingResult(latency: $latency, direct: $direct, derpRegion: $derpRegion)';
+      'PingResult(latency: $latency, path: $path, derpRegion: $derpRegion)';
 }
 
 /// Current DERP relay map — the set of regions and nodes Tailscale
@@ -98,11 +118,37 @@ class DERPRegion {
     required this.regionCode,
     required this.regionName,
     required this.nodes,
+    this.latitude = 0,
+    this.longitude = 0,
+    this.avoid = false,
+    this.noMeasureNoHome = false,
   });
 
+  /// Stable numeric ID (non-zero).
   final int regionId;
+
+  /// Short airport-style code, e.g. `nyc`, `fra`, `sin`.
   final String regionCode;
+
+  /// Long human-readable name.
   final String regionName;
+
+  /// Optional geographic coordinates. Both zero when the control
+  /// plane doesn't publish them.
+  final double latitude;
+  final double longitude;
+
+  /// Deprecated upstream in favor of [noMeasureNoHome]; included
+  /// for completeness. When true, older clients avoid selecting
+  /// this region as home.
+  final bool avoid;
+
+  /// When true, this region should not be measured or selected
+  /// as the node's home; it's only used if a peer declares it as
+  /// their home.
+  final bool noMeasureNoHome;
+
+  /// DERP nodes running in this region, in priority order.
   final List<DERPNode> nodes;
 
   @override
@@ -112,6 +158,10 @@ class DERPRegion {
           regionId == other.regionId &&
           regionCode == other.regionCode &&
           regionName == other.regionName &&
+          latitude == other.latitude &&
+          longitude == other.longitude &&
+          avoid == other.avoid &&
+          noMeasureNoHome == other.noMeasureNoHome &&
           listEquals(nodes, other.nodes);
 
   @override
@@ -119,6 +169,10 @@ class DERPRegion {
         regionId,
         regionCode,
         regionName,
+        latitude,
+        longitude,
+        avoid,
+        noMeasureNoHome,
         Object.hashAll(nodes),
       );
 
@@ -129,82 +183,176 @@ class DERPRegion {
 
 @immutable
 class DERPNode {
-  const DERPNode({required this.name, required this.hostName});
+  const DERPNode({
+    required this.name,
+    required this.hostName,
+    this.ipv4,
+    this.ipv6,
+    this.derpPort = 0,
+    this.stunPort = 0,
+    this.canPort80 = false,
+  });
 
+  /// Unique node name across all regions (e.g. `1b`, `2a`).
   final String name;
+
+  /// DNS hostname of this DERP node.
   final String hostName;
+
+  /// Optional IPv4 override (skips DNS when non-empty). The
+  /// conventional string `"none"` disables IPv4 entirely.
+  final String? ipv4;
+
+  /// Optional IPv6 override; same semantics as [ipv4].
+  final String? ipv6;
+
+  /// Non-zero DERP service port override. `0` means use the
+  /// upstream default.
+  final int derpPort;
+
+  /// Non-zero STUN service port override.
+  final int stunPort;
+
+  /// True when this node accepts DERP connections on port 80 (used
+  /// when outbound 443 is blocked by a captive portal).
+  final bool canPort80;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is DERPNode && name == other.name && hostName == other.hostName;
+      other is DERPNode &&
+          name == other.name &&
+          hostName == other.hostName &&
+          ipv4 == other.ipv4 &&
+          ipv6 == other.ipv6 &&
+          derpPort == other.derpPort &&
+          stunPort == other.stunPort &&
+          canPort80 == other.canPort80;
 
   @override
-  int get hashCode => Object.hash(name, hostName);
+  int get hashCode => Object.hash(
+        name,
+        hostName,
+        ipv4,
+        ipv6,
+        derpPort,
+        stunPort,
+        canPort80,
+      );
 
   @override
   String toString() => 'DERPNode(name: $name, hostName: $hostName)';
 }
 
-/// A published Tailscale client version (result of [Diag.checkUpdate]).
+/// An available client-version update (result of [Diag.checkUpdate]).
+///
+/// Mirrors `tailcfg.ClientVersion`. [Diag.checkUpdate] returns null
+/// when the node is already on the latest version, so the fields
+/// here always describe a concrete update to apply.
 @immutable
 class ClientVersion {
   const ClientVersion({
-    required this.shortVersion,
-    required this.longVersion,
+    required this.latestVersion,
+    required this.urgentSecurityUpdate,
+    this.notifyText,
   });
 
-  /// Short version string, e.g. `1.92.3`.
-  final String shortVersion;
+  /// The newer version available for this platform (e.g. `1.94.1`).
+  final String latestVersion;
 
-  /// Full build version including git hash.
-  final String longVersion;
+  /// When true, the update includes a security fix — apply promptly.
+  final bool urgentSecurityUpdate;
+
+  /// Optional human-readable notification text from the control
+  /// plane (when `Notify` is set upstream).
+  final String? notifyText;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ClientVersion &&
-          shortVersion == other.shortVersion &&
-          longVersion == other.longVersion;
+          latestVersion == other.latestVersion &&
+          urgentSecurityUpdate == other.urgentSecurityUpdate &&
+          notifyText == other.notifyText;
 
   @override
-  int get hashCode => Object.hash(shortVersion, longVersion);
+  int get hashCode =>
+      Object.hash(latestVersion, urgentSecurityUpdate, notifyText);
 
   @override
-  String toString() =>
-      'ClientVersion(short: $shortVersion, long: $longVersion)';
+  String toString() => 'ClientVersion(latest: $latestVersion, '
+      'urgentSecurityUpdate: $urgentSecurityUpdate)';
 }
+
+typedef DiagPingFn = Future<PingResult> Function(
+  String ip,
+  Duration? timeout,
+  PingType type,
+);
+typedef DiagMetricsFn = Future<String> Function();
+typedef DiagDERPMapFn = Future<DERPMap> Function();
+typedef DiagCheckUpdateFn = Future<ClientVersion?> Function();
 
 /// Observability and diagnostics. All read-only; nothing here affects
 /// connectivity.
 ///
 /// Reached via [Tailscale.diag].
-class Diag {
-  /// Singleton namespace instance. Reach via `Tailscale.instance.diag`.
-  static const instance = Diag._();
+abstract class Diag {
+  /// Tailscale-level ping to a tailnet IP or MagicDNS name.
+  ///
+  /// Reports round-trip time and whether the path is direct peer-to-peer,
+  /// DERP-relayed, or not classifiable for the chosen ping type.
+  Future<PingResult> ping(
+    String ip, {
+    Duration? timeout,
+    PingType type = PingType.disco,
+  });
 
-  const Diag._();
+  /// Prometheus-format metrics snapshot from the embedded runtime —
+  /// peer counts, DERP activity, byte totals, handshake stats, etc.
+  Future<String> metrics();
 
-  /// Tailscale-level ping. Reports round-trip time and whether the path
-  /// is direct peer-to-peer or DERP-relayed.
+  /// Current [DERP](https://tailscale.com/kb/1232/derp-servers) relay
+  /// map for this node.
+  Future<DERPMap> derpMap();
+
+  /// Checks whether a newer version of the embedded tsnet runtime is
+  /// available. Returns null when already on the latest.
+  Future<ClientVersion?> checkUpdate();
+}
+
+/// Library-internal factory. Reach via `Tailscale.instance.diag`.
+@internal
+Diag createDiag({
+  required DiagPingFn pingFn,
+  required DiagMetricsFn metricsFn,
+  required DiagDERPMapFn derpMapFn,
+  required DiagCheckUpdateFn checkUpdateFn,
+}) =>
+    _Diag(pingFn, metricsFn, derpMapFn, checkUpdateFn);
+
+final class _Diag implements Diag {
+  _Diag(this._ping, this._metrics, this._derpMap, this._checkUpdate);
+
+  final DiagPingFn _ping;
+  final DiagMetricsFn _metrics;
+  final DiagDERPMapFn _derpMap;
+  final DiagCheckUpdateFn _checkUpdate;
+
+  @override
   Future<PingResult> ping(
     String ip, {
     Duration? timeout,
     PingType type = PingType.disco,
   }) =>
-      throw UnimplementedError('diag.ping not yet implemented');
+      _ping(ip, timeout, type);
 
-  /// Prometheus-format metrics snapshot from the embedded runtime — peer
-  /// counts, DERP activity, byte totals, handshake stats, etc.
-  Future<String> metrics() =>
-      throw UnimplementedError('diag.metrics not yet implemented');
+  @override
+  Future<String> metrics() => _metrics();
 
-  /// Current DERP relay map.
-  Future<DERPMap> derpMap() =>
-      throw UnimplementedError('diag.derpMap not yet implemented');
+  @override
+  Future<DERPMap> derpMap() => _derpMap();
 
-  /// The latest available tsnet version if newer than the embedded one,
-  /// else null.
-  Future<ClientVersion?> checkUpdate() =>
-      throw UnimplementedError('diag.checkUpdate not yet implemented');
+  @override
+  Future<ClientVersion?> checkUpdate() => _checkUpdate();
 }

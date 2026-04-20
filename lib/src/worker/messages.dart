@@ -6,6 +6,12 @@ enum _WorkerOperation {
   tcpDial,
   tcpBind,
   tcpUnbind,
+  whois,
+  tlsDomains,
+  diagPing,
+  diagMetrics,
+  diagDERPMap,
+  diagCheckUpdate,
   status,
   peers,
   down,
@@ -17,6 +23,12 @@ enum _WorkerOperation {
         tcpDial => TailscaleTcpException(message),
         tcpBind => TailscaleTcpException(message),
         tcpUnbind => TailscaleTcpException(message),
+        whois => TailscaleStatusException(message),
+        tlsDomains => TailscaleStatusException(message),
+        diagPing => TailscaleDiagException(message),
+        diagMetrics => TailscaleDiagException(message),
+        diagDERPMap => TailscaleDiagException(message),
+        diagCheckUpdate => TailscaleDiagException(message),
         status => TailscaleStatusException(message),
         peers => TailscaleStatusException(message),
         down => TailscaleOperationException('down', message),
@@ -92,6 +104,42 @@ final class _WorkerTcpUnbindCommand extends _WorkerCommand {
   final int loopbackPort;
 }
 
+final class _WorkerWhoIsCommand extends _WorkerCommand {
+  const _WorkerWhoIsCommand({required this.ip})
+      : super(_WorkerOperation.whois);
+
+  final String ip;
+}
+
+final class _WorkerTlsDomainsCommand extends _WorkerCommand {
+  const _WorkerTlsDomainsCommand() : super(_WorkerOperation.tlsDomains);
+}
+
+final class _WorkerDiagPingCommand extends _WorkerCommand {
+  const _WorkerDiagPingCommand({
+    required this.ip,
+    required this.timeoutMillis,
+    required this.pingType,
+  }) : super(_WorkerOperation.diagPing);
+
+  final String ip;
+  final int timeoutMillis;
+  final String pingType;
+}
+
+final class _WorkerDiagMetricsCommand extends _WorkerCommand {
+  const _WorkerDiagMetricsCommand() : super(_WorkerOperation.diagMetrics);
+}
+
+final class _WorkerDiagDERPMapCommand extends _WorkerCommand {
+  const _WorkerDiagDERPMapCommand() : super(_WorkerOperation.diagDERPMap);
+}
+
+final class _WorkerDiagCheckUpdateCommand extends _WorkerCommand {
+  const _WorkerDiagCheckUpdateCommand()
+      : super(_WorkerOperation.diagCheckUpdate);
+}
+
 final class _WorkerStatusCommand extends _WorkerCommand {
   const _WorkerStatusCommand({required this.stateDir})
       : super(_WorkerOperation.status);
@@ -146,6 +194,12 @@ final class _WorkerRuntimeErrorEvent extends _WorkerEvent {
   final TailscaleRuntimeError error;
 }
 
+final class _WorkerPeersEvent extends _WorkerEvent {
+  const _WorkerPeersEvent({required this.peers});
+
+  final List<PeerStatus> peers;
+}
+
 sealed class _WorkerResponse extends _WorkerMainMessage {
   const _WorkerResponse(this.operation);
 
@@ -191,6 +245,50 @@ final class _WorkerPeersResponse extends _WorkerResponse {
       : super(_WorkerOperation.peers);
 
   final List<PeerStatus> peers;
+}
+
+final class _WorkerWhoIsResponse extends _WorkerResponse {
+  const _WorkerWhoIsResponse({required this.identity})
+      : super(_WorkerOperation.whois);
+
+  /// Null when LocalAPI reported the IP is not known on this tailnet.
+  final PeerIdentity? identity;
+}
+
+final class _WorkerTlsDomainsResponse extends _WorkerResponse {
+  const _WorkerTlsDomainsResponse({required this.domains})
+      : super(_WorkerOperation.tlsDomains);
+
+  final List<String> domains;
+}
+
+final class _WorkerDiagPingResponse extends _WorkerResponse {
+  const _WorkerDiagPingResponse({required this.result})
+      : super(_WorkerOperation.diagPing);
+
+  final PingResult result;
+}
+
+final class _WorkerDiagMetricsResponse extends _WorkerResponse {
+  const _WorkerDiagMetricsResponse({required this.metrics})
+      : super(_WorkerOperation.diagMetrics);
+
+  final String metrics;
+}
+
+final class _WorkerDiagDERPMapResponse extends _WorkerResponse {
+  const _WorkerDiagDERPMapResponse({required this.map})
+      : super(_WorkerOperation.diagDERPMap);
+
+  final DERPMap map;
+}
+
+final class _WorkerDiagCheckUpdateResponse extends _WorkerResponse {
+  const _WorkerDiagCheckUpdateResponse({required this.clientVersion})
+      : super(_WorkerOperation.diagCheckUpdate);
+
+  /// Null when the node is on the latest version.
+  final ClientVersion? clientVersion;
 }
 
 final class _WorkerAckResponse extends _WorkerResponse {

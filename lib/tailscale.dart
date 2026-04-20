@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:http/http.dart' as pkg_http;
 import 'package:path/path.dart' as p;
 import 'src/api/diag.dart';
@@ -19,7 +20,13 @@ import 'src/proxy_client.dart';
 import 'src/status.dart';
 import 'src/worker/worker.dart';
 
-export 'src/api/diag.dart';
+export 'src/api/diag.dart'
+    hide
+        createDiag,
+        DiagPingFn,
+        DiagMetricsFn,
+        DiagDERPMapFn,
+        DiagCheckUpdateFn;
 export 'src/api/exit_node.dart';
 export 'src/api/funnel.dart' hide attachFunnelMetadata;
 export 'src/api/http.dart' hide createHttp;
@@ -29,7 +36,7 @@ export 'src/api/profiles.dart';
 export 'src/api/serve.dart';
 export 'src/api/taildrop.dart';
 export 'src/api/tcp.dart' hide createTcp, TcpDialFn, TcpBindFn, TcpUnbindFn;
-export 'src/api/tls.dart';
+export 'src/api/tls.dart' hide createTls, TlsDomainsFn;
 export 'src/api/udp.dart';
 export 'src/errors.dart';
 export 'src/status.dart';
@@ -85,10 +92,12 @@ class Tailscale {
   static String? _stateBaseDir;
 
   pkg_http.Client? _http;
+  List<PeerStatus>? _latestPeers;
 
   late final _worker = Worker(
     publishState: _stateController.add,
     publishRuntimeError: _errorController.add,
+    publishPeers: _publishPeers,
   );
 
   // Singleton broadcast controllers — live for the process lifetime alongside
@@ -99,6 +108,9 @@ class Tailscale {
   // ignore: close_sinks
   final StreamController<TailscaleRuntimeError> _errorController =
       StreamController<TailscaleRuntimeError>.broadcast();
+  // ignore: close_sinks
+  final StreamController<List<PeerStatus>> _peersController =
+      StreamController<List<PeerStatus>>.broadcast();
 
   static String get _stateDir =>
       p.join(_stateBaseDir!, _ownedStateSubdirectory);
@@ -106,6 +118,29 @@ class Tailscale {
   void _reset() {
     _http?.close();
     _http = null;
+    _latestPeers = null;
+  }
+
+  void _publishPeers(List<PeerStatus> peers) {
+    final snapshot = List<PeerStatus>.unmodifiable(peers);
+    _latestPeers = snapshot;
+    _peersController.add(snapshot);
+  }
+
+  Future<List<PeerStatus>> _snapshotPeers() async {
+    final peers = await _worker.peers();
+    final snapshot = List<PeerStatus>.unmodifiable(peers);
+    _latestPeers = snapshot;
+    return snapshot;
+  }
+
+  static bool _samePeers(List<PeerStatus>? a, List<PeerStatus>? b) {
+    if (identical(a, b)) return true;
+    if (a == null || b == null || a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   // ─── Transport namespaces ───────────────────────────────────────────
@@ -119,7 +154,7 @@ class Tailscale {
     ),
     unbindFn: (loopbackPort) => _worker.tcpUnbind(loopbackPort: loopbackPort),
   );
-  final Tls tls = Tls.instance;
+  late final Tls tls = createTls(domainsFn: _worker.tlsDomains);
   final Udp udp = Udp.instance;
   final Funnel funnel = Funnel.instance;
   late final Http http = createHttp(
@@ -136,7 +171,16 @@ class Tailscale {
   final Prefs prefs = Prefs.instance;
 
   // ─── Diagnostics ────────────────────────────────────────────────────
-  final Diag diag = Diag.instance;
+  late final Diag diag = createDiag(
+    pingFn: (ip, timeout, type) => _worker.diagPing(
+      ip: ip,
+      timeout: timeout,
+      pingType: type.name,
+    ),
+    metricsFn: _worker.diagMetrics,
+    derpMapFn: _worker.diagDERPMap,
+    checkUpdateFn: _worker.diagCheckUpdate,
+  );
 
   // ─── Streams ────────────────────────────────────────────────────────
 
@@ -149,13 +193,50 @@ class Tailscale {
   /// only see events for actual transitions.
   Stream<NodeState> get onStateChange => _stateController.stream.distinct();
 
-  /// Emits the full peer list on any change (node joined, left, went
-  /// on/off-line, tags or DNS name changed).
+  /// Emits the full peer list on any change (node joined, left,
+  /// went on/off-line, tags or DNS name changed).
   ///
-  /// Saves callers from polling [peers] on a timer. Derived from the
-  /// same IPN bus as [onStateChange].
-  Stream<List<PeerStatus>> get onPeersChange =>
-      throw UnimplementedError('onPeersChange not yet implemented');
+  /// Saves callers from polling [peers] on a timer. Derived from
+  /// the same IPN bus `NotifyInitialNetMap` subscription as
+  /// [onStateChange]; subscribers get the current peer inventory as
+  /// the first emission, then one emission per inventory change.
+  Stream<List<PeerStatus>> get onPeersChange => Stream<List<PeerStatus>>.multi(
+        (controller) {
+          var canceled = false;
+          List<PeerStatus>? lastEmitted;
+
+          void emitIfChanged(List<PeerStatus> peers) {
+            if (_samePeers(lastEmitted, peers)) return;
+            lastEmitted = peers;
+            controller.add(peers);
+          }
+
+          final subscription = _peersController.stream.listen(
+            emitIfChanged,
+            onError: controller.addError,
+            onDone: controller.close,
+          );
+
+          unawaited(() async {
+            try {
+              final snapshot = _latestPeers ?? await _snapshotPeers();
+              if (!canceled) {
+                emitIfChanged(snapshot);
+              }
+            } catch (error, stackTrace) {
+              if (!canceled) {
+                controller.addError(error, stackTrace);
+              }
+            }
+          }());
+
+          controller.onCancel = () {
+            canceled = true;
+            return subscription.cancel();
+          };
+        },
+        isBroadcast: true,
+      );
 
   /// Background runtime errors pushed from the embedded node.
   Stream<TailscaleRuntimeError> get onError => _errorController.stream;
@@ -306,7 +387,7 @@ class Tailscale {
   /// Separate from [status] so apps can poll lightweight node state
   /// without re-pulling the full peer list on every refresh. For
   /// push-style updates, see [onPeersChange].
-  Future<List<PeerStatus>> peers() async => _worker.peers();
+  Future<List<PeerStatus>> peers() => _snapshotPeers();
 
   /// Resolves a tailnet IP to the peer's identity — stable node ID,
   /// owner login, hostname, and ACL tags — by querying the local
@@ -317,8 +398,7 @@ class Tailscale {
   /// combine with [tcp] `.bind(...)` and check
   /// [PeerIdentity.tags] before handling. See
   /// <https://tailscale.com/kb/1068/tags> for the tag model.
-  Future<PeerIdentity?> whois(String ip) =>
-      throw UnimplementedError('whois not yet implemented');
+  Future<PeerIdentity?> whois(String ip) => _worker.whois(ip);
 
   /// Brings the embedded node down while preserving persisted credentials.
   Future<void> down() async {

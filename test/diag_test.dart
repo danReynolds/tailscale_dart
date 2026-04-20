@@ -10,17 +10,40 @@ import 'package:tailscale/tailscale.dart';
 void main() {
   group('PingResult', () {
     test('==', () {
-      const a = PingResult(latency: Duration(milliseconds: 10), direct: true);
-      const b = PingResult(latency: Duration(milliseconds: 10), direct: true);
+      const a = PingResult(
+        latency: Duration(milliseconds: 10),
+        path: PingPath.direct,
+      );
+      const b = PingResult(
+        latency: Duration(milliseconds: 10),
+        path: PingPath.direct,
+      );
       const relayed = PingResult(
         latency: Duration(milliseconds: 10),
-        direct: false,
+        path: PingPath.derp,
         derpRegion: 'nyc',
       );
 
       expect(a, equals(b));
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(equals(relayed)));
+      expect(a.direct, isTrue);
+      expect(relayed.isRelayed, isTrue);
+    });
+
+    test('unknown path stays distinct from relayed', () {
+      const unknown = PingResult(
+        latency: Duration(milliseconds: 10),
+        path: PingPath.unknown,
+      );
+      const relayed = PingResult(
+        latency: Duration(milliseconds: 10),
+        path: PingPath.derp,
+      );
+
+      expect(unknown.direct, isFalse);
+      expect(unknown.isRelayed, isFalse);
+      expect(unknown, isNot(equals(relayed)));
     });
   });
 
@@ -33,6 +56,32 @@ void main() {
       expect(a, equals(b));
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(equals(different)));
+    });
+
+    test('extended fields participate in equality', () {
+      const base = DERPNode(name: 'nyc-1', hostName: 'derp1.example');
+      const sameWithDefaults = DERPNode(
+        name: 'nyc-1',
+        hostName: 'derp1.example',
+        derpPort: 0,
+        stunPort: 0,
+        canPort80: false,
+      );
+      const withAddrs = DERPNode(
+        name: 'nyc-1',
+        hostName: 'derp1.example',
+        ipv4: '1.2.3.4',
+        ipv6: '2001:db8::1',
+      );
+      const port80 = DERPNode(
+        name: 'nyc-1',
+        hostName: 'derp1.example',
+        canPort80: true,
+      );
+
+      expect(base, equals(sameWithDefaults));
+      expect(base, isNot(equals(withAddrs)));
+      expect(base, isNot(equals(port80)));
     });
   });
 
@@ -84,16 +133,22 @@ void main() {
 
   group('ClientVersion', () {
     test('==', () {
-      const a = ClientVersion(shortVersion: '1.92.3', longVersion: '1.92.3-abc');
-      const b = ClientVersion(shortVersion: '1.92.3', longVersion: '1.92.3-abc');
-      const different = ClientVersion(
-        shortVersion: '1.92.4',
-        longVersion: '1.92.4-def',
+      const a = ClientVersion(
+        latestVersion: '1.94.1',
+        urgentSecurityUpdate: false,
+      );
+      const b = ClientVersion(
+        latestVersion: '1.94.1',
+        urgentSecurityUpdate: false,
+      );
+      const urgent = ClientVersion(
+        latestVersion: '1.94.1',
+        urgentSecurityUpdate: true,
       );
 
       expect(a, equals(b));
       expect(a.hashCode, b.hashCode);
-      expect(a, isNot(equals(different)));
+      expect(a, isNot(equals(urgent)));
     });
   });
 }

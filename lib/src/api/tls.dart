@@ -1,5 +1,9 @@
 import 'dart:io';
 
+import 'package:meta/meta.dart';
+
+typedef TlsDomainsFn = Future<List<String>> Function();
+
 /// TLS-terminated listener for this node, with a cert auto-provisioned
 /// from Let's Encrypt by the control plane. Peers on the tailnet reach
 /// the endpoint at `https://<node>.<tailnet>.ts.net` with no manual
@@ -10,20 +14,14 @@ import 'dart:io';
 /// [HTTPS](https://tailscale.com/kb/1153/enabling-https) in the admin
 /// panel; [bind] will fail with a clear error if either is off. Use
 /// [domains] as a preflight to check.
-class Tls {
-  /// Singleton namespace instance. Reach via `Tailscale.instance.tls`.
-  static const instance = Tls._();
-
-  const Tls._();
-
+abstract class Tls {
   /// Binds a TLS listener on the tailnet. Wraps
   /// `tsnet.Server.ListenTLS`.
   ///
   /// The returned [SecureServerSocket] decrypts incoming traffic
   /// server-side; handlers see plaintext bytes. Cert is renewed
   /// automatically by the embedded runtime before expiry.
-  Future<SecureServerSocket> bind(int port) =>
-      throw UnimplementedError('tls.bind not yet implemented');
+  Future<SecureServerSocket> bind(int port);
 
   /// Subject Alternative Names present in the auto-provisioned certificate
   /// — typically `<node>.<tailnet>.ts.net`.
@@ -31,6 +29,22 @@ class Tls {
   /// Empty when [MagicDNS](https://tailscale.com/kb/1081/magicdns) or
   /// [HTTPS](https://tailscale.com/kb/1153/enabling-https) is disabled
   /// on the tailnet.
-  Future<List<String>> domains() =>
-      throw UnimplementedError('tls.domains not yet implemented');
+  Future<List<String>> domains();
+}
+
+/// Library-internal factory. Reach via `Tailscale.instance.tls`.
+@internal
+Tls createTls({required TlsDomainsFn domainsFn}) => _Tls(domainsFn);
+
+final class _Tls implements Tls {
+  _Tls(this._domains);
+
+  final TlsDomainsFn _domains;
+
+  @override
+  Future<SecureServerSocket> bind(int port) =>
+      throw UnimplementedError('tls.bind not yet implemented');
+
+  @override
+  Future<List<String>> domains() => _domains();
 }

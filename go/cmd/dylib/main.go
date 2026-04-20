@@ -85,6 +85,40 @@ func DuneTcpUnbind(loopbackPort C.int) {
 	tailscale.TcpUnbind(int(loopbackPort))
 }
 
+//export DuneWhoIs
+func DuneWhoIs(ip *C.char) *C.char {
+	return C.CString(tailscale.WhoIs(C.GoString(ip)))
+}
+
+//export DuneTlsDomains
+func DuneTlsDomains() *C.char {
+	return C.CString(tailscale.TlsDomains())
+}
+
+//export DuneDiagPing
+func DuneDiagPing(ip *C.char, timeoutMillis C.int, pingType *C.char) *C.char {
+	return C.CString(tailscale.DiagPing(
+		C.GoString(ip),
+		int(timeoutMillis),
+		C.GoString(pingType),
+	))
+}
+
+//export DuneDiagMetrics
+func DuneDiagMetrics() *C.char {
+	return C.CString(tailscale.DiagMetrics())
+}
+
+//export DuneDiagDERPMap
+func DuneDiagDERPMap() *C.char {
+	return C.CString(tailscale.DiagDERPMap())
+}
+
+//export DuneDiagCheckUpdate
+func DuneDiagCheckUpdate() *C.char {
+	return C.CString(tailscale.DiagCheckUpdate())
+}
+
 //export DuneHasState
 func DuneHasState(stateDir *C.char) C.int {
 	dir := C.GoString(stateDir)

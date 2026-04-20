@@ -297,6 +297,10 @@ void main() {
     test('onError is a broadcast stream', () {
       expect(Tailscale.instance.onError.isBroadcast, isTrue);
     });
+
+    test('onPeersChange is a broadcast stream', () {
+      expect(Tailscale.instance.onPeersChange.isBroadcast, isTrue);
+    });
   });
 
   group('status() before up()', () {

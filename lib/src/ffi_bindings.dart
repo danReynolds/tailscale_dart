@@ -88,6 +88,67 @@ external ffi.Pointer<Utf8> duneTcpBind(
 @ffi.Native<ffi.Void Function(ffi.Int32)>(symbol: 'DuneTcpUnbind')
 external void duneTcpUnbind(int loopbackPort);
 
+/// Resolves a tailnet IP to its peer identity via LocalAPI.
+///
+/// Returns JSON:
+///   {"found": true, "nodeId": "...", "hostName": "...",
+///    "userLoginName": "...", "tags": [...], "tailscaleIPs": [...]}
+///     on success.
+///   {"found": false} if the IP isn't known on this tailnet.
+///   {"error": "..."} on other failures.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(symbol: 'DuneWhoIs')
+external ffi.Pointer<Utf8> duneWhoIs(ffi.Pointer<Utf8> ip);
+
+/// Returns the auto-provisioned TLS cert's Subject Alternative Names.
+///
+/// Returns JSON `{"domains": [...]}` on success, `{"error": ...}` on
+/// failure. Empty domains array means MagicDNS or HTTPS is disabled
+/// on the tailnet.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneTlsDomains')
+external ffi.Pointer<Utf8> duneTlsDomains();
+
+/// Tailscale-level ping to a tailnet peer.
+///
+/// `timeoutMillis <= 0` means no timeout. `pingType` is one of
+/// "disco" (default), "tsmp", "icmp".
+///
+/// Returns JSON:
+///   {"latencyMicros": N, "path": "direct"|"derp"|"unknown",
+///    "derpRegion": "..."?}
+///     on success.
+///   {"error": "..."} on failure.
+@ffi.Native<
+    ffi.Pointer<Utf8> Function(
+      ffi.Pointer<Utf8>,
+      ffi.Int32,
+      ffi.Pointer<Utf8>,
+    )>(
+  symbol: 'DuneDiagPing',
+)
+external ffi.Pointer<Utf8> duneDiagPing(
+  ffi.Pointer<Utf8> ip,
+  int timeoutMillis,
+  ffi.Pointer<Utf8> pingType,
+);
+
+/// Prometheus-format user metrics. Returns JSON
+/// `{"metrics": "..."}` on success, `{"error": "..."}` on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneDiagMetrics')
+external ffi.Pointer<Utf8> duneDiagMetrics();
+
+/// Current DERP relay map. Returns JSON
+/// `{"regions": {...}, "omitDefaultRegions": bool}` on success,
+/// `{"error": "..."}` on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneDiagDERPMap')
+external ffi.Pointer<Utf8> duneDiagDERPMap();
+
+/// Control-plane update check. Returns JSON
+/// `{"available": false}` when on latest, or
+/// `{"available": true, "latestVersion": "...", "urgentSecurityUpdate": bool, "notifyText": "..."?}`
+/// when an update is available; `{"error": "..."}` on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneDiagCheckUpdate')
+external ffi.Pointer<Utf8> duneDiagCheckUpdate();
+
 /// Returns 1 if the state directory has a valid machine key, 0 otherwise.
 @ffi.Native<ffi.Int32 Function(ffi.Pointer<Utf8>)>(symbol: 'DuneHasState')
 external int duneHasState(ffi.Pointer<Utf8> stateDir);

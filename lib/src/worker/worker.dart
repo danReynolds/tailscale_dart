@@ -6,6 +6,8 @@ import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
+import '../api/diag.dart';
+import '../api/identity.dart';
 import '../errors.dart';
 import '../ffi_bindings.dart' as native;
 import '../status.dart';
@@ -15,12 +17,17 @@ part 'entrypoint.dart';
 
 /// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
 final class Worker {
-  Worker({required this.publishState, required this.publishRuntimeError}) {
+  Worker({
+    required this.publishState,
+    required this.publishRuntimeError,
+    required this.publishPeers,
+  }) {
     _start();
   }
 
   final void Function(NodeState state) publishState;
   final void Function(TailscaleRuntimeError error) publishRuntimeError;
+  final void Function(List<PeerStatus> peers) publishPeers;
 
   // Requests are processed synchronously on the worker isolate and each
   // command produces exactly one response in request order, so a FIFO queue is
@@ -64,6 +71,8 @@ final class Worker {
         publishRuntimeError(error);
       case _WorkerStateEvent(:final state):
         publishState(state);
+      case _WorkerPeersEvent(:final peers):
+        publishPeers(peers);
       case _WorkerResponse():
         _pendingRequests.removeFirst().complete(message);
     }
@@ -165,6 +174,56 @@ final class Worker {
     await _request<_WorkerAckResponse>(
       _WorkerTcpUnbindCommand(loopbackPort: loopbackPort),
     );
+  }
+
+  Future<PeerIdentity?> whois(String ip) async {
+    final response = await _request<_WorkerWhoIsResponse>(
+      _WorkerWhoIsCommand(ip: ip),
+    );
+    return response.identity;
+  }
+
+  Future<List<String>> tlsDomains() async {
+    final response = await _request<_WorkerTlsDomainsResponse>(
+      const _WorkerTlsDomainsCommand(),
+    );
+    return response.domains;
+  }
+
+  Future<PingResult> diagPing({
+    required String ip,
+    Duration? timeout,
+    required String pingType,
+  }) async {
+    final response = await _request<_WorkerDiagPingResponse>(
+      _WorkerDiagPingCommand(
+        ip: ip,
+        timeoutMillis: timeout?.inMilliseconds ?? 0,
+        pingType: pingType,
+      ),
+    );
+    return response.result;
+  }
+
+  Future<String> diagMetrics() async {
+    final response = await _request<_WorkerDiagMetricsResponse>(
+      const _WorkerDiagMetricsCommand(),
+    );
+    return response.metrics;
+  }
+
+  Future<DERPMap> diagDERPMap() async {
+    final response = await _request<_WorkerDiagDERPMapResponse>(
+      const _WorkerDiagDERPMapCommand(),
+    );
+    return response.map;
+  }
+
+  Future<ClientVersion?> diagCheckUpdate() async {
+    final response = await _request<_WorkerDiagCheckUpdateResponse>(
+      const _WorkerDiagCheckUpdateCommand(),
+    );
+    return response.clientVersion;
   }
 
   Future<TailscaleStatus> status({required String stateDir}) async {

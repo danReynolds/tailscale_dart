@@ -118,18 +118,22 @@ final class _Udp implements Udp {
       // side fails. The other future may still complete later. Attach
       // fire-and-forget cleanup so a stray accept gets closed and any
       // lingering error is handled (not an unhandled async error).
-      unawaited(
-        bridgeFuture.then(
-          (socket) => socket.destroy(),
-          onError: (Object _) {
-            // Expected: loopback was closed below before an accept
-            // arrived. Nothing to clean up.
-          },
-        ),
-      );
-      unawaited(
-        tailnetPortFuture.catchError((Object _) => 0),
-      );
+      unawaited(() async {
+        try {
+          final socket = await bridgeFuture;
+          socket.destroy();
+        } catch (_) {
+          // Expected: loopback was closed below before an accept
+          // arrived. Nothing to clean up.
+        }
+      }());
+      unawaited(() async {
+        try {
+          await tailnetPortFuture;
+        } catch (_) {
+          // The original failure is already being surfaced.
+        }
+      }());
       try {
         await loopback.close();
       } catch (_) {

@@ -1,388 +1,284 @@
 # API status & usage
 
 Reference for the public API surface of `package:tailscale`, grouped by
-namespace. Tracks what works today versus what is typed-and-documented
-but unimplemented. For the forward-looking phase plan, see
+namespace. For each namespace: a description, the phase that completes
+it, and a table of APIs with status, purpose, and a copy-pasteable
+example. For the forward-looking phase plan, see
 [`api-roadmap.md`](api-roadmap.md).
 
 **Legend:**
 - ✅ Working — callable today, tested, returns real values.
-- ⛔ Stub — typed and documented, but throws `UnimplementedError`. Scheduled for a later phase.
+- ⛔ Stub — typed + documented, throws `UnimplementedError`.
+
+**Convention:** all examples assume `final tsnet = Tailscale.instance;`
+and that [`Tailscale.init`](#lifecycle-top-level) has already been called.
 
 ## Namespace overview
 
-| Namespace   | Purpose                                                                  | Status                               |
-| ----------- | ------------------------------------------------------------------------ | ------------------------------------ |
-| Lifecycle   | `init` / `up` / `down` / `logout` / `status` / `peers` + streams         | ✅ Working                            |
-| `http`      | `http.Client` over the tailnet + reverse-proxy helper                    | ✅ Working                            |
-| `tcp`       | Raw TCP `dial` / `bind` between tailnet peers                            | ⛔ Stub (Phase 3)                    |
-| `tls`       | TLS-terminated listener with auto-provisioned cert                       | ⛔ Stub (Phase 4–5)                  |
-| `udp`       | UDP datagram listener on a tailnet IP                                    | ⛔ Stub (Phase 5)                    |
-| `funnel`    | Public-internet HTTPS via Tailscale Funnel                               | ⛔ Stub (Phase 5) — `FunnelMetadata` typed |
-| `taildrop`  | Peer-to-peer file transfer                                               | ⛔ Stub (Phase 8)                    |
-| `serve`     | `tailscale serve` / `tailscale funnel` config                             | ⛔ Stub (Phase 9)                    |
-| `exitNode`  | Route outbound traffic through a peer                                     | ⛔ Stub (Phase 6)                    |
-| `profiles`  | Multi-account / multi-tailnet                                             | ⛔ Stub (Phase 7)                    |
-| `prefs`     | Subnet routes, shields, tags, auto-update                                | ⛔ Stub (Phase 6)                    |
-| `diag`      | Ping, metrics, DERP map, update check                                     | ⛔ Stub (Phase 4, 10)                |
-| `whois`     | Resolve a tailnet IP to peer identity (top-level)                         | ⛔ Stub (Phase 4)                    |
-
-## Setup
-
-```dart
-import 'package:tailscale/tailscale.dart';
-
-void main() async {
-  Tailscale.init(stateDir: '/path/to/app/state');
-
-  final tsnet = Tailscale.instance;
-  final status = await tsnet.up(authKey: 'tskey-...');
-
-  switch (status.state) {
-    case NodeState.running:
-      // Ready to send/receive.
-    case NodeState.needsLogin:
-      // Open status.authUrl in a browser/web view.
-    case NodeState.needsMachineAuth:
-      // Wait for admin approval in the control plane.
-    default:
-      // Transient; listen on onStateChange.
-  }
-}
-```
+| Namespace               | Feature                                                           | Completed in     |
+| ----------------------- | ----------------------------------------------------------------- | ---------------- |
+| [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Phase 1 ✅        |
+| [`http`](#http)         | HTTP over the tailnet + reverse-proxy helper                      | Phase 1 ✅        |
+| [`tcp`](#tcp)           | Raw TCP between tailnet peers                                      | Phase 3          |
+| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Phase 4–5        |
+| [`udp`](#udp)           | UDP datagram sockets on a tailnet IP                                | Phase 5          |
+| [`funnel`](#funnel)     | Public-internet HTTPS via Tailscale Funnel                         | Phase 5          |
+| [`taildrop`](#taildrop) | Peer-to-peer file transfer                                          | Phase 8          |
+| [`serve`](#serve)       | `tailscale serve` / `tailscale funnel` config                        | Phase 9          |
+| [`exitNode`](#exitnode) | Route outbound traffic through a peer                                | Phase 6          |
+| [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Phase 7          |
+| [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Phase 6          |
+| [`diag`](#diag)         | Ping, metrics, DERP map, update check                                | Phase 4 + 10     |
+| [`whois`](#whois-top-level) | Resolve a tailnet IP to peer identity                             | Phase 4          |
+| [Errors](#errors)       | Structured exception taxonomy                                        | Phase 2 ✅        |
 
 ## Lifecycle (top-level)
 
-The engine lifecycle plus reactive streams. Nothing in here is namespaced — these live directly on `Tailscale.instance`.
+Engine lifecycle and reactive streams. These live directly on
+`Tailscale.instance` rather than under a namespace because they don't
+fit one topic. `up()` resolves on the **first stable state** (`running`
+/ `needsLogin` / `needsMachineAuth`) so interactive auth flows can
+branch on the returned status without re-calling `up()`.
 
-| API                                           | Status | Purpose                                                                      |
-| --------------------------------------------- | ------ | ---------------------------------------------------------------------------- |
-| `Tailscale.init({stateDir, logLevel})`         | ✅     | One-time library configuration at app startup.                               |
-| `up({hostname, authKey, controlUrl})` → `TailscaleStatus` | ✅     | Start the engine; resolves on first stable state (running / needsLogin / needsMachineAuth). |
-| `down()`                                      | ✅     | Stop the engine, keeping persisted credentials.                               |
-| `logout()`                                    | ✅     | Stop + wipe persisted credentials.                                            |
-| `status()` → `TailscaleStatus`                | ✅     | Snapshot of node state, IPs, health, MagicDNS suffix.                         |
-| `peers()` → `List<PeerStatus>`                | ✅     | Current peer inventory.                                                       |
-| `onStateChange` → `Stream<NodeState>`         | ✅     | Distinct-filtered state transitions.                                          |
-| `onError` → `Stream<TailscaleRuntimeError>`   | ✅     | Async runtime errors pushed from Go.                                          |
-| `onPeersChange` → `Stream<List<PeerStatus>>`  | ⛔     | Peer inventory changes without polling. *Phase 4.*                            |
+**Completed in:** Phase 1 (parity) — fully working.
 
-```dart
-final tsnet = Tailscale.instance;
-
-tsnet.onStateChange.listen((state) => print('state: $state'));
-tsnet.onError.listen((err) => print('runtime error: $err'));
-
-final status = await tsnet.up(authKey: 'tskey-...');
-print('IPs: ${status.tailscaleIPs}');
-
-final peers = await tsnet.peers();
-for (final peer in peers) {
-  print('${peer.hostName} (${peer.stableNodeId}) online=${peer.online}');
-}
-
-await tsnet.down();
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `Tailscale.init({stateDir, logLevel})` | ✅ | One-time library configuration at app startup. | `Tailscale.init(stateDir: '/app/state');` |
+| `up({hostname, authKey, controlUrl})` → `TailscaleStatus` | ✅ | Start engine; resolves on first stable state. | `final s = await tsnet.up(authKey: 'tskey-...');` |
+| `down()` | ✅ | Stop engine, keep persisted credentials. | `await tsnet.down();` |
+| `logout()` | ✅ | Stop + wipe persisted credentials. | `await tsnet.logout();` |
+| `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. | `final s = await tsnet.status();` |
+| `peers()` → `List<PeerStatus>` | ✅ | Current peer inventory. | `final peers = await tsnet.peers();` |
+| `onStateChange` → `Stream<NodeState>` | ✅ | Distinct-filtered state transitions. | `tsnet.onStateChange.listen(print);` |
+| `onError` → `Stream<TailscaleRuntimeError>` | ✅ | Async runtime errors pushed from Go. | `tsnet.onError.listen(report);` |
+| `onPeersChange` → `Stream<List<PeerStatus>>` | ⛔ | Peer inventory changes without polling. | `tsnet.onPeersChange.listen(render);` |
 
 ## `http`
 
-HTTP conveniences over the tailnet. Call `Tailscale.instance.http.*`.
+HTTP conveniences layered on top of the tailnet. The `client` routes
+every request over the tailnet tunnel; `expose` forwards incoming
+tailnet HTTP to a local server, so existing `shelf` / `dart_frog`
+stacks work unchanged.
 
-| API                                           | Status | Purpose                                                                      |
-| --------------------------------------------- | ------ | ---------------------------------------------------------------------------- |
-| `http.client` → `http.Client`                 | ✅     | Drop-in `http.Client` that tunnels every request over the tailnet.           |
-| `http.expose(localPort, {tailnetPort})` → `int` | ✅     | Reverse-proxy helper: forward tailnet traffic on `tailnetPort` to `localhost:localPort`. Returns the effective local port. |
+**Completed in:** Phase 1 — fully working.
 
-```dart
-// Call a peer's HTTP API.
-final response = await tsnet.http.client.get(
-  Uri.parse('http://100.64.0.5/api/status'),
-);
-print(response.body);
-
-// Publish your local HTTP server on the tailnet.
-final server = await HttpServer.bind('127.0.0.1', 0);
-await tsnet.http.expose(server.port, tailnetPort: 80);
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `http.client` → `http.Client` | ✅ | Drop-in `http.Client` that tunnels every request. Throws `TailscaleUsageException` before `up()`. | `await tsnet.http.client.get(peerUri);` |
+| `http.expose(localPort, {tailnetPort})` → `int` | ✅ | Forward tailnet traffic to a local HTTP server. Returns the effective local port. | `await tsnet.http.expose(8080, tailnetPort: 80);` |
 
 ## `tcp`
 
-Raw TCP primitives over the tailnet. Returns standard `dart:io` types.
+Raw TCP between tailnet peers. Verb split: `dial` for outbound (mirrors
+Go's `tsnet.Server.Dial`), `bind` for inbound (mirrors
+`ServerSocket.bind` in `dart:io`). Returns standard `dart:io` types so
+accept loops are just `await for (conn in server)`.
 
-| API                                                | Status | Purpose                                                                 |
-| -------------------------------------------------- | ------ | ----------------------------------------------------------------------- |
-| `tcp.dial(host, port, {timeout})` → `Socket`       | ⛔     | Outbound connection to a tailnet peer. Wraps `tsnet.Server.Dial`.        |
-| `tcp.bind(port, {host})` → `ServerSocket`          | ⛔     | Accept inbound TCP on the tailnet. Wraps `tsnet.Server.Listen`.          |
+**Completed in:** Phase 3 — depends on the shared loopback-bridge
+helper in Go, which also unblocks TLS / UDP / Funnel / Taildrop.
 
-```dart
-// Outbound.
-final socket = await tsnet.tcp.dial('100.64.0.5', 22);
-socket.add(utf8.encode('hello'));
-await socket.flush();
-
-// Inbound.
-final server = await tsnet.tcp.bind(1234);
-await for (final conn in server) {
-  conn.pipe(conn); // echo
-}
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `tcp.dial(host, port, {timeout})` → `Future<Socket>` | ⛔ | Outbound TCP to a tailnet peer. `host` may be IP or MagicDNS name. | `final s = await tsnet.tcp.dial('100.64.0.5', 22);` |
+| `tcp.bind(port, {host})` → `Future<ServerSocket>` | ⛔ | Accept inbound TCP. `host` pins to one of this node's tailnet IPs. | `final srv = await tsnet.tcp.bind(1234);` |
 
 ## `tls`
 
 TLS-terminated listener with a cert auto-provisioned by the control
-plane. Requires the tailnet operator to have enabled MagicDNS + HTTPS.
+plane. Handlers see plaintext bytes — TLS is terminated server-side.
 
-| API                                               | Status | Purpose                                                                |
-| ------------------------------------------------- | ------ | ---------------------------------------------------------------------- |
-| `tls.bind(port)` → `SecureServerSocket`           | ⛔     | Accept TLS-terminated connections; cert provisioned automatically.      |
-| `tls.domains()` → `List<String>`                  | ⛔     | Cert SANs; preflight for `tls.bind`.                                    |
+**Completed in:** Phase 5 (`bind`) + Phase 4 (`domains` preflight).
+**Requires:** MagicDNS **and** HTTPS enabled on the tailnet by the
+operator. Not covered by the Headscale CI — live-Tailscale test only.
 
-```dart
-final server = await tsnet.tls.bind(443);
-await for (final conn in server) {
-  // conn is a plaintext Socket — TLS was terminated upstream.
-  conn.writeln('HTTP/1.1 200 OK\r\n\r\nhello');
-  await conn.close();
-}
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `tls.bind(port)` → `Future<SecureServerSocket>` | ⛔ | TLS-terminated listener with auto-cert. | `final srv = await tsnet.tls.bind(443);` |
+| `tls.domains()` → `Future<List<String>>` | ⛔ | Cert SANs; preflight for `bind`. Empty = HTTPS disabled. | `final sans = await tsnet.tls.domains();` |
 
 ## `udp`
 
-UDP datagram sockets over the tailnet.
+UDP datagram sockets over the tailnet. Unlike TCP, `host` is required
+— UDP binds to a specific tailnet IP on this node (not `0.0.0.0`).
+Grab one from `status().ipv4`.
 
-| API                                             | Status | Purpose                                                               |
-| ----------------------------------------------- | ------ | --------------------------------------------------------------------- |
-| `udp.bind(host, port)` → `RawDatagramSocket`    | ⛔     | Bind a UDP socket on a specific tailnet IP of this node.              |
+**Completed in:** Phase 5.
 
-```dart
-final ip = (await tsnet.status()).ipv4!;
-final sock = await tsnet.udp.bind(ip, 4000);
-sock.listen((event) {
-  if (event == RawSocketEvent.read) {
-    final dg = sock.receive();
-    print('from ${dg?.address}: ${utf8.decode(dg!.data)}');
-  }
-});
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `udp.bind(host, port)` → `Future<RawDatagramSocket>` | ⛔ | UDP listener on a tailnet IP of this node. | `final sock = await tsnet.udp.bind(ip, 4000);` |
 
 ## `funnel`
 
-Public-internet HTTPS via Tailscale Funnel. Requires the tailnet
-operator to have enabled Funnel in ACLs for this node.
+Public-internet HTTPS via Tailscale Funnel: the node is reachable from
+the open internet at its Funnel hostname, with edge TLS termination.
+The Funnel edge attaches `publicSrc` + `sni` metadata to each accepted
+socket; read it via the `Socket.funnel` extension — this lets `bind`
+return a standard `SecureServerSocket` instead of a `dart:io` subclass.
 
-| API                                                      | Status | Purpose                                                        |
-| -------------------------------------------------------- | ------ | -------------------------------------------------------------- |
-| `funnel.bind(port, {funnelOnly})` → `SecureServerSocket` | ⛔     | Public-internet TLS listener at the node's Funnel hostname.    |
-| `FunnelMetadata`                                         | ✅     | Value type exposing `publicSrc` + `sni` observed by the Funnel edge. |
-| `Socket.funnel` extension                                | ✅     | Read `FunnelMetadata` off an accepted socket, or null if not from Funnel. |
+**Completed in:** Phase 5. **Requires:** operator has enabled Funnel
+in ACLs for this node and an allowed Funnel port (443, 8443, 10000).
+Headscale doesn't support Funnel; live-Tailscale test only.
 
-```dart
-final server = await tsnet.funnel.bind(443);
-await for (final conn in server) {
-  final meta = conn.funnel;
-  if (meta != null) {
-    print('public src: ${meta.publicSrc}, sni: ${meta.sni}');
-  }
-  conn.writeln('HTTP/1.1 200 OK\r\n\r\nhello world');
-  await conn.close();
-}
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `funnel.bind(port, {funnelOnly})` → `Future<SecureServerSocket>` | ⛔ | Public-internet TLS listener. `funnelOnly: true` rejects same-tailnet clients. | `final srv = await tsnet.funnel.bind(443);` |
+| `FunnelMetadata` value type (`publicSrc`, `sni`) | ✅ | Metadata the Funnel edge attached to a socket. | `const FunnelMetadata(publicSrc: ...);` |
+| `Socket.funnel` extension getter | ✅ | Read `FunnelMetadata` off an accepted socket; null if not from Funnel. | `final meta = conn.funnel;` |
 
 ## `taildrop`
 
-Peer-to-peer file transfer over the tailnet. Sends go directly between
-nodes with no intermediary.
+Peer-to-peer file transfer ("Taildrop") over the tailnet. Sends go
+directly between nodes with no intermediary — good fit for
+mobile-to-desktop sync, collab tools, anywhere you'd otherwise stand up
+a file server. Byte streams use `Stream<Uint8List>` throughout so
+producer/consumer can pipe without intermediate buffering.
 
-| API                                                              | Status | Purpose                                                             |
-| ---------------------------------------------------------------- | ------ | ------------------------------------------------------------------- |
-| `taildrop.targets()` → `List<FileTarget>`                        | ⛔     | Peers eligible to receive files right now.                           |
-| `taildrop.push({target, name, data, size?})`                     | ⛔     | Stream a file to a peer.                                             |
-| `taildrop.waitingFiles()` → `List<WaitingFile>`                  | ⛔     | Received files not yet picked up.                                    |
-| `taildrop.awaitWaitingFiles({timeout})` → `List<WaitingFile>`    | ⛔     | Block until at least one file is available or the timeout fires.      |
-| `taildrop.openRead(name)` → `Stream<Uint8List>`                  | ⛔     | Byte-stream a received file (caller owns persistence).               |
-| `taildrop.delete(name)`                                          | ⛔     | Discard a received file without reading it.                          |
-| `taildrop.onWaitingFile` → `Stream<WaitingFile>`                 | ⛔     | Reactive version of `awaitWaitingFiles`.                              |
-| `FileTarget`                                                     | ✅     | Value type: peer identity + hostname.                                 |
-| `WaitingFile`                                                    | ✅     | Value type: name + size.                                              |
+**Completed in:** Phase 8. **Depends on:** Phase 3 loopback bridge.
 
-```dart
-// Send.
-final targets = await tsnet.taildrop.targets();
-final peer = targets.firstWhere((t) => t.hostname == 'laptop');
-await tsnet.taildrop.push(
-  target: peer,
-  name: 'report.pdf',
-  data: File('/tmp/report.pdf').openRead().cast<Uint8List>(),
-);
-
-// Receive.
-await for (final file in tsnet.taildrop.onWaitingFile) {
-  final bytes = await tsnet.taildrop.openRead(file.name)
-      .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk));
-  await File('/downloads/${file.name}').writeAsBytes(bytes);
-  await tsnet.taildrop.delete(file.name);
-}
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `taildrop.targets()` → `Future<List<FileTarget>>` | ⛔ | Peers eligible to receive files right now. | `final ts = await tsnet.taildrop.targets();` |
+| `taildrop.push({target, name, data, size?})` | ⛔ | Stream a file to a peer. `size` enables receiver progress reporting. | `await tsnet.taildrop.push(target: t, name: 'x', data: bytes);` |
+| `taildrop.waitingFiles()` → `Future<List<WaitingFile>>` | ⛔ | Received files not yet picked up. | `final files = await tsnet.taildrop.waitingFiles();` |
+| `taildrop.awaitWaitingFiles({timeout})` | ⛔ | Block until at least one file arrives or timeout fires. | `await tsnet.taildrop.awaitWaitingFiles(timeout: ...);` |
+| `taildrop.openRead(name)` → `Stream<Uint8List>` | ⛔ | Byte-stream a received file. Caller owns persistence. | `tsnet.taildrop.openRead('x').pipe(sink);` |
+| `taildrop.delete(name)` | ⛔ | Discard a received file without reading. | `await tsnet.taildrop.delete('x');` |
+| `taildrop.onWaitingFile` → `Stream<WaitingFile>` | ⛔ | Reactive: emits each arriving file. | `tsnet.taildrop.onWaitingFile.listen(save);` |
+| `FileTarget` value type | ✅ | Peer identity (nodeId, hostname, userLoginName). | `target.hostname == 'laptop'` |
+| `WaitingFile` value type | ✅ | Name + size of a received file. | `file.size > 0` |
 
 ## `serve`
 
-`tailscale serve` / `tailscale funnel` configuration — HTTP/TCP routing
-and public-internet publishing.
+Programmatic access to what `tailscale serve` / `tailscale funnel` do
+on the CLI: HTTP routing and public-internet publishing. `ServeConfig`
+carries an opaque `etag` for optimistic concurrency — if another
+writer lands first, `setConfig` throws `TailscaleServeException` with
+`TailscaleErrorCode.conflict`.
 
-| API                                    | Status | Purpose                                                                  |
-| -------------------------------------- | ------ | ------------------------------------------------------------------------ |
-| `serve.getConfig()` → `ServeConfig`    | ⛔     | Current serve/funnel config for this node.                                |
-| `serve.setConfig(ServeConfig)`         | ⛔     | Replace atomically; throws on `ServeConfig.etag` mismatch.                |
-| `ServeConfig` (with `etag`)            | ✅     | Value type for optimistic concurrency. Handler modeling lands in Phase 9. |
+**Completed in:** Phase 9. **Depends on:** Phase 2 (value types).
+**Also:** Phase 9 bumps the `tailscale.com` Go module pin to pick up
+`Services` / `AllowFunnel` / `Foreground` / `ListenService`. Headscale
+doesn't support Serve; live-Tailscale test only.
 
-```dart
-final config = await tsnet.serve.getConfig();
-final updated = config.addWebMount('/docs', DirectoryHandler('/var/www/docs'));
-
-try {
-  await tsnet.serve.setConfig(updated);
-} on TailscaleServeException catch (e) when e.code == TailscaleErrorCode.conflict {
-  // Someone else changed it; re-fetch and retry.
-}
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `serve.getConfig()` → `Future<ServeConfig>` | ⛔ | Current serve/funnel config for this node. | `final cfg = await tsnet.serve.getConfig();` |
+| `serve.setConfig(ServeConfig)` | ⛔ | Replace atomically; throws on ETag mismatch. | `await tsnet.serve.setConfig(updated);` |
+| `ServeConfig` value type (with `etag`) | ✅ | Immutable config object; handler modeling lands in Phase 9. | `const ServeConfig(etag: 'v1');` |
 
 ## `exitNode`
 
 Route all outbound traffic from this node through a peer (VPN-style).
+Use `use(peer)` when you have a `PeerStatus` in hand, `useById(id)`
+when only the stable ID is durable (persisted across sessions), or
+`useAuto()` to let the control plane pick by latency and re-pick on
+changes.
 
-| API                                                        | Status | Purpose                                                                |
-| ---------------------------------------------------------- | ------ | ---------------------------------------------------------------------- |
-| `exitNode.current()` → `PeerStatus?`                       | ⛔     | Peer currently used as exit, or null.                                   |
-| `exitNode.suggest()` → `PeerStatus?`                       | ⛔     | Control-plane-recommended exit node (latency-based).                     |
-| `exitNode.use(PeerStatus)`                                 | ⛔     | Route through this peer. Type-safe.                                      |
-| `exitNode.useById(String stableNodeId)`                    | ⛔     | Escape hatch when only the stable ID is available.                       |
-| `exitNode.useAuto()`                                       | ⛔     | `AutoExitNode` mode — control plane picks (and re-picks).                 |
-| `exitNode.clear()`                                         | ⛔     | Stop using any exit node.                                                |
-| `exitNode.onCurrentChange` → `Stream<PeerStatus?>`         | ⛔     | React to exit-node changes (including external).                         |
+**Completed in:** Phase 6.
 
-```dart
-final suggested = await tsnet.exitNode.suggest();
-if (suggested != null) {
-  await tsnet.exitNode.use(suggested);
-}
-
-tsnet.exitNode.onCurrentChange.listen((peer) {
-  print('now routing via ${peer?.hostName ?? "direct"}');
-});
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `exitNode.current()` → `Future<PeerStatus?>` | ⛔ | Peer currently used as exit, or null. | `final cur = await tsnet.exitNode.current();` |
+| `exitNode.suggest()` → `Future<PeerStatus?>` | ⛔ | Control-plane-recommended exit (latency-based). | `final s = await tsnet.exitNode.suggest();` |
+| `exitNode.use(PeerStatus)` | ⛔ | Route through this peer. Type-safe. | `await tsnet.exitNode.use(peer);` |
+| `exitNode.useById(stableNodeId)` | ⛔ | Escape hatch when only the stable ID is available. | `await tsnet.exitNode.useById('nAbCd');` |
+| `exitNode.useAuto()` | ⛔ | `AutoExitNode` mode — control plane picks and re-picks. | `await tsnet.exitNode.useAuto();` |
+| `exitNode.clear()` | ⛔ | Stop routing through an exit node. | `await tsnet.exitNode.clear();` |
+| `exitNode.onCurrentChange` → `Stream<PeerStatus?>` | ⛔ | React to changes (incl. external, from another signed-in device). | `tsnet.exitNode.onCurrentChange.listen(update);` |
 
 ## `profiles`
 
-Multi-account / multi-tailnet: one device, several identities.
+Multi-account / multi-tailnet: one device, several identities. Useful
+for a single app operating in both a personal and a work tailnet, or
+dev vs prod. `switchTo` accepts a `LoginProfile` (type-safe) or use
+`switchToId` when you've persisted only the ID.
 
-| API                                            | Status | Purpose                                                              |
-| ---------------------------------------------- | ------ | -------------------------------------------------------------------- |
-| `profiles.current()` → `LoginProfile?`         | ⛔     | Currently active profile, or null on a fresh install.                  |
-| `profiles.list()` → `List<LoginProfile>`       | ⛔     | All profiles persisted on this node.                                   |
-| `profiles.switchTo(LoginProfile)`              | ⛔     | Disconnect + reconnect with the target profile's credentials.          |
-| `profiles.switchToId(String id)`               | ⛔     | Escape hatch when only the ID is known.                                |
-| `profiles.delete(LoginProfile)`                | ⛔     | Remove a profile and its persisted credentials.                        |
-| `profiles.deleteById(String id)`               | ⛔     | Escape hatch for delete.                                               |
-| `profiles.newEmpty()`                          | ⛔     | Create an empty slot for the next `up()` with a fresh authkey.          |
+**Completed in:** Phase 7.
 
-```dart
-final all = await tsnet.profiles.list();
-final work = all.firstWhere((p) => p.tailnetName == 'acme.com');
-await tsnet.profiles.switchTo(work);
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `profiles.current()` → `Future<LoginProfile?>` | ⛔ | Currently active profile, or null on a fresh install. | `final p = await tsnet.profiles.current();` |
+| `profiles.list()` → `Future<List<LoginProfile>>` | ⛔ | All profiles persisted on this node. | `final all = await tsnet.profiles.list();` |
+| `profiles.switchTo(LoginProfile)` | ⛔ | Disconnect + reconnect with the target profile. | `await tsnet.profiles.switchTo(work);` |
+| `profiles.switchToId(id)` | ⛔ | Escape hatch for a persisted ID. | `await tsnet.profiles.switchToId('p1');` |
+| `profiles.delete(LoginProfile)` | ⛔ | Remove profile + its persisted credentials. | `await tsnet.profiles.delete(old);` |
+| `profiles.deleteById(id)` | ⛔ | Escape hatch for delete by ID. | `await tsnet.profiles.deleteById('p1');` |
+| `profiles.newEmpty()` | ⛔ | Create an empty slot for the next `up()` with a fresh authkey. | `await tsnet.profiles.newEmpty();` |
+| `LoginProfile` value type | ✅ | `id`, `userLoginName`, `tailnetName`. | `profile.tailnetName == 'acme.com'` |
 
 ## `prefs`
 
-Node preferences — subnet routes, shields, tags, auto-update. The long
-tail of tsnet config that doesn't warrant its own namespace.
+The long tail of node preferences — subnet routes, shields, advertised
+tags, auto-update opt-in. Common single-field changes have named
+setters (`set*` prefix for consistency); atomic multi-field edits use
+`updateMasked(PrefsUpdate)`.
 
-| API                                                | Status | Purpose                                                           |
-| -------------------------------------------------- | ------ | ----------------------------------------------------------------- |
-| `prefs.get()` → `TailscalePrefs`                   | ⛔     | Current prefs snapshot.                                            |
-| `prefs.setAdvertisedRoutes(List<String> cidrs)`    | ⛔     | Replace the set of advertised subnet routes.                        |
-| `prefs.setAcceptRoutes(bool)`                      | ⛔     | Accept subnet routes advertised by other nodes.                     |
-| `prefs.setShieldsUp(bool)`                         | ⛔     | Block all inbound connections.                                      |
-| `prefs.setAutoUpdate(bool)`                        | ⛔     | Opt in/out of automatic tsnet updates.                              |
-| `prefs.setAdvertisedTags(List<String> tags)`       | ⛔     | Replace the set of ACL tags this node advertises.                   |
-| `prefs.updateMasked(PrefsUpdate)`                  | ⛔     | Atomic multi-field edit.                                            |
+**Completed in:** Phase 6.
 
-```dart
-await tsnet.prefs.setShieldsUp(true);
-
-await tsnet.prefs.updateMasked(PrefsUpdate(
-  advertisedRoutes: ['10.0.0.0/24'],
-  acceptRoutes: true,
-));
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `prefs.get()` → `Future<TailscalePrefs>` | ⛔ | Current prefs snapshot. | `final p = await tsnet.prefs.get();` |
+| `prefs.setAdvertisedRoutes(cidrs)` | ⛔ | Replace advertised subnet routes. | `await tsnet.prefs.setAdvertisedRoutes(['10.0.0.0/24']);` |
+| `prefs.setAcceptRoutes(bool)` | ⛔ | Accept subnet routes from other nodes. | `await tsnet.prefs.setAcceptRoutes(true);` |
+| `prefs.setShieldsUp(bool)` | ⛔ | Block all inbound connections. | `await tsnet.prefs.setShieldsUp(true);` |
+| `prefs.setAutoUpdate(bool)` | ⛔ | Opt in/out of tsnet auto-update. | `await tsnet.prefs.setAutoUpdate(true);` |
+| `prefs.setAdvertisedTags(tags)` | ⛔ | Replace advertised ACL tags. | `await tsnet.prefs.setAdvertisedTags(['tag:prod']);` |
+| `prefs.updateMasked(PrefsUpdate)` | ⛔ | Atomic multi-field edit; unset fields stay as-is. | `await tsnet.prefs.updateMasked(PrefsUpdate(shieldsUp: true));` |
 
 ## `diag`
 
-Observability and diagnostics. Read-only; nothing here affects
-connectivity.
+Observability and diagnostics. Read-only — nothing here affects
+connectivity. `ping` is Tailscale's own Disco probe by default (not
+ICMP).
 
-| API                                                              | Status | Purpose                                                            |
-| ---------------------------------------------------------------- | ------ | ------------------------------------------------------------------ |
-| `diag.ping(ip, {timeout, type})` → `PingResult`                  | ⛔     | Round-trip + direct-vs-DERP diagnostic.                             |
-| `diag.metrics()` → `String`                                      | ⛔     | Prometheus-format metrics snapshot from the embedded runtime.       |
-| `diag.derpMap()` → `DERPMap`                                     | ⛔     | Current DERP relay map.                                             |
-| `diag.checkUpdate()` → `ClientVersion?`                          | ⛔     | Latest tsnet version if newer than embedded, else null.             |
+**Completed in:** Phase 4 (`ping`, `metrics`, `derpMap`, `checkUpdate`).
 
-```dart
-final ping = await tsnet.diag.ping('100.64.0.5');
-print('RTT: ${ping.latency}, via: ${ping.direct ? "direct" : ping.derpRegion}');
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `diag.ping(ip, {timeout, type})` → `Future<PingResult>` | ⛔ | RTT + direct-vs-DERP diagnostic. Accepts MagicDNS names. | `final r = await tsnet.diag.ping('100.64.0.5');` |
+| `diag.metrics()` → `Future<String>` | ⛔ | Prometheus-format metrics snapshot. | `print(await tsnet.diag.metrics());` |
+| `diag.derpMap()` → `Future<DERPMap>` | ⛔ | Current DERP relay map. | `final m = await tsnet.diag.derpMap();` |
+| `diag.checkUpdate()` → `Future<ClientVersion?>` | ⛔ | Latest version if newer than embedded, else null. | `final v = await tsnet.diag.checkUpdate();` |
+| `PingResult`, `DERPMap`, `DERPRegion`, `DERPNode`, `ClientVersion` value types | ✅ | Immutable returns with `==` / `hashCode`. | `ping.direct ? ping.latency : ping.derpRegion` |
 
 ## `whois` (top-level)
 
-Resolve a tailnet IP to peer identity. Kept flat on `Tailscale` rather
-than in a namespace because it's a single cross-cutting utility.
+Resolve a tailnet IP to peer identity (node ID, hostname, owner login,
+ACL tags). Lives flat on `Tailscale` rather than under a namespace
+because it's a single cross-cutting utility — commonly paired with
+`tcp.bind` to authorize inbound connections by tag.
 
-| API                                                | Status | Purpose                                                              |
-| -------------------------------------------------- | ------ | -------------------------------------------------------------------- |
-| `whois(ip)` → `PeerIdentity?`                      | ⛔     | Identity lookup by tailnet IP. Null if not known on this tailnet.     |
+**Completed in:** Phase 4.
 
-```dart
-final server = await tsnet.tcp.bind(8080);
-await for (final conn in server) {
-  final identity = await tsnet.whois(conn.remoteAddress.address);
-  if (identity == null || !identity.tags.contains('tag:trusted')) {
-    await conn.close();
-    continue;
-  }
-  handle(conn);
-}
-```
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `whois(ip)` → `Future<PeerIdentity?>` | ⛔ | Identity by tailnet IP; null if not known. | `final id = await tsnet.whois(conn.remoteAddress.address);` |
+| `PeerIdentity` value type | ✅ | `nodeId`, `hostName`, `userLoginName`, `tags`, `tailscaleIPs`. | `id.tags.contains('tag:trusted')` |
 
 ## Errors
 
-Structured exception taxonomy. Every operation-specific failure is an
-`Exception` subtype carrying an optional `TailscaleErrorCode` and HTTP
-`statusCode`.
+Every operation-specific failure extends `TailscaleOperationException`
+and carries a structured `TailscaleErrorCode` + optional HTTP
+`statusCode`. Callers pattern-match on the exception type (per
+namespace) and branch on `code` for outcomes (retry on `conflict`,
+surface `featureDisabled`, rethrow otherwise).
 
-| Type                                    | Thrown by                                     |
-| --------------------------------------- | --------------------------------------------- |
-| `TailscaleUsageException`               | Misuse (e.g. `http.client` before `up`).       |
-| `TailscaleUpException`                  | `up()` failed before reaching a stable state. |
-| `TailscaleListenException`              | `http.expose` (reverse-proxy).                 |
-| `TailscaleStatusException`              | `status()`.                                    |
-| `TailscaleLogoutException`              | `logout()`.                                    |
-| `TailscaleTaildropException`            | `taildrop.*`.                                  |
-| `TailscaleServeException`               | `serve.*` (incl. ETag conflicts).               |
-| `TailscalePrefsException`               | `prefs.*`.                                      |
-| `TailscaleProfilesException`            | `profiles.*`.                                   |
-| `TailscaleExitNodeException`            | `exitNode.*`.                                   |
-| `TailscaleDiagException`                | `diag.*`.                                       |
-| `TailscaleRuntimeError` (not an Exception) | Async errors pushed from Go via `onError`. |
+**Completed in:** Phase 2 — fully working.
 
-```dart
-try {
-  await tsnet.serve.setConfig(updated);
-} on TailscaleServeException catch (e) {
-  switch (e.code) {
-    case TailscaleErrorCode.conflict:       // retry
-    case TailscaleErrorCode.forbidden:      // ACL
-    case TailscaleErrorCode.featureDisabled: // Serve off
-    default: rethrow;
-  }
-}
-```
+| Type | Status | Thrown by | Example |
+| ---- | ------ | --------- | ------- |
+| `TailscaleErrorCode` enum | ✅ | `notFound` / `forbidden` / `conflict` / `preconditionFailed` / `featureDisabled` / `unknown`. | `if (e.code == TailscaleErrorCode.conflict) retry();` |
+| `TailscaleUsageException` | ✅ | Misuse: `http.client` before `up()`, empty `stateDir`, etc. | `on TailscaleUsageException catch (_) { ... }` |
+| `TailscaleUpException` | ✅ | `up()` failed before reaching a stable state. | `on TailscaleUpException catch (e) { showAuth(e); }` |
+| `TailscaleListenException` | ✅ | `http.expose`. | `on TailscaleListenException catch (_) { ... }` |
+| `TailscaleStatusException` | ✅ | `status()`. | `on TailscaleStatusException catch (_) { ... }` |
+| `TailscaleLogoutException` | ✅ | `logout()`. | `on TailscaleLogoutException catch (_) { ... }` |
+| `TailscaleTaildropException` | ✅ | `taildrop.*`. | `on TailscaleTaildropException catch (_) { ... }` |
+| `TailscaleServeException` | ✅ | `serve.*` incl. ETag conflicts. | `on TailscaleServeException catch (e) { ... }` |
+| `TailscalePrefsException` | ✅ | `prefs.*`. | `on TailscalePrefsException catch (_) { ... }` |
+| `TailscaleProfilesException` | ✅ | `profiles.*`. | `on TailscaleProfilesException catch (_) { ... }` |
+| `TailscaleExitNodeException` | ✅ | `exitNode.*`. | `on TailscaleExitNodeException catch (_) { ... }` |
+| `TailscaleDiagException` | ✅ | `diag.*`. | `on TailscaleDiagException catch (_) { ... }` |
+| `TailscaleRuntimeError` (not `Exception`) | ✅ | Async errors pushed from Go via `onError`. | `tsnet.onError.listen((e) => report(e));` |

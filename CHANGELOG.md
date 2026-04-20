@@ -9,6 +9,28 @@
 
 Lifecycle (`up` / `down` / `logout` / `status` / `peers`), streams (`onStateChange` / `onError`), and the HTTP transport (`http.client` / `http.expose`) are fully wired through to existing behavior — no functional regression for callers that adopt the new names.
 
+**Breaking — Phase 2 API hygiene:**
+
+- `Tailscale.up()` now returns `Future<TailscaleStatus>` (previously `Future<void>`). Resolves on the first **stable** state (`running` / `needsLogin` / `needsMachineAuth`) rather than fire-and-forget, so interactive auth flows can branch on the returned `status.authUrl` without re-calling `up()`.
+- `Tailscale.whois(ip)` → `Future<PeerIdentity?>` (nullable; null for unknown IPs instead of throwing).
+- `profiles.current()` → `Future<LoginProfile?>` (nullable; fresh install has no current profile).
+- `exitNode.use(PeerStatus)` is now type-safe. `useById(String stableNodeId)` is the escape hatch for persisted IDs. `useAuto()` added for `AutoExitNode` mode.
+- `profiles.switchTo(LoginProfile)` + `switchToId(String)` / `delete(LoginProfile)` + `deleteById(String)` type-safe split (mirrors the `exitNode` pattern).
+- `taildrop.get(name)` → `taildrop.openRead(name)` returning `Stream<Uint8List>`. `taildrop.push` data param is also `Stream<Uint8List>`.
+- `prefs`: `MaskedPrefs` → `PrefsUpdate`; all setters prefixed `set*` (`setAdvertisedRoutes`, `setAdvertisedTags`, alongside `setAcceptRoutes` / `setShieldsUp` / `setAutoUpdate`). Fields on `TailscalePrefs` renamed to past tense (`advertisedRoutes`, `advertisedTags`) to pair with the setters.
+- `TailscaleListenException` → `TailscaleHttpException` (thrown by any `http.*` call; `operation` field now `'http'` rather than the legacy `'listen'`).
+- `FileTarget.hostname` → `FileTarget.hostName` (matches `PeerStatus.hostName` / `DERPNode.hostName` across the rest of the public surface).
+
+**Non-breaking — Phase 2 additions:**
+
+- Structured `TailscaleErrorCode` (`notFound` / `forbidden` / `conflict` / `preconditionFailed` / `featureDisabled` / `unknown`) and optional HTTP `statusCode` on every `TailscaleOperationException`.
+- Per-namespace exception subtypes: `TailscaleTaildropException`, `TailscaleServeException`, `TailscalePrefsException`, `TailscaleProfilesException`, `TailscaleExitNodeException`, `TailscaleDiagException`.
+- `PeerStatus.stableNodeId` — durable identifier that survives key rotation; preferred over `publicKey` for persisted peer references. Consumed by `exitNode.useById`.
+- `FunnelMetadata` (`publicSrc`, `sni`) + `Socket.funnel` extension — Funnel edge attaches metadata to each accepted socket without subclassing `dart:io` types.
+- `ServeConfig.etag` for optimistic concurrency on `serve.setConfig`; conflict is raised as `TailscaleServeException` with `TailscaleErrorCode.conflict`.
+- Value-type equality (`==` / `hashCode` / `toString`) across 13 public value types — every value type except `PeerIdentity`, which is the one-shot return of `whois()` and isn't typically compared.
+- Namespace constructors are `.internal()` and marked `@internal`, so consumers can't instantiate detached namespaces that aren't wired to the singleton engine.
+
 ## 0.2.0
 
 - tsnet.Server.Close() doesn't fire a terminal state through the IPN bus, so onStateChange subscribers drifted from the engine — stuck at the pre-stop value (usually Running) and their UI routing went stale.

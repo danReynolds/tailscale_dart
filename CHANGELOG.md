@@ -28,7 +28,7 @@ Lifecycle (`up` / `down` / `logout` / `status` / `peers`), streams (`onStateChan
 - `PeerStatus.stableNodeId` — durable identifier that survives key rotation; preferred over `publicKey` for persisted peer references. Consumed by `exitNode.useById`.
 - `FunnelMetadata` (`publicSrc`, `sni`) + `Socket.funnel` extension — Funnel edge attaches metadata to each accepted socket without subclassing `dart:io` types.
 - `ServeConfig.etag` for optimistic concurrency on `serve.setConfig`; conflict is raised as `TailscaleServeException` with `TailscaleErrorCode.conflict`.
-- Value-type equality (`==` / `hashCode` / `toString`) across 14 public value types.
+- Value-type equality (`==` / `hashCode` / `toString`) across 13 public value types — every value type except `PeerIdentity`, which is the one-shot return of `whois()` and isn't typically compared.
 - Namespace constructors are `.internal()` and marked `@internal`, so consumers can't instantiate detached namespaces that aren't wired to the singleton engine.
 
 ## 0.2.0

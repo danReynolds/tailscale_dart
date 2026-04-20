@@ -305,7 +305,55 @@ func TcpBind(tailnetPort int, tailnetHost string, loopbackPort int) (int, error)
 	if err != nil {
 		return 0, fmt.Errorf("tsnet listen %s: %w", addr, err)
 	}
+	return registerInboundBridge(ln, loopbackPort)
+}
 
+// TlsBind starts an inbound TLS-terminated bridge: this node's
+// tsnet.Server listens on `tailnetPort` with its auto-provisioned
+// LetsEncrypt cert, terminates TLS in Go, and forwards the resulting
+// plaintext stream to the Dart-owned loopback listener at
+// `127.0.0.1:loopbackPort`.
+//
+// Pass `tailnetPort = 0` to request an ephemeral tailnet port; the
+// actual assigned port is returned.
+//
+// Dart handlers see plaintext Sockets — the TLS handshake and private
+// key never cross the process boundary. See docs/api-roadmap.md for
+// the rationale behind Go-side termination.
+//
+// Prerequisites: the tailnet operator must have MagicDNS and HTTPS
+// enabled in the admin panel. tsnet.Server.ListenTLS surfaces a
+// descriptive error when either is off — we pass it through.
+func TlsBind(tailnetPort int, loopbackPort int) (int, error) {
+	if tailnetPort < 0 || tailnetPort > 65535 {
+		return 0, fmt.Errorf("invalid tailnet port %d", tailnetPort)
+	}
+	if loopbackPort < 1 || loopbackPort > 65535 {
+		return 0, fmt.Errorf("invalid loopback port %d", loopbackPort)
+	}
+
+	mu.Lock()
+	s := srv
+	mu.Unlock()
+	if s == nil {
+		return 0, errors.New("TlsBind called before Start")
+	}
+
+	// ListenTLS doesn't take a host — the cert binds to the node's
+	// MagicDNS name and is valid only for the tsnet-assigned FQDN.
+	addr := ":" + strconv.Itoa(tailnetPort)
+	ln, err := s.ListenTLS("tcp", addr)
+	if err != nil {
+		return 0, fmt.Errorf("tsnet listen TLS %s: %w", addr, err)
+	}
+	return registerInboundBridge(ln, loopbackPort)
+}
+
+// registerInboundBridge is the shared tail half of TcpBind and
+// TlsBind: it records the tailnet listener in the bind registry,
+// extracts the concrete port so the caller can tell peers where to
+// connect, and spawns the accept loop.
+func registerInboundBridge(ln net.Listener, loopbackPort int) (int, error) {
 	actualPort := 0
 	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
 		actualPort = tcpAddr.Port
@@ -315,7 +363,7 @@ func TcpBind(tailnetPort int, tailnetHost string, loopbackPort int) (int, error)
 		// the caller can't tell peers where to connect, so fail loudly
 		// rather than returning 0.
 		ln.Close()
-		return 0, fmt.Errorf("tsnet listen returned unresolved port")
+		return 0, fmt.Errorf("tsnet listener returned unresolved port")
 	}
 
 	tcpBindRegistryMu.Lock()

@@ -36,8 +36,8 @@ module bump before they can land here.
 | [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Core      | Phase 1 ✅        |
 | [`http`](#http)         | HTTP over the tailnet + reverse-proxy helper                      | Core      | Phase 1 ✅        |
 | [`tcp`](#tcp)           | Raw TCP between tailnet peers                                      | Core      | Phase 3 ✅        |
-| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | Phase 4 (`domains` ✅) + 5 (`bind`) |
-| [`udp`](#udp)           | UDP datagram sockets on a tailnet IP                                | Advanced  | Phase 5          |
+| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | Phase 4 (`domains` ✅) + 5 (`bind` ✅) |
+| [`udp`](#udp)           | UDP datagram sockets on a tailnet IP                                | Advanced  | Phase 5 ✅        |
 | [`funnel`](#funnel)     | Public-internet HTTPS via Tailscale Funnel                         | Optional  | Phase 5          |
 | [`taildrop`](#taildrop) | Peer-to-peer file transfer                                          | Optional  | Phase 8          |
 | [`serve`](#serve)       | Raw `tailscale serve` / `tailscale funnel` config                   | Optional  | Phase 9          |
@@ -125,7 +125,7 @@ operator. Not covered by the Headscale CI — live-Tailscale test only.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `tls.bind(port)` → `Future<SecureServerSocket>` | ⛔ | TLS-terminated listener with auto-cert. | `final srv = await tsnet.tls.bind(443);` |
+| `tls.bind(port)` → `Future<ServerSocket>` | ✅ | TLS-terminated listener with auto-cert. TLS is terminated by the embedded Go runtime — handlers receive plaintext bytes, so the return is `ServerSocket` rather than `SecureServerSocket`. | `final srv = await tsnet.tls.bind(443);` |
 | `tls.domains()` → `Future<List<String>>` | ✅ | Cert SANs; preflight for `bind`. Empty = MagicDNS or HTTPS disabled on the tailnet. | `final sans = await tsnet.tls.domains();` |
 
 ## `udp`
@@ -139,26 +139,27 @@ than core v1 functionality.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `udp.bind(host, port)` → `Future<RawDatagramSocket>` | ⛔ | UDP listener on a tailnet IP of this node. | `final sock = await tsnet.udp.bind(ip, 4000);` |
+| `udp.bind(host, port)` → `Future<RawDatagramSocket>` | ✅ | UDP listener on a tailnet IP of this node. Returns a `RawDatagramSocket` whose `Datagram.address` is the real tailnet peer address (not an opaque loopback mapping); framing is invisible to callers. Multicast and raw socket options throw `UnsupportedError`. | `final sock = await tsnet.udp.bind(ip, 4000);` |
 
 ## `funnel`
 
 Public-internet HTTPS via Tailscale Funnel: the node is reachable from
 the open internet at its Funnel hostname, with edge TLS termination.
 The Funnel edge attaches `publicSrc` + `sni` metadata to each accepted
-socket; read it via the `Socket.funnel` extension — this lets `bind`
-return a standard `SecureServerSocket` instead of a `dart:io` subclass.
+socket; read it via the `Socket.funnel` extension. If/when `bind`
+lands, it should return a standard `ServerSocket` for the same
+reasoning as `tls.bind`: TLS terminates in Go, not in Dart.
 
 This is explicitly optional: useful for some hosted/server apps, but
 not part of the core embedded-private-network story.
 
-**Completed in:** Phase 5. **Requires:** operator has enabled Funnel
-in ACLs for this node and an allowed Funnel port (443, 8443, 10000).
-Headscale doesn't support Funnel; live-Tailscale test only.
+**Status:** Optional follow-up (post-v1). **Requires:** operator has
+enabled Funnel in ACLs for this node and an allowed Funnel port (443,
+8443, 10000). Headscale doesn't support Funnel; live-Tailscale test only.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `funnel.bind(port, {funnelOnly})` → `Future<SecureServerSocket>` | ⛔ | Public-internet TLS listener. `funnelOnly: true` rejects same-tailnet clients. | `final srv = await tsnet.funnel.bind(443);` |
+| `funnel.bind(port, {funnelOnly})` → `Future<ServerSocket>` | ⛔ | Public-internet TLS listener. `funnelOnly: true` rejects same-tailnet clients. TLS terminates in the embedded Go runtime; Dart handlers receive plaintext `Socket`s. | `final srv = await tsnet.funnel.bind(443);` |
 | `FunnelMetadata` value type (`publicSrc`, `sni`) | ✅ | Metadata the Funnel edge attached to a socket. | `const FunnelMetadata(publicSrc: ...);` |
 | `Socket.funnel` extension getter | ✅ | Read `FunnelMetadata` off an accepted socket; null if not from Funnel. | `final meta = conn.funnel;` |
 
@@ -326,6 +327,9 @@ surface `featureDisabled`, rethrow otherwise).
 | `TailscaleUsageException` | ✅ | Misuse: `http.client` before `up()`, empty `stateDir`, etc. | `on TailscaleUsageException catch (_) { ... }` |
 | `TailscaleUpException` | ✅ | `up()` failed before reaching a stable state. | `on TailscaleUpException catch (e) { showAuth(e); }` |
 | `TailscaleHttpException` | ✅ | `http.*`. | `on TailscaleHttpException catch (_) { ... }` |
+| `TailscaleTcpException` | ✅ | `tcp.*`. | `on TailscaleTcpException catch (_) { ... }` |
+| `TailscaleTlsException` | ✅ | `tls.*`. | `on TailscaleTlsException catch (_) { ... }` |
+| `TailscaleUdpException` | ✅ | `udp.*`. | `on TailscaleUdpException catch (_) { ... }` |
 | `TailscaleStatusException` | ✅ | `status()`. | `on TailscaleStatusException catch (_) { ... }` |
 | `TailscaleLogoutException` | ✅ | `logout()`. | `on TailscaleLogoutException catch (_) { ... }` |
 | `TailscaleTaildropException` | ✅ | `taildrop.*`. | `on TailscaleTaildropException catch (_) { ... }` |

@@ -31,6 +31,9 @@ void main() {
       const errors = <TailscaleOperationException>[
         TailscaleUpException('_'),
         TailscaleHttpException('_'),
+        TailscaleTcpException('_'),
+        TailscaleTlsException('_'),
+        TailscaleUdpException('_'),
         TailscaleStatusException('_'),
         TailscaleLogoutException('_'),
         TailscaleTaildropException('_'),
@@ -42,6 +45,7 @@ void main() {
       ];
       final types = errors.map((e) => e.runtimeType).toSet();
       expect(types.length, errors.length);
+      expect(errors.map((e) => e.operation).toSet().length, errors.length);
     });
   });
 

@@ -206,6 +206,48 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.tcpUnbind),
             );
+          case _WorkerTlsBindCommand request:
+            final result = _callNativeJson(
+              () => native.duneTlsBind(
+                request.tailnetPort,
+                request.loopbackPort,
+              ),
+              onError: TailscaleTlsException.new,
+            ) as Map<String, dynamic>;
+
+            final tailnetPort = result['tailnetPort'] as int?;
+            if (tailnetPort == null || tailnetPort <= 0) {
+              throw const TailscaleTlsException(
+                'Native runtime did not return the bound tailnet port.',
+              );
+            }
+            sendPort.send(
+              _WorkerTlsBindResponse(tailnetPort: tailnetPort),
+            );
+          case _WorkerUdpBindCommand request:
+            final hostPtr = request.tailnetHost.toNativeUtf8();
+            try {
+              final result = _callNativeJson(
+                () => native.duneUdpBind(
+                  hostPtr,
+                  request.tailnetPort,
+                  request.loopbackPort,
+                ),
+                onError: TailscaleUdpException.new,
+              ) as Map<String, dynamic>;
+
+              final tailnetPort = result['tailnetPort'] as int?;
+              if (tailnetPort == null || tailnetPort <= 0) {
+                throw const TailscaleUdpException(
+                  'Native runtime did not return the bound tailnet port.',
+                );
+              }
+              sendPort.send(
+                _WorkerUdpBindResponse(tailnetPort: tailnetPort),
+              );
+            } finally {
+              calloc.free(hostPtr);
+            }
           case _WorkerWhoIsCommand request:
             final ipPtr = request.ip.toNativeUtf8();
             try {
@@ -222,7 +264,7 @@ void _workerEntrypoint(SendPort sendPort) {
           case _WorkerTlsDomainsCommand():
             final result = _callNativeJson(
               native.duneTlsDomains,
-              onError: TailscaleStatusException.new,
+              onError: TailscaleTlsException.new,
             ) as Map<String, dynamic>;
             final domains =
                 (result['domains'] as List?)?.cast<String>() ?? const [];

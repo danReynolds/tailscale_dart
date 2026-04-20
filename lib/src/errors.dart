@@ -129,6 +129,31 @@ final class TailscaleTcpException extends TailscaleOperationException {
   }) : super('tcp', message);
 }
 
+/// Thrown when a `udp.*` call fails — notably `udp.bind` failing
+/// because the tailnet IP isn't valid for this node, the port is in
+/// use, or the loopback bridge handshake fails.
+final class TailscaleUdpException extends TailscaleOperationException {
+  const TailscaleUdpException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('udp', message);
+}
+
+/// Thrown when a `tls.*` call fails — notably `tls.bind` failing to set
+/// up the tailnet listener (MagicDNS/HTTPS off, tailnet port in use,
+/// loopback bridge setup failure), or `tls.domains` failing to reach the
+/// LocalAPI.
+final class TailscaleTlsException extends TailscaleOperationException {
+  const TailscaleTlsException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('tls', message);
+}
+
 /// Thrown when `status()` fails to decode or fetch native status.
 final class TailscaleStatusException extends TailscaleOperationException {
   const TailscaleStatusException(

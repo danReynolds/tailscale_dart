@@ -277,6 +277,53 @@ void main() {
       }
     });
 
+    test('udp.bind round-trips a datagram with the real tailnet peer address',
+        () async {
+      final localIpv4 = (await tsnet.status()).ipv4;
+      expect(localIpv4, isNotNull);
+      final sock = await tsnet.udp.bind(localIpv4!, 0);
+      try {
+        final payload = utf8.encode(
+          'udp-echo-${DateTime.now().microsecondsSinceEpoch}',
+        );
+        final inbox = <Datagram>[];
+        final sub = sock.listen((event) {
+          if (event != RawSocketEvent.read) return;
+          final dg = sock.receive();
+          if (dg != null) inbox.add(dg);
+        });
+
+        // The first send can race with the peer's WireGuard path
+        // discovery. Retry the probe up to 5× before failing, since
+        // UDP drops are expected during warm-up.
+        Datagram? echoed;
+        for (var attempt = 0; attempt < 5 && echoed == null; attempt++) {
+          sock.send(payload, InternetAddress(peer.ipv4), 7001);
+          final deadline = DateTime.now().add(const Duration(seconds: 5));
+          while (echoed == null && DateTime.now().isBefore(deadline)) {
+            if (inbox.isNotEmpty) {
+              echoed = inbox.first;
+              break;
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+        }
+        await sub.cancel();
+
+        expect(echoed, isNotNull,
+            reason: 'udp echo did not round-trip after 5 attempts');
+        expect(utf8.decode(echoed!.data), utf8.decode(payload));
+        // Key assertion: Datagram.address surfaces the peer's real
+        // tailnet IP, not a loopback stand-in or an opaque mapped
+        // port. This is the design promise of the udp.bind
+        // RawDatagramSocket impl.
+        expect(echoed.address.address, peer.ipv4);
+        expect(echoed.port, 7001);
+      } finally {
+        sock.close();
+      }
+    });
+
     test('whois(peer.ipv4) returns the peer identity', () async {
       final identity = await tsnet.whois(peer.ipv4);
       expect(identity, isNotNull);

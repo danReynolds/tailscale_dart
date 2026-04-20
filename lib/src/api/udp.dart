@@ -89,21 +89,23 @@ final class _Udp implements Udp {
       InternetAddress.loopbackIPv4,
       0,
     );
-    ServerSocket? loopbackOpen = loopback;
-    try {
-      // Kick off the Go-side bind, which dials into our loopback.
-      // Race the dial-in against the FFI response: both must succeed.
-      final tailnetPortFuture = _bind(host, port, loopback.port);
-      final bridgeFuture = loopback.first;
+    final tailnetPortFuture = _bind(host, port, loopback.port);
+    final bridgeFuture = loopback.first;
 
-      final results = await Future.wait([tailnetPortFuture, bridgeFuture]);
+    try {
+      // eagerError:true makes a Go-side bind failure surface
+      // immediately instead of hanging on an accept that will
+      // never happen.
+      final results = await Future.wait(
+        [tailnetPortFuture, bridgeFuture],
+        eagerError: true,
+      );
       final tailnetPort = results[0] as int;
       // Ownership passes to TailscaleUdpSocket below, which closes it
       // on teardown. The analyzer can't trace that hand-off.
       // ignore: close_sinks
       final bridge = results[1] as Socket;
 
-      loopbackOpen = null;
       await loopback.close();
 
       return TailscaleUdpSocket(
@@ -112,7 +114,27 @@ final class _Udp implements Udp {
         bridge: bridge,
       );
     } catch (e) {
-      await loopbackOpen?.close().catchError((_) => loopbackOpen!);
+      // With eagerError:true, Future.wait rethrows as soon as one
+      // side fails. The other future may still complete later. Attach
+      // fire-and-forget cleanup so a stray accept gets closed and any
+      // lingering error is handled (not an unhandled async error).
+      unawaited(
+        bridgeFuture.then(
+          (socket) => socket.destroy(),
+          onError: (Object _) {
+            // Expected: loopback was closed below before an accept
+            // arrived. Nothing to clean up.
+          },
+        ),
+      );
+      unawaited(
+        tailnetPortFuture.catchError((Object _) => 0),
+      );
+      try {
+        await loopback.close();
+      } catch (_) {
+        // Loopback close errors are noise on the failure path.
+      }
       if (e is TailscaleException) rethrow;
       throw TailscaleUdpException(
         'udp.bind failed for $host:$port',
@@ -153,7 +175,13 @@ class TailscaleUdpSocket extends Stream<RawSocketEvent>
   final int _port;
   final Socket _bridge;
   final Queue<Datagram> _rx = Queue<Datagram>();
-  final BytesBuilder _parseBuf = BytesBuilder(copy: false);
+
+  // Parse buffer with an explicit cursor. Avoids the O(n²) copy loop
+  // we'd get from toBytes()/clear/re-add on every parse iteration
+  // when many frames are coalesced in one TCP chunk.
+  Uint8List _parseBuf = Uint8List(0);
+  int _parseCursor = 0;
+
   final StreamController<RawSocketEvent> _events =
       StreamController<RawSocketEvent>.broadcast();
   bool _closed = false;
@@ -181,49 +209,86 @@ class TailscaleUdpSocket extends Stream<RawSocketEvent>
       );
 
   void _onBridgeBytes(Uint8List chunk) {
-    _parseBuf.add(chunk);
+    _appendToParseBuf(chunk);
     while (_tryParseOne()) {}
-    if (_rx.isNotEmpty && _readEventsEnabled && !_closed) {
-      _events.add(RawSocketEvent.read);
-    }
+    _signalReadIfPending();
   }
 
-  /// Parses one frame out of [_parseBuf]. Returns true on success,
-  /// false if the buffer doesn't yet hold a full frame. Leaves any
-  /// unparsed tail bytes in place for the next chunk.
-  bool _tryParseOne() {
-    final bytes = _parseBuf.toBytes();
-    if (bytes.isEmpty) return false;
+  // Appends chunk to the parse buffer, keeping only the unparsed tail.
+  // O(tail + chunk), not O(total buffered).
+  void _appendToParseBuf(Uint8List chunk) {
+    final tailStart = _parseCursor;
+    final tailLen = _parseBuf.length - tailStart;
+    final next = Uint8List(tailLen + chunk.length);
+    if (tailLen > 0) {
+      next.setRange(0, tailLen, _parseBuf, tailStart);
+    }
+    next.setRange(tailLen, next.length, chunk);
+    _parseBuf = next;
+    _parseCursor = 0;
+  }
 
-    final ipLen = bytes[0];
+  /// Parses one frame out of [_parseBuf] starting at [_parseCursor].
+  /// Returns true on success (cursor advanced), false if not enough
+  /// bytes yet.
+  bool _tryParseOne() {
+    final available = _parseBuf.length - _parseCursor;
+    if (available < 1) return false;
+
+    final ipLen = _parseBuf[_parseCursor];
     if (ipLen != 4 && ipLen != 16) {
       // Go only ever emits 4 or 16. A bogus byte means the bridge
       // protocol is out of sync — fail fast rather than misread.
       _teardown();
       return false;
     }
-    final headerLen = 1 + ipLen + 2 + 2;
-    if (bytes.length < headerLen) return false;
+    const headerSansIp = 1 + 2 + 2; // family byte + port + length
+    final headerLen = headerSansIp + ipLen;
+    if (available < headerLen) return false;
 
-    final bd = ByteData.sublistView(bytes);
-    final peerPort = bd.getUint16(1 + ipLen);
-    final payloadLen = bd.getUint16(1 + ipLen + 2);
+    final bd = ByteData.sublistView(_parseBuf);
+    final peerPort = bd.getUint16(_parseCursor + 1 + ipLen);
+    final payloadLen = bd.getUint16(_parseCursor + 1 + ipLen + 2);
     final totalLen = headerLen + payloadLen;
-    if (bytes.length < totalLen) return false;
+    if (available < totalLen) return false;
 
-    final ip = Uint8List.sublistView(bytes, 1, 1 + ipLen);
-    final payload = Uint8List.sublistView(bytes, headerLen, totalLen);
+    // Copy both IP and payload out of the buffer — the Datagram
+    // outlives the parse buffer (we keep only unparsed tails).
+    final ipStart = _parseCursor + 1;
+    final ip = _parseBuf.sublist(ipStart, ipStart + ipLen);
+    final payloadStart = _parseCursor + headerLen;
+    final payload = _parseBuf.sublist(payloadStart, payloadStart + payloadLen);
+
     _rx.add(Datagram(payload, InternetAddress.fromRawAddress(ip), peerPort));
-
-    _parseBuf.clear();
-    if (bytes.length > totalLen) {
-      _parseBuf.add(Uint8List.sublistView(bytes, totalLen));
-    }
+    _parseCursor += totalLen;
     return true;
   }
 
+  /// Emits a read event if we have datagrams buffered and read events
+  /// are enabled. Safe to call after socket close — guards on state.
+  void _signalReadIfPending() {
+    if (_rx.isNotEmpty &&
+        _readEventsEnabled &&
+        !_closed &&
+        !_events.isClosed) {
+      _events.add(RawSocketEvent.read);
+    }
+  }
+
   @override
-  Datagram? receive() => _rx.isEmpty ? null : _rx.removeFirst();
+  Datagram? receive() {
+    if (_rx.isEmpty) return null;
+    final dg = _rx.removeFirst();
+    // Re-trigger the read event if more datagrams are still buffered.
+    // Without this, coalesced datagrams (multiple frames arriving in
+    // a single TCP chunk) would get stranded until the next chunk
+    // came in. Use a microtask so we don't fire re-entrantly inside
+    // the caller's listener.
+    if (_rx.isNotEmpty) {
+      scheduleMicrotask(_signalReadIfPending);
+    }
+    return dg;
+  }
 
   @override
   int send(List<int> buffer, InternetAddress address, int port) {
@@ -292,9 +357,10 @@ class TailscaleUdpSocket extends Stream<RawSocketEvent>
   bool get readEventsEnabled => _readEventsEnabled;
   @override
   set readEventsEnabled(bool value) {
+    final wasOff = !_readEventsEnabled;
     _readEventsEnabled = value;
-    if (value && _rx.isNotEmpty && !_closed) {
-      _events.add(RawSocketEvent.read);
+    if (wasOff && value) {
+      scheduleMicrotask(_signalReadIfPending);
     }
   }
 
@@ -302,7 +368,18 @@ class TailscaleUdpSocket extends Stream<RawSocketEvent>
   bool get writeEventsEnabled => _writeEventsEnabled;
   @override
   set writeEventsEnabled(bool value) {
+    final wasOff = !_writeEventsEnabled;
     _writeEventsEnabled = value;
+    if (wasOff && value && !_closed) {
+      // Match native RawDatagramSocket: re-enabling write events
+      // signals the socket is writable (which, over our bridge, is
+      // true as long as it's open).
+      scheduleMicrotask(() {
+        if (_writeEventsEnabled && !_closed && !_events.isClosed) {
+          _events.add(RawSocketEvent.write);
+        }
+      });
+    }
   }
 
   // ─── Multicast: not supported on the tailnet ──────────────────────

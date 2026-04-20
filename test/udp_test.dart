@@ -100,7 +100,7 @@ void main() {
       await goSide.flush();
 
       // Wait until the socket has buffered all three.
-      await _pumpUntil(sock, () {
+      await _pumpUntil(() {
         var drained = <Datagram>[];
         Datagram? dg;
         while ((dg = sock.receive()) != null) {
@@ -123,32 +123,35 @@ void main() {
       goSide.add(rest);
       await goSide.flush();
 
-      await _pumpUntil(sock, () {
+      await _pumpUntil(() {
         final dg = sock.receive();
         return dg == null ? null : [dg];
       });
     });
 
     test('send writes a correctly framed outbound datagram', () async {
+      // 12 byte payload → total frame = 1 afam + 4 ip + 2 port +
+      // 2 len + 12 payload = 21 bytes.
+      const frameBytes = 21;
       final captured = <int>[];
       final captureComplete = Completer<void>();
       late StreamSubscription<Uint8List> sub;
       sub = goSide.listen(
         (chunk) {
           captured.addAll(chunk);
-          if (captured.length >= 17) {
+          // Only complete once the full frame has arrived — TCP may
+          // deliver it in multiple chunks, so we can't assume the
+          // first read is the whole frame.
+          if (captured.length >= frameBytes && !captureComplete.isCompleted) {
             captureComplete.complete();
-            sub.cancel();
           }
         },
       );
 
-      // Use 12 byte payload → total frame = 1+4+2+2+12 = 21 bytes.
       final payload = Uint8List.fromList(List.generate(12, (i) => i + 1));
       final sent = sock.send(payload, InternetAddress('100.64.0.8'), 4444);
       expect(sent, 12);
 
-      await Future<void>.delayed(const Duration(milliseconds: 100));
       await goSide.flush();
       await captureComplete.future.timeout(const Duration(seconds: 2));
       await sub.cancel();
@@ -157,7 +160,7 @@ void main() {
       expect(captured.sublist(1, 5), [100, 64, 0, 8]);
       expect((captured[5] << 8) | captured[6], 4444, reason: 'port BE');
       expect((captured[7] << 8) | captured[8], 12, reason: 'payload len BE');
-      expect(captured.sublist(9, 21), payload);
+      expect(captured.sublist(9, frameBytes), payload);
     });
 
     test('send rejects oversize payload', () {
@@ -202,6 +205,54 @@ void main() {
         throwsUnsupportedError,
       );
     });
+
+    test('coalesced datagrams emit one read event per receive()', () async {
+      // Ship three frames back-to-back in a single TCP write so they
+      // arrive in one chunk on the Dart side. If the socket only
+      // emits one RawSocketEvent.read total, a consumer that uses
+      // "one receive() per read event" will strand the last two
+      // datagrams in _rx until the next inbound chunk arrives.
+      final combined = <int>[
+        ..._frame('100.64.0.1', 1000, _bytes('a')),
+        ..._frame('100.64.0.2', 2000, _bytes('bb')),
+        ..._frame('100.64.0.3', 3000, _bytes('ccc')),
+      ];
+
+      final drained = <Datagram>[];
+      final allThree = Completer<void>();
+      final sub = sock.listen((event) {
+        if (event != RawSocketEvent.read) return;
+        final dg = sock.receive();
+        if (dg != null) drained.add(dg);
+        if (drained.length == 3 && !allThree.isCompleted) {
+          allThree.complete();
+        }
+      });
+
+      goSide.add(combined);
+      await goSide.flush();
+
+      await allThree.future.timeout(const Duration(seconds: 2));
+      await sub.cancel();
+
+      expect(drained.map((d) => d.address.address),
+          ['100.64.0.1', '100.64.0.2', '100.64.0.3']);
+      expect(drained.map((d) => d.port), [1000, 2000, 3000]);
+    });
+
+    test('toggling writeEventsEnabled false→true emits a write event',
+        () async {
+      // Drain the initial write event from the constructor so we
+      // only observe the one the toggle produces.
+      await sock.firstWhere((e) => e == RawSocketEvent.write);
+
+      sock.writeEventsEnabled = false;
+      final nextWrite = sock
+          .firstWhere((e) => e == RawSocketEvent.write)
+          .timeout(const Duration(seconds: 1));
+      sock.writeEventsEnabled = true;
+      expect(await nextWrite, RawSocketEvent.write);
+    });
   });
 }
 
@@ -221,13 +272,10 @@ List<int> _frame(String host, int port, List<int> payload) {
   return buf;
 }
 
-/// Polls [check] at microtask boundaries until it returns non-null or
-/// 2s elapses. Shows test failures with the most recent observation
-/// rather than a bare timeout.
-Future<T> _pumpUntil<T>(
-  Stream<RawSocketEvent> source,
-  T? Function() check,
-) async {
+/// Polls [check] at fixed intervals until it returns non-null or
+/// 2s elapses. Used by tests that need to wait on queued state
+/// without subscribing to the specific event that would fill it.
+Future<T> _pumpUntil<T>(T? Function() check) async {
   final deadline = DateTime.now().add(const Duration(seconds: 2));
   T? result;
   while (DateTime.now().isBefore(deadline)) {

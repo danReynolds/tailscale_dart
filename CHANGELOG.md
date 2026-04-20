@@ -10,6 +10,7 @@
 
 - `Tls.bind` signature changed from `Future<SecureServerSocket>` to `Future<ServerSocket>`. `SecureServerSocket` is contractually a TLS-terminating listener (`SecurityContext`, peer cert access); our bridge terminates TLS in Go and hands plaintext to Dart. Returning the stricter type would have misled callers about what TLS guarantees Dart has access to. The doc comment on `tls.bind` spells out what terminates where.
 - `tls.domains()` failures now throw `TailscaleTlsException` instead of `TailscaleStatusException`. Matches the per-namespace exception pattern used by `tcp` / `taildrop` / `serve` / `prefs` / `profiles` / `exitNode` / `diag` / `http`. Callers that catch on `TailscaleOperationException` (or the `sealed` base `TailscaleException`) are unaffected.
+- `Udp.instance` static is removed. `Udp` is now `abstract` with an internal factory wired to the engine; reach it via `Tailscale.instance.udp` as with every other namespace. (The old `Udp.instance` was a const-singleton stub whose only method threw `UnimplementedError`, so direct callers couldn't have been doing anything useful.)
 
 **Internal — Phase 5:**
 

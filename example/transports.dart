@@ -15,7 +15,9 @@
 ///
 /// Notes:
 /// - `tls` requires a real Tailscale tailnet with HTTPS + MagicDNS
-///   enabled (Headscale doesn't provision certs).
+///   enabled (Headscale doesn't provision certs). Pass the server's
+///   MagicDNS name (e.g. `server-node.tailnet.ts.net`) as the peer
+///   argument, not a raw tailnet IP — the cert SAN is the FQDN.
 /// - `udp` binds on the server's primary tailnet IPv4; the client
 ///   sends one datagram and awaits an echo.
 library;
@@ -130,11 +132,19 @@ Future<void> _client(
       final socket = await tsnet.tcp.dial(peer, _port);
       await _sendAndPrintEcho(socket);
     case _Transport.tls:
-      // Standard dart:io SecureSocket.connect — plaintext underneath
-      // is the tailnet, TLS is terminated by the server-side tsnet
-      // runtime. Certificate is issued to the node's MagicDNS name,
-      // so `peer` must be that name (not a raw tailnet IP).
-      final socket = await SecureSocket.connect(peer, _port);
+      // Route the underlying TCP through the embedded tsnet node,
+      // then layer TLS on top in Dart. SecureSocket.secure() accepts
+      // the existing Socket and performs the handshake against the
+      // server's Let's Encrypt cert (served by the peer's tsnet
+      // ListenTLS). Using SecureSocket.connect() directly would
+      // bypass tsnet and rely on the host OS network stack — wrong
+      // transport, would only work if the host also has Tailscale
+      // installed and MagicDNS resolved.
+      //
+      // `peer` must be the node's MagicDNS name (not a raw tailnet
+      // IP) because the cert's SAN is the MagicDNS FQDN.
+      final raw = await tsnet.tcp.dial(peer, _port);
+      final socket = await SecureSocket.secure(raw, host: peer);
       await _sendAndPrintEcho(socket);
     case _Transport.udp:
       final bound = await tsnet.udp.bind(

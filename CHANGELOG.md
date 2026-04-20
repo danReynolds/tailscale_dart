@@ -1,5 +1,25 @@
 ## Unreleased
 
+**Phase 4 — LocalAPI one-shots:**
+
+- `Tailscale.whois(ip)` → `Future<PeerIdentity?>` is live. Wraps `local.Client.WhoIs`; 404 from LocalAPI (unknown IP on this tailnet) maps to `null`, other errors throw.
+- `Tailscale.onPeersChange` → `Stream<List<PeerStatus>>` is live. The Go-side IPN bus watcher now subscribes to `NotifyInitialNetMap` in addition to `NotifyInitialState`; each NetMap delta triggers a `lc.Status()` fetch that's serialized and pushed to the Dart stream. Dedup is left to subscribers — pipe through `.distinct()` if you only want transitions.
+- `tls.domains()` → `Future<List<String>>` is live. Reads `lc.Status().CertDomains`; empty list when MagicDNS or HTTPS is disabled on the tailnet.
+- `diag.ping(ip, {timeout, type})` → `Future<PingResult>` is live. Wraps `local.Client.Ping`; `type` maps to `tailcfg.PingType` (`disco` / `tsmp` / `icmp`). Result fields: `latency` (Duration, microsecond precision), `direct` (true iff a direct endpoint was used and no DERP region was involved), `derpRegion` (three-letter code, null when direct).
+- `diag.metrics()` → `Future<String>` is live. Returns the Prometheus-format scrape from `lc.UserMetrics` verbatim.
+- `diag.derpMap()` → `Future<DERPMap>` is live. Wraps `lc.CurrentDERPMap`; marshals the upstream `tailcfg.DERPMap` into the existing Dart value types.
+- `diag.checkUpdate()` → `Future<ClientVersion?>` is live. Returns `null` when already on the latest; otherwise a `ClientVersion` whose shape matches upstream `tailcfg.ClientVersion` (`latestVersion`, `urgentSecurityUpdate`, optional `notifyText`).
+
+**Breaking — Phase 4 shape change:**
+
+- `ClientVersion` fields changed from `shortVersion` / `longVersion` to `latestVersion` / `urgentSecurityUpdate` / `notifyText?`. The previous fields had no direct upstream source and would have always been empty once this landed.
+
+**Internal — Phase 4 refactors:**
+
+- New `go/localapi.go` hosts all LocalAPI wrappers. Shared `lcOr(op)` helper factors the "running-check + LocalClient acquisition" pattern.
+- `Tls` and `Diag` namespaces refactored from const-singletons to abstract / `_impl` / factory shape (matching the existing `Tcp` pattern). Dependency-injected via `createTls` / `createDiag` from `Tailscale`; factories + typedefs hidden from the public `tailscale.dart` export.
+- Worker isolate routing: new `tcpDial` / `tcpBind` / `tcpUnbind` / `whois` / `tlsDomains` / `diagPing` / `diagMetrics` / `diagDERPMap` / `diagCheckUpdate` operations, plus a new `_WorkerPeersEvent` pushed from the watcher isolate when `NotifyInitialNetMap` fires.
+
 **Phase 3 — raw TCP between tailnet peers:**
 
 - `tcp.dial(host, port, {timeout})` → `Future<Socket>` is live. Wraps `tsnet.Server.Dial` and bridges the tailnet connection through a per-call 127.0.0.1 loopback listener so the caller gets a standard `dart:io` `Socket`. A random 32-character hex token is written as the first bytes on the loopback conn to prevent co-resident processes from hijacking the bridge.

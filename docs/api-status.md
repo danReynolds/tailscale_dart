@@ -39,8 +39,8 @@ module bump before they can land here.
 | [`exitNode`](#exitnode) | Route outbound traffic through a peer                                | Phase 6          |
 | [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Phase 7          |
 | [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Phase 6          |
-| [`diag`](#diag)         | Ping, metrics, DERP map, update check                                | Phase 4 + 10     |
-| [`whois`](#whois-top-level) | Resolve a tailnet IP to peer identity                             | Phase 4          |
+| [`diag`](#diag)         | Ping, metrics, DERP map, update check                                | Phase 4 ✅        |
+| [`whois`](#whois-top-level) | Resolve a tailnet IP to peer identity                             | Phase 4 ✅        |
 | [Errors](#errors)       | Structured exception taxonomy                                        | Phase 2 ✅        |
 
 ## Lifecycle (top-level)
@@ -66,7 +66,7 @@ returning a transitional state such as `starting`.
 | `peers()` → `List<PeerStatus>` | ✅ | Current peer inventory. | `final peers = await tsnet.peers();` |
 | `onStateChange` → `Stream<NodeState>` | ✅ | Distinct-filtered state transitions. | `tsnet.onStateChange.listen(print);` |
 | `onError` → `Stream<TailscaleRuntimeError>` | ✅ | Async runtime errors pushed from Go. | `tsnet.onError.listen(report);` |
-| `onPeersChange` → `Stream<List<PeerStatus>>` | ⛔ | Peer inventory changes without polling. | `tsnet.onPeersChange.listen(render);` |
+| `onPeersChange` → `Stream<List<PeerStatus>>` | ✅ | Peer inventory changes without polling. Fires on each NetMap delta; pipe through `.distinct()` to ignore no-op updates. | `tsnet.onPeersChange.listen(render);` |
 
 ## `http`
 
@@ -118,7 +118,7 @@ operator. Not covered by the Headscale CI — live-Tailscale test only.
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
 | `tls.bind(port)` → `Future<SecureServerSocket>` | ⛔ | TLS-terminated listener with auto-cert. | `final srv = await tsnet.tls.bind(443);` |
-| `tls.domains()` → `Future<List<String>>` | ⛔ | Cert SANs; preflight for `bind`. Empty = HTTPS disabled. | `final sans = await tsnet.tls.domains();` |
+| `tls.domains()` → `Future<List<String>>` | ✅ | Cert SANs; preflight for `bind`. Empty = MagicDNS or HTTPS disabled on the tailnet. | `final sans = await tsnet.tls.domains();` |
 
 ## `udp`
 
@@ -263,10 +263,10 @@ ICMP).
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `diag.ping(ip, {timeout, type})` → `Future<PingResult>` | ⛔ | RTT + direct-vs-DERP diagnostic. Accepts MagicDNS names. | `final r = await tsnet.diag.ping('100.64.0.5');` |
-| `diag.metrics()` → `Future<String>` | ⛔ | Prometheus-format metrics snapshot. | `print(await tsnet.diag.metrics());` |
-| `diag.derpMap()` → `Future<DERPMap>` | ⛔ | Current DERP relay map. | `final m = await tsnet.diag.derpMap();` |
-| `diag.checkUpdate()` → `Future<ClientVersion?>` | ⛔ | Latest version if newer than embedded, else null. | `final v = await tsnet.diag.checkUpdate();` |
+| `diag.ping(ip, {timeout, type})` → `Future<PingResult>` | ✅ | RTT + direct-vs-DERP diagnostic. `type` is one of `disco` (default, no privileges), `tsmp`, `icmp`. | `final r = await tsnet.diag.ping('100.64.0.5');` |
+| `diag.metrics()` → `Future<String>` | ✅ | Prometheus-format metrics snapshot from the embedded runtime. | `print(await tsnet.diag.metrics());` |
+| `diag.derpMap()` → `Future<DERPMap>` | ✅ | Current DERP relay map. | `final m = await tsnet.diag.derpMap();` |
+| `diag.checkUpdate()` → `Future<ClientVersion?>` | ✅ | Newer version if available, else null. Fields match `tailcfg.ClientVersion` (latestVersion, urgentSecurityUpdate, notifyText). | `final v = await tsnet.diag.checkUpdate();` |
 | `PingResult`, `DERPMap`, `DERPRegion`, `DERPNode`, `ClientVersion` value types | ✅ | Immutable returns with `==` / `hashCode`. | `ping.direct ? ping.latency : ping.derpRegion` |
 
 ## `whois` (top-level)
@@ -280,7 +280,7 @@ because it's a single cross-cutting utility — commonly paired with
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `whois(ip)` → `Future<PeerIdentity?>` | ⛔ | Identity by tailnet IP; null if not known. | `final id = await tsnet.whois(conn.remoteAddress.address);` |
+| `whois(ip)` → `Future<PeerIdentity?>` | ✅ | Identity by tailnet IP; null if not known. | `final id = await tsnet.whois(conn.remoteAddress.address);` |
 | `PeerIdentity` value type | ✅ | `nodeId`, `hostName`, `userLoginName`, `tags`, `tailscaleIPs`. | `id.tags.contains('tag:trusted')` |
 
 ## Errors

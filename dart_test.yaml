@@ -4,3 +4,8 @@
 # to stomp each other's state. Pure-Dart tests are fast enough that
 # forcing the whole run serial is cheaper than tagging selectively.
 concurrency: 1
+
+# `dart test` with no args recurses into test/ (including test/e2e/).
+# The e2e suite bails out early without HEADSCALE env vars set, so it's
+# a no-op in the default dart-tests CI job and only does real work in
+# the e2e-tests job which sets those vars.

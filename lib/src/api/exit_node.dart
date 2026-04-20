@@ -2,8 +2,20 @@ import 'package:meta/meta.dart';
 
 import '../status.dart';
 
-/// Exit-node routing: route all outbound traffic from this node through
-/// a peer, VPN-style.
+/// Exit-node routing: route this node's internet-bound traffic
+/// through another tailnet peer, VPN-style. The peer becomes the
+/// last hop before the public internet, so outbound connections
+/// appear to originate from its IP.
+///
+/// Exit-node capability is opt-in on both sides: the serving peer
+/// must advertise it and be approved by an admin on the control
+/// plane; any node on the tailnet can then opt into routing through
+/// it. Applies only to traffic leaving the tailnet — peer-to-peer
+/// tailnet traffic is unaffected.
+///
+/// See Tailscale's docs for the full feature (eligibility, approval,
+/// split DNS behavior, LAN access):
+/// <https://tailscale.com/kb/1103/exit-nodes>.
 ///
 /// Reached via [Tailscale.exitNode].
 class ExitNode {

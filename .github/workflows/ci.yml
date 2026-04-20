@@ -18,14 +18,14 @@ jobs:
         working-directory: go
         run: go test -v -count=1 ./...
 
-  dart-unit-tests:
-    name: Dart unit tests (${{ matrix.os }})
+  dart-tests:
+    name: Dart tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         # Windows excluded: cgo requires MinGW/gcc which isn't on the runner.
-        # Windows is tested via Go unit tests (no cgo needed for pure Go tests).
+        # Windows is covered by the Go-only job above.
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
@@ -38,40 +38,12 @@ jobs:
       - run: dart pub get
       - name: Analyze
         run: dart analyze lib/ test/ hook/
-      - name: Unit tests
-        run: |
-          dart test \
-            test/errors_test.dart \
-            test/diag_test.dart \
-            test/funnel_test.dart \
-            test/identity_test.dart \
-            test/profiles_test.dart \
-            test/proxy_client_test.dart \
-            test/serve_test.dart \
-            test/taildrop_test.dart
-
-  ffi-integration-tests:
-    name: FFI integration (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dart-lang/setup-dart@v1
-        with:
-          sdk: stable
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-      - run: dart pub get
-      - name: FFI integration tests
-        run: |
-          dart test \
-            test/ffi_bindings_test.dart \
-            test/lifecycle_test.dart \
-            test/http_test.dart
+      - name: Tests
+        # Runs every test/*_test.dart (excluding test/e2e/, which has its
+        # own job). Files that drive FFI gate themselves via @TestOn;
+        # dart_test.yaml pins concurrency to 1 so the FFI-backed files
+        # don't stomp each other's per-process global state.
+        run: dart test
 
   e2e-tests:
     name: E2E (Headscale)

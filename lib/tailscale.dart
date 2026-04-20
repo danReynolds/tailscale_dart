@@ -171,7 +171,8 @@ class Tailscale {
   /// No-op if already running (without a new authKey).
   ///
   /// Throws [TailscaleUpException] if no [authKey] is provided and no
-  /// persisted session state exists.
+  /// persisted session state exists, or if the node fails to reach a
+  /// stable state within 30 seconds (e.g. control plane unreachable).
   Future<TailscaleStatus> up({
     String hostname = '',
     String? authKey,
@@ -210,10 +211,16 @@ class Tailscale {
         stable.complete();
       }
 
-      await stable.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () {},
-      );
+      try {
+        await stable.future.timeout(const Duration(seconds: 30));
+      } on TimeoutException {
+        final last = await status();
+        throw TailscaleUpException(
+          'Node did not reach a stable state within 30 seconds '
+          '(last observed: ${last.state.name}). The control plane may '
+          'be unreachable or the tailnet is experiencing issues.',
+        );
+      }
     } finally {
       await sub.cancel();
     }

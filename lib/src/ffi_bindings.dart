@@ -99,6 +99,14 @@ external void duneTcpUnbind(int loopbackPort);
 @ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(symbol: 'DuneWhoIs')
 external ffi.Pointer<Utf8> duneWhoIs(ffi.Pointer<Utf8> ip);
 
+/// Returns the auto-provisioned TLS cert's Subject Alternative Names.
+///
+/// Returns JSON `{"domains": [...]}` on success, `{"error": ...}` on
+/// failure. Empty domains array means MagicDNS or HTTPS is disabled
+/// on the tailnet.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneTlsDomains')
+external ffi.Pointer<Utf8> duneTlsDomains();
+
 /// Returns 1 if the state directory has a valid machine key, 0 otherwise.
 @ffi.Native<ffi.Int32 Function(ffi.Pointer<Utf8>)>(symbol: 'DuneHasState')
 external int duneHasState(ffi.Pointer<Utf8> stateDir);

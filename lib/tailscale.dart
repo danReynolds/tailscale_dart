@@ -29,7 +29,7 @@ export 'src/api/profiles.dart';
 export 'src/api/serve.dart';
 export 'src/api/taildrop.dart';
 export 'src/api/tcp.dart' hide createTcp, TcpDialFn, TcpBindFn, TcpUnbindFn;
-export 'src/api/tls.dart';
+export 'src/api/tls.dart' hide createTls, TlsDomainsFn;
 export 'src/api/udp.dart';
 export 'src/errors.dart';
 export 'src/status.dart';
@@ -119,7 +119,7 @@ class Tailscale {
     ),
     unbindFn: (loopbackPort) => _worker.tcpUnbind(loopbackPort: loopbackPort),
   );
-  final Tls tls = Tls.instance;
+  late final Tls tls = createTls(domainsFn: _worker.tlsDomains);
   final Udp udp = Udp.instance;
   final Funnel funnel = Funnel.instance;
   late final Http http = createHttp(

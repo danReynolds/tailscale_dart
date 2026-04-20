@@ -90,6 +90,11 @@ func DuneWhoIs(ip *C.char) *C.char {
 	return C.CString(tailscale.WhoIs(C.GoString(ip)))
 }
 
+//export DuneTlsDomains
+func DuneTlsDomains() *C.char {
+	return C.CString(tailscale.TlsDomains())
+}
+
 //export DuneHasState
 func DuneHasState(stateDir *C.char) C.int {
 	dir := C.GoString(stateDir)

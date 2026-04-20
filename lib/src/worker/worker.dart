@@ -175,6 +175,13 @@ final class Worker {
     return response.identity;
   }
 
+  Future<List<String>> tlsDomains() async {
+    final response = await _request<_WorkerTlsDomainsResponse>(
+      const _WorkerTlsDomainsCommand(),
+    );
+    return response.domains;
+  }
+
   Future<TailscaleStatus> status({required String stateDir}) async {
     final response = await _request<_WorkerStatusResponse>(
       _WorkerStatusCommand(stateDir: stateDir),

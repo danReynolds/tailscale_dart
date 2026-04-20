@@ -211,6 +211,14 @@ void _workerEntrypoint(SendPort sendPort) {
             } finally {
               calloc.free(ipPtr);
             }
+          case _WorkerTlsDomainsCommand():
+            final result = _callNativeJson(
+              native.duneTlsDomains,
+              onError: TailscaleStatusException.new,
+            ) as Map<String, dynamic>;
+            final domains =
+                (result['domains'] as List?)?.cast<String>() ?? const [];
+            sendPort.send(_WorkerTlsDomainsResponse(domains: domains));
           case _WorkerStatusCommand(:final stateDir):
             sendPort.send(_WorkerStatusResponse(
               status: _loadStatusSnapshot(stateDir: stateDir),

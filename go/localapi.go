@@ -88,3 +88,38 @@ func isNotFound(err error) bool {
 	}
 	return strings.Contains(err.Error(), "404")
 }
+
+// TlsDomains returns the Subject Alternative Names baked into the
+// auto-provisioned TLS cert for this node — typically
+// `<node>.<tailnet>.ts.net`. Empty when the tailnet operator has
+// MagicDNS or HTTPS disabled.
+//
+// Returns JSON `{"domains": [...]}` on success, `{"error": ...}` on
+// failure.
+func TlsDomains() string {
+	mu.Lock()
+	s := srv
+	mu.Unlock()
+	if s == nil {
+		return jsonError(errors.New("TlsDomains called before Start"))
+	}
+	lc, err := s.LocalClient()
+	if err != nil {
+		return jsonError(err)
+	}
+
+	status, err := lc.Status(context.Background())
+	if err != nil {
+		return jsonError(err)
+	}
+
+	domains := status.CertDomains
+	if domains == nil {
+		domains = []string{}
+	}
+	b, err := json.Marshal(map[string]any{"domains": domains})
+	if err != nil {
+		return jsonError(err)
+	}
+	return string(b)
+}

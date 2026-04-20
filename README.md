@@ -23,17 +23,17 @@ final peers = await tailscale.peers(); // List<PeerStatus>
 final peer = peers.firstWhere((peer) => peer.online);
 
 // Make requests — standard http.Client, routed through the tunnel
-await tailscale.http.get(Uri.parse('http://${peer.ipv4}/api/data'));
+await tailscale.http.client.get(Uri.parse('http://${peer.ipv4}/api/data'));
 
 // Expose a local HTTP server to receive traffic from the tailnet
-await tailscale.listen(8080);
+await tailscale.http.expose(8080);
 ```
 
 ### Install
 
 ```yaml
 dependencies:
-  tailscale: ^0.1.0
+  tailscale: ^0.3.0
 ```
 
 The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](hook/build.dart) that compiles Go for the target platform automatically. Subsequent builds are cached and only recompile when Go source changes.
@@ -42,7 +42,7 @@ The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](ho
 
 - **App-scoped networking** — your app joins the tailnet itself instead of depending on a separate VPN
 - **Familiar HTTP client** — standard [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) routed through [WireGuard](https://www.wireguard.com/)
-- **Inbound HTTP publishing** — expose a local server to tailnet peers with `listen()`
+- **Inbound HTTP publishing** — expose a local server to tailnet peers with `http.expose()`
 - **Typed runtime state** — observe node status, peers, and errors through Dart models
 - **Persistent identity** — reconnect across launches without re-authenticating
 - **Automatic cross-platform builds** — Go layer compiles for the target via Dart [build hooks](https://dart.dev/tools/build-hooks)
@@ -74,12 +74,12 @@ await tailscale.up();
 final peers = await tailscale.peers();
 final peer = peers.firstWhere((p) => p.online);
 
-final response = await tailscale.http.get(
+final response = await tailscale.http.client.get(
   Uri.parse('http://${peer.ipv4}/api/data'),
 );
 
 // 4. Accept incoming HTTP requests from peers
-await tailscale.listen(8080); // tailnet:80 -> localhost:8080
+await tailscale.http.expose(8080); // tailnet:80 -> localhost:8080
 
 // 5. Disconnect (keeps identity)
 await tailscale.down();
@@ -105,14 +105,16 @@ await tailscale.logout();
 | `init({stateDir, logLevel})` | `static void` | Configure once at startup. Stores state in `stateDir/tailscale/`. |
 | `instance` | `static Tailscale` | Singleton accessor |
 | `up({hostname, authKey, controlUrl})` | `Future<void>` | Start the node. Subscribe to `onStateChange` to observe when it reaches Running. |
-| `listen(localPort, {tailnetPort})` | `Future<int>` | Expose a local HTTP server to peers |
 | `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health). Before `up()`, returns `stopped` or `noState` based on whether persisted credentials exist. |
 | `peers()` | `Future<List<PeerStatus>>` | Current peer snapshot |
 | `onStateChange` | `Stream<NodeState>` | Pushed lifecycle state changes |
 | `onError` | `Stream<TailscaleRuntimeError>` | Pushed asynchronous runtime errors |
 | `down()` | `Future<void>` | Disconnect (preserves state for reconnection) |
 | `logout()` | `Future<void>` | Disconnect and clear persisted state |
-| `http` | [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) | HTTP client routed through the WireGuard tunnel |
+| `http.client` | [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) | HTTP client routed through the WireGuard tunnel |
+| `http.expose(localPort, {tailnetPort})` | `Future<int>` | Expose a local HTTP server to tailnet peers |
+
+The `tcp`, `tls`, `udp`, `funnel`, `taildrop`, `serve`, `exitNode`, `profiles`, `prefs`, and `diag` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
 
 <details>
 <summary><strong>TailscaleStatus</strong></summary>

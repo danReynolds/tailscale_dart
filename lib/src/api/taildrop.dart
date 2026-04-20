@@ -2,12 +2,12 @@
 class FileTarget {
   const FileTarget({
     required this.nodeId,
-    required this.hostname,
+    required this.hostName,
     required this.userLoginName,
   });
 
   final String nodeId;
-  final String hostname;
+  final String hostName;
   final String userLoginName;
 }
 

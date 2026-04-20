@@ -32,8 +32,8 @@ class Http {
 
   /// Forwards tailnet HTTP traffic on [tailnetPort] to a local HTTP server
   /// on `127.0.0.1:<localPort>`. Returns the effective local port
-  /// (identical to [localPort] unless ephemeral allocation was requested
-  /// via `localPort: 0`).
+  /// (identical to [localPort] unless [localPort] was `0`, in which case
+  /// an ephemeral port is allocated and returned).
   ///
   /// Replaces the previous top-level `Tailscale.listen`.
   Future<int> expose(int localPort, {int tailnetPort = 80}) =>

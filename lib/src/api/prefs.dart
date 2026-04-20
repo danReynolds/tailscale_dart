@@ -3,7 +3,7 @@
 /// Fields cover the long tail of tsnet configuration that doesn't warrant
 /// its own top-level namespace. Use [Prefs.get] to read; use the named
 /// setters on [Prefs] (`advertiseRoutes(...)`, `setShieldsUp(true)`, etc.)
-/// for common single-field changes, or [Prefs.update] for atomic
+/// for common single-field changes, or [Prefs.updateMasked] for atomic
 /// multi-field edits.
 class TailscalePrefs {
   const TailscalePrefs({

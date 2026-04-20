@@ -6,6 +6,11 @@ it, and a table of APIs with status, purpose, and a copy-pasteable
 example. For the forward-looking phase plan, see
 [`api-roadmap.md`](api-roadmap.md).
 
+The **core v1 path** is lifecycle + private HTTP/TCP +
+identity/diagnostics + the LocalAPI escape hatch. Advanced/optional
+namespaces remain tracked here, but they do not block a useful v1 for
+embedded Dart apps.
+
 **Legend:**
 - ✅ Working — callable today, tested, returns real values.
 - ⛔ Stub — typed + documented, throws `UnimplementedError`.
@@ -26,22 +31,22 @@ module bump before they can land here.
 
 ## Namespace overview
 
-| Namespace               | Feature                                                           | Completed in     |
-| ----------------------- | ----------------------------------------------------------------- | ---------------- |
-| [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Phase 1 ✅        |
-| [`http`](#http)         | HTTP over the tailnet + reverse-proxy helper                      | Phase 1 ✅        |
-| [`tcp`](#tcp)           | Raw TCP between tailnet peers                                      | Phase 3 ✅        |
-| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Phase 4–5        |
-| [`udp`](#udp)           | UDP datagram sockets on a tailnet IP                                | Phase 5          |
-| [`funnel`](#funnel)     | Public-internet HTTPS via Tailscale Funnel                         | Phase 5          |
-| [`taildrop`](#taildrop) | Peer-to-peer file transfer                                          | Phase 8          |
-| [`serve`](#serve)       | `tailscale serve` / `tailscale funnel` config                        | Phase 9          |
-| [`exitNode`](#exitnode) | Route outbound traffic through a peer                                | Phase 6          |
-| [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Phase 7          |
-| [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Phase 6          |
-| [`diag`](#diag)         | Ping, metrics, DERP map, update check                                | Phase 4 + 10     |
-| [`whois`](#whois-top-level) | Resolve a tailnet IP to peer identity                             | Phase 4          |
-| [Errors](#errors)       | Structured exception taxonomy                                        | Phase 2 ✅        |
+| Namespace               | Feature                                                           | Track     | Completed in     |
+| ----------------------- | ----------------------------------------------------------------- | --------- | ---------------- |
+| [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Core      | Phase 1 ✅        |
+| [`http`](#http)         | HTTP over the tailnet + reverse-proxy helper                      | Core      | Phase 1 ✅        |
+| [`tcp`](#tcp)           | Raw TCP between tailnet peers                                      | Core      | Phase 3 ✅        |
+| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | Phase 4–5        |
+| [`udp`](#udp)           | UDP datagram sockets on a tailnet IP                                | Advanced  | Phase 5          |
+| [`funnel`](#funnel)     | Public-internet HTTPS via Tailscale Funnel                         | Optional  | Phase 5          |
+| [`taildrop`](#taildrop) | Peer-to-peer file transfer                                          | Optional  | Phase 8          |
+| [`serve`](#serve)       | Raw `tailscale serve` / `tailscale funnel` config                   | Optional  | Phase 9          |
+| [`exitNode`](#exitnode) | Route outbound traffic through a peer                                | Advanced  | Phase 6          |
+| [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Optional  | Phase 7          |
+| [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Advanced  | Phase 6          |
+| [`diag`](#diag)         | Ping, metrics, DERP map, update check                                | Core      | Phase 4 + 10     |
+| [`whois`](#whois-top-level) | Resolve a tailnet IP to peer identity                             | Core      | Phase 4          |
+| [Errors](#errors)       | Structured exception taxonomy                                        | Core      | Phase 2 ✅        |
 
 ## Lifecycle (top-level)
 
@@ -111,6 +116,9 @@ bumped; it should not force a separate `services` namespace by itself.
 TLS-terminated listener with a cert auto-provisioned by the control
 plane. Handlers see plaintext bytes — TLS is terminated server-side.
 
+Useful for server-style apps, but not required for the package to be
+valuable.
+
 **Completed in:** Phase 5 (`bind`) + Phase 4 (`domains` preflight).
 **Requires:** MagicDNS **and** HTTPS enabled on the tailnet by the
 operator. Not covered by the Headscale CI — live-Tailscale test only.
@@ -124,7 +132,8 @@ operator. Not covered by the Headscale CI — live-Tailscale test only.
 
 UDP datagram sockets over the tailnet. Unlike TCP, `host` is required
 — UDP binds to a specific tailnet IP on this node (not `0.0.0.0`).
-Grab one from `status().ipv4`.
+Grab one from `status().ipv4`. This is tracked as advanced work rather
+than core v1 functionality.
 
 **Completed in:** Phase 5.
 
@@ -139,6 +148,9 @@ the open internet at its Funnel hostname, with edge TLS termination.
 The Funnel edge attaches `publicSrc` + `sni` metadata to each accepted
 socket; read it via the `Socket.funnel` extension — this lets `bind`
 return a standard `SecureServerSocket` instead of a `dart:io` subclass.
+
+This is explicitly optional: useful for some hosted/server apps, but
+not part of the core embedded-private-network story.
 
 **Completed in:** Phase 5. **Requires:** operator has enabled Funnel
 in ACLs for this node and an allowed Funnel port (443, 8443, 10000).
@@ -157,6 +169,10 @@ directly between nodes with no intermediary — good fit for
 mobile-to-desktop sync, collab tools, anywhere you'd otherwise stand up
 a file server. Byte streams use `Stream<Uint8List>` throughout so
 producer/consumer can pipe without intermediate buffering.
+
+This remains optional. Upstream Taildrop is still aimed at transfers
+between a user's own personal devices, so it is not a strong fit for
+generic tagged-node or service-to-service workflows.
 
 **Completed in:** Phase 8. **Depends on:** Phase 3 loopback bridge or
 an equivalent LocalAPI-backed byte-stream path, whichever yields the
@@ -182,6 +198,10 @@ carries an opaque `etag` for optimistic concurrency — if another
 writer lands first, `setConfig` throws `TailscaleServeException` with
 `TailscaleErrorCode.conflict`.
 
+This is tracked as an optional raw-config surface, not as a rich Dart
+builder API. `http.expose()` remains the main ergonomic HTTP-publish
+feature for typical Dart apps.
+
 **Completed in:** Phase 9. **Depends on:** Phase 2 (value types).
 **Also:** Phase 9 bumps the `tailscale.com` Go module pin to pick up
 `Services` / `AllowFunnel` / `Foreground` and the newer
@@ -202,6 +222,9 @@ when only the stable ID is durable (persisted across sessions), or
 `useAuto()` to let the control plane pick by latency and re-pick on
 changes.
 
+Advanced node-control feature; useful, but not central to the core
+embedded-app value proposition.
+
 **Completed in:** Phase 6.
 
 | API | Status | Description | Example |
@@ -220,6 +243,9 @@ Multi-account / multi-tailnet: one device, several identities. Useful
 for a single app operating in both a personal and a work tailnet, or
 dev vs prod. `switchTo` accepts a `LoginProfile` (type-safe) or use
 `switchToId` when you've persisted only the ID.
+
+Tracked as optional. If the package stays focused on "embed one node in
+one app", this may never be a common need.
 
 **Completed in:** Phase 7.
 
@@ -240,6 +266,7 @@ The long tail of node preferences — subnet routes, shields, advertised
 tags, auto-update opt-in. Common single-field changes have named
 setters (`set*` prefix for consistency); atomic multi-field edits use
 `updateMasked(PrefsUpdate)`.
+Advanced node-control surface rather than core day-one app plumbing.
 
 **Completed in:** Phase 6.
 

@@ -10,13 +10,19 @@
 
 Reorganize the public API of `package:tailscale` from a flat surface on
 a single `Tailscale` class into topic-scoped namespaces
-(`tsnet.tcp`, `tsnet.http`, `tsnet.taildrop`, `tsnet.serve`, etc.), add
-the Tailscale capabilities we've been missing (raw TCP, UDP, TLS,
-Funnel, Taildrop, Serve, Exit Node, Profiles, Prefs, diagnostics), and
-clean up API-hygiene issues surfaced in design review.
+(`tsnet.tcp`, `tsnet.http`, `tsnet.prefs`, etc.), add the core
+Tailscale capabilities Dart consumers are most likely to use first
+(raw TCP, TLS, identity, diagnostics, advanced prefs), and clean up
+API-hygiene issues surfaced in design review.
 
-Strict ordering: **parity with today first**, hygiene second, new
-capabilities third.
+The roadmap is intentionally **consumer-first, not parity-first with
+every Tailscale feature**. Private HTTP/TCP access, lifecycle, peer
+identity, and diagnostics are on the core path. More niche or
+operator-heavy surfaces such as Taildrop, Profiles, rich Serve
+builders, and extra Funnel ergonomics are explicitly demand-driven.
+
+Strict ordering: **parity with today first**, hygiene second, core
+capabilities third, optional capabilities last.
 
 Implementation alignment is intentional: data-plane sockets and
 listeners should stay close to `tsnet.Server`, while status,
@@ -48,6 +54,9 @@ clean foundation.
 Explicitly out of scope for this RFC:
 
 - Replacing or reimplementing `tsnet` — we remain a wrapper.
+- Exposing every Tailscale CLI / LocalAPI feature as a polished
+  first-class Dart API. Some capabilities stay behind
+  `localApi.request(...)` until there is demonstrated demand.
 - Exposing Tailscale admin-plane APIs (ACL editing, device management).
   Those go through the admin REST API, not LocalAPI.
 - Reimplementing Tailscale Drive (filesystem shares) in Dart. If a user
@@ -80,6 +89,48 @@ comments.
    Callers pattern-match on type, not string.
 7. **Identity by stable ID, not key material.** Public keys rotate on
    reinstall; `StableNodeID` / `PeerStatus` references don't.
+8. **Earn first-class API surface with real Dart use cases.** The core
+   path prioritizes embedded/private-app jobs: connect a node, call a
+   private HTTP/TCP service, expose a local HTTP/TCP service, inspect
+   peers, and diagnose connectivity. Features that mainly serve
+   full-client, consumer-device, or ops-heavy workflows stay thin,
+   optional, or escape-hatch-only until users pull them in.
+
+## Product focus
+
+### Core v1 path
+
+These are the features that make the package useful even if nothing
+else lands:
+
+- Lifecycle/auth/status (`init`, `up`, `down`, `logout`, `status`,
+  `peers`, change streams).
+- Private HTTP and TCP (`http.client`, `http.expose`, `tcp.dial`,
+  `tcp.bind`).
+- Identity/discovery and diagnostics (`whois`, `onPeersChange`,
+  `diag.ping`, `diag.metrics`, `diag.derpMap`, `diag.checkUpdate`).
+- The LocalAPI escape hatch (`localApi.request(...)`) so advanced users
+  can reach untyped endpoints without waiting on another release.
+
+### Advanced but still plausible
+
+These fit some Dart consumers, but they are not required for a strong
+v1:
+
+- `tls.bind`, `tls.domains()`
+- `udp.bind`
+- `prefs.*`
+- `exitNode.*`
+- `funnel.bind` as a thin transport surface, not a marquee feature
+
+### Optional / demand-gated
+
+These should not block v1 and should stay thin unless real users ask
+for them:
+
+- `profiles.*`
+- `taildrop.*`
+- `serve.*` beyond raw config get/set
 
 ## Upstream alignment
 
@@ -115,16 +166,17 @@ long as the dependency graph below is respected.
 Phase 1 (parity)
    │
    ▼
-Phase 2 (hygiene) ────┬─── Phase 6 (prefs + exitNode)
-   │                   ├─── Phase 7 (profiles)
-   │                   └─── Phase 9 (serve)
-   │
-   ├── Phase 3 (bridge + tcp) ──┬── Phase 5 (tls / udp / funnel)
-   │                            └── Phase 8 (taildrop)
-   │
-   └── Phase 4 (LocalAPI one-shots)
-                │
-           all phases  ───── Phase 10 (escape hatch + polish → v1.0)
+Phase 2 (hygiene) ────┬─── Phase 6 (prefs + exitNode) ───────────────┐
+   │                   │                                              │
+   ├── Phase 3 (bridge + tcp) ──┬── Phase 5 (tls / udp / funnel) ────┤
+   │                            └── Phase 8 (taildrop, optional)      │
+   │                                                                   │
+   ├── Phase 4 (LocalAPI one-shots) ───────────────────────────────────┤
+   │                                                                   │
+   ├── Phase 7 (profiles, optional) ───────────────────────────────────┤
+   └── Phase 9 (serve, optional) ──────────────────────────────────────┘
+                                   ▼
+               Phase 10 (escape hatch + polish → v1.0 for the core path)
 ```
 
 ---
@@ -268,7 +320,9 @@ path for each diagnostic.
 ### Phase 5 — Remaining transports
 
 **Goal:** apply the Phase 3 bridge pattern to the remaining
-transports.
+transports. `tls.bind` is the clearest next transport win for Dart
+servers; `udp.bind` is plausible but more niche; Funnel remains
+explicitly advanced and demand-driven.
 
 **Dependencies:** Phase 3.
 
@@ -277,7 +331,7 @@ transports.
 | 1 | `tls.bind(port)` → `Future<SecureServerSocket>`              | TLS-terminated listener with auto-provisioned cert                        | [ ]  |
 | 2 | UDP datagram bridge variant                                  | Frame `[peerIP, peerPort, payload]` envelopes over loopback               | [ ]  |
 | 3 | `udp.bind(host, port)` → `Future<RawDatagramSocket>`         | UDP datagram listener on a specific tailnet IP                             | [ ]  |
-| 4 | `funnel.bind(port, {funnelOnly})` → `Future<SecureServerSocket>` | Public-internet HTTPS via Funnel. **Returns a standard `SecureServerSocket`**; Funnel-specific metadata is accessible via extension (see next row). | [ ]  |
+| 4 | `funnel.bind(port, {funnelOnly})` → `Future<SecureServerSocket>` | Public-internet HTTPS via Funnel. **Advanced / optional:** keep the surface thin and close to upstream; do not block v1 on additional ergonomics. Returns a standard `SecureServerSocket`; Funnel-specific metadata is accessible via extension (see next row). | [ ]  |
 | 5 | `FunnelMetadata` + `Socket.funnel` extension                 | Expose original public-client source IP + SNI target without breaking the "standard `dart:io` types" principle. Internal `Expando<FunnelMetadata>` keyed by `Socket`; extension getter resolves it. Non-Funnel sockets return null. | [ ]  |
 | 6 | Example: all-transports demo                                 | `/example/transports.dart` exercising TCP + TLS + UDP + Funnel            | [ ]  |
 
@@ -317,10 +371,14 @@ exit node (manual + auto), and shields-up behavior.
 
 ---
 
-### Phase 7 — Profiles
+### Phase 7 — Optional: Profiles
 
 **Goal:** multi-account / multi-tailnet support — one device, several
 identities. Backed by `local.Client` profile APIs.
+
+**Demand gate:** not on the core v1 path. Only prioritize if real Dart
+consumers need one embedded node to switch between work/personal/dev
+tailnets inside the app itself.
 
 **Dependencies:** Phase 2.
 
@@ -339,7 +397,7 @@ deletes one.
 
 ---
 
-### Phase 8 — Taildrop
+### Phase 8 — Optional: Taildrop
 
 **Goal:** peer-to-peer file transfer.
 
@@ -350,6 +408,12 @@ Taildrop should follow the simplest stream-safe implementation path
 available at the time. If LocalAPI-backed streaming lands cleanly
 before the general socket bridge is mature enough, Taildrop can move
 earlier rather than waiting on unrelated transport work.
+
+**Demand gate:** not on the core v1 path. Upstream Taildrop is still an
+alpha feature and is targeted at transfers between a user's own
+personal devices, not generic service-to-service or tagged-node
+workflows. Keep this namespace thin and do not build product-level file
+management on top of it.
 
 | # | API                                                                      | Purpose                                                                                     | Done |
 | - | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- | ---- |
@@ -367,7 +431,7 @@ on both sides.
 
 ---
 
-### Phase 9 — Serve
+### Phase 9 — Optional: Serve raw config
 
 **Goal:** programmatic access to what `tailscale serve` / `tailscale
 funnel` do on the CLI.
@@ -378,19 +442,19 @@ pin to the latest stable at the time Phase 9 starts (current pin
 `ListenService`, and per-service ETag introduced in later upstream
 versions). Bump + audit the diff before modelling `ServeConfig`.
 
+**Demand gate:** not on the core v1 path. The goal here is raw
+`ServeConfig` access, not a broad Dart DSL for every Serve/Funnel
+handler combination. `http.expose()` already covers the common Dart
+"publish my existing local HTTP server privately" case.
+
 | # | API                                        | Purpose                                                                    | Done |
 | - | ------------------------------------------ | -------------------------------------------------------------------------- | ---- |
 | 1 | Upgrade `tailscale.com` pin                 | Audit upstream changelog between pinned version and latest stable; fold new `ipn.ServeConfig` fields into our model       | [ ]  |
-| 2 | `ServeConfig` value type                   | Full Dart mirror of `ipn.ServeConfig`: TCP handlers, web handlers (path mounts, static roots, reverse-proxy targets), Funnel enablement per port, `Services`, `AllowFunnel`, `Foreground`, `ETag` | [ ]  |
-| 3 | `ServeConfig.addWebMount(path, handler)`    | Immutable mutator — add a web path handler                                 | [ ]  |
-| 4 | `ServeConfig.removeWebMount(path)`          | Immutable mutator — remove a web path handler                              | [ ]  |
-| 5 | `ServeConfig.addTcpHandler(port, handler)`  | Immutable mutator — route a TCP port                                       | [ ]  |
-| 6 | `ServeConfig.enableFunnel(port, {handlers})`| Immutable mutator — toggle Funnel on a port                                | [ ]  |
-| 7 | `ServeConfig.setService(service, config)`   | Immutable mutator — add/update a virtual service entry                     | [ ]  |
-| 8 | `serve.getConfig()` → `ServeConfig`         | Current serve config (populates ETag)                                      | [ ]  |
-| 9 | `serve.setConfig(config)`                   | Replace config atomically; throws on ETag mismatch                         | [ ]  |
-| 10| `TailscaleConflictException`                | Thrown when `setConfig` detects a concurrent modification                  | [ ]  |
-| 11| `tcp.listenService(name, mode)`             | Direct Dart mirror of `tsnet.Server.ListenService` for advertising Tailscale Services hosts. Depends on bumping `tailscale.com` to a release that includes `ListenService` (added upstream in `v1.94.1`). Keep this under `tcp`; do not create a speculative `services` namespace for a single listener primitive. | [ ]  |
+| 2 | `ServeConfig` value type                   | Full Dart mirror of `ipn.ServeConfig`: TCP handlers, web handlers, Funnel enablement per port, `Services`, `AllowFunnel`, `Foreground`, `ETag` | [ ]  |
+| 3 | `serve.getConfig()` → `ServeConfig`         | Current serve config (populates ETag)                                      | [ ]  |
+| 4 | `serve.setConfig(config)`                   | Replace config atomically; throws on ETag mismatch                         | [ ]  |
+| 5 | `TailscaleConflictException`                | Thrown when `setConfig` detects a concurrent modification                  | [ ]  |
+| 6 | `tcp.listenService(name, mode)`             | Direct Dart mirror of `tsnet.Server.ListenService` for advertising Tailscale Services hosts. Depends on bumping `tailscale.com` to a release that includes `ListenService` (added upstream in `v1.94.1`). Keep this under `tcp`; do not create a speculative `services` namespace for a single listener primitive. | [ ]  |
 
 **Note on Services:** `Services` / `AllowFunnel` / `Foreground` are
 fields in `ipn.ServeConfig`, not a separate product surface — they live
@@ -398,6 +462,9 @@ in this namespace, not in a new `services` namespace. `ListenService`
 (upstream's `tsnet.Server.ListenService`) is already a separate stable
 method; treat it as a transport-aligned listener that belongs under
 `tcp`, not as justification for a separate `services` namespace.
+
+**Non-goal for this phase:** no large Dart-side builder / mutator DSL
+unless raw `getConfig` / `setConfig` proves too awkward in practice.
 
 **Exit criteria:** e2e publishes a static directory at `/docs/` via
 `serve.setConfig` and fetches it back over HTTPS. Live-tailnet only —
@@ -407,21 +474,22 @@ Headscale doesn't support Serve/Funnel as of April 2026.
 
 ### Phase 10 — Escape hatch + polish
 
-**Goal:** ship v1.0. Give power users + third-party extensions a way
-to reach LocalAPI endpoints we haven't typed. Regenerate docs.
+**Goal:** ship v1.0 for the core embedding story. Give power users +
+third-party extensions a way to reach LocalAPI endpoints we haven't
+typed. Regenerate docs.
 
-**Dependencies:** all prior phases.
+**Dependencies:** core path only: Phases 1-6. Optional Phases 7-9 can
+land before or after v1.0 without changing the core ship criteria.
 
 | # | Item                                                     | Purpose                                                                     | Done |
 | - | -------------------------------------------------------- | --------------------------------------------------------------------------- | ---- |
 | 1 | `Tailscale.localApi.request(method, path, {body})`       | Generic LocalAPI RPC. Go-side wraps `local.Client.DoLocalRequest`; Dart exposes a minimal `{statusCode, bytes}`-returning shape. **Not** a raw loopback HTTP server (upstream advises against exposing `Loopback()` when `LocalClient` will do). Covers endpoints we haven't typed yet (drive shares, arbitrary DNS queries, debug actions). | [ ]  |
 | 2 | `/example/tcp_echo.dart`                                 | Raw-TCP demo                                                                | [ ]  |
-| 3 | `/example/taildrop.dart`                                 | Taildrop send/receive demo                                                  | [ ]  |
-| 4 | `/example/serve.dart`                                    | Serve config demo                                                           | [ ]  |
-| 5 | `/example/exit_node.dart`                                | Exit-node selection demo                                                    | [ ]  |
-| 6 | README namespace-by-namespace tour                       | Top-level doc update                                                        | [ ]  |
-| 7 | Full dartdoc regeneration                                | Publish `dartdoc`                                                           | [ ]  |
-| 8 | Lock public API for v1.0                                 | Post-v1.0 breaking changes require deprecation cycle                        | [ ]  |
+| 3 | `/example/exit_node.dart`                                | Exit-node selection demo                                                    | [ ]  |
+| 4 | README namespace-by-namespace tour                       | Top-level doc update                                                        | [ ]  |
+| 5 | Full dartdoc regeneration                                | Publish `dartdoc`                                                           | [ ]  |
+| 6 | Lock public API for v1.0                                 | Post-v1.0 breaking changes require deprecation cycle                        | [ ]  |
+| 7 | Optional examples (`taildrop`, `serve`)                  | Only if the corresponding optional phase lands before v1.0                  | [ ]  |
 
 ---
 
@@ -431,11 +499,10 @@ to reach LocalAPI endpoints we haven't typed. Regenerate docs.
 | ------- | --------------------------------- | -------------------------------------------------------------------------- |
 | v0.3    | 1                                 | Namespaced API shape; no functional change                                 |
 | v0.4    | 2 + 4                             | Hygiene fixes (incl. interactive login via new `up()` semantics) + LocalAPI one-shots (whois, diag, ping) |
-| v0.5    | 3 + 5                             | Full transport surface (raw TCP, TLS, UDP, Funnel)                         |
-| v0.6    | 6                                 | Prefs + exit node                                                          |
-| v0.7    | 7 + 8                             | Profiles + Taildrop                                                        |
-| v0.8    | 9                                 | Serve                                                                      |
-| v1.0    | 10                                | Escape hatch + docs + API lock                                             |
+| v0.5    | 3                                 | Raw TCP                                                                    |
+| v0.6    | 5 + 6                             | Remaining advanced/core-adjacent transports (TLS/UDP/Funnel thin surface) + prefs + exit node |
+| v1.0    | 10 + core path                    | Core embedding story: lifecycle, private HTTP/TCP, identity/diagnostics, advanced prefs/exit-node controls, LocalAPI escape hatch, docs, API lock |
+| post-v1 | 7 + 8 + 9                         | Optional: Profiles, Taildrop, raw Serve config                             |
 
 ---
 

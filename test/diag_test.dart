@@ -84,16 +84,22 @@ void main() {
 
   group('ClientVersion', () {
     test('==', () {
-      const a = ClientVersion(shortVersion: '1.92.3', longVersion: '1.92.3-abc');
-      const b = ClientVersion(shortVersion: '1.92.3', longVersion: '1.92.3-abc');
-      const different = ClientVersion(
-        shortVersion: '1.92.4',
-        longVersion: '1.92.4-def',
+      const a = ClientVersion(
+        latestVersion: '1.94.1',
+        urgentSecurityUpdate: false,
+      );
+      const b = ClientVersion(
+        latestVersion: '1.94.1',
+        urgentSecurityUpdate: false,
+      );
+      const urgent = ClientVersion(
+        latestVersion: '1.94.1',
+        urgentSecurityUpdate: true,
       );
 
       expect(a, equals(b));
       expect(a.hashCode, b.hashCode);
-      expect(a, isNot(equals(different)));
+      expect(a, isNot(equals(urgent)));
     });
   });
 }

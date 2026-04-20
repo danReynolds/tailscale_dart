@@ -6,6 +6,7 @@ import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
+import '../api/diag.dart';
 import '../api/identity.dart';
 import '../errors.dart';
 import '../ffi_bindings.dart' as native;
@@ -180,6 +181,42 @@ final class Worker {
       const _WorkerTlsDomainsCommand(),
     );
     return response.domains;
+  }
+
+  Future<PingResult> diagPing({
+    required String ip,
+    Duration? timeout,
+    required String pingType,
+  }) async {
+    final response = await _request<_WorkerDiagPingResponse>(
+      _WorkerDiagPingCommand(
+        ip: ip,
+        timeoutMillis: timeout?.inMilliseconds ?? 0,
+        pingType: pingType,
+      ),
+    );
+    return response.result;
+  }
+
+  Future<String> diagMetrics() async {
+    final response = await _request<_WorkerDiagMetricsResponse>(
+      const _WorkerDiagMetricsCommand(),
+    );
+    return response.metrics;
+  }
+
+  Future<DERPMap> diagDERPMap() async {
+    final response = await _request<_WorkerDiagDERPMapResponse>(
+      const _WorkerDiagDERPMapCommand(),
+    );
+    return response.map;
+  }
+
+  Future<ClientVersion?> diagCheckUpdate() async {
+    final response = await _request<_WorkerDiagCheckUpdateResponse>(
+      const _WorkerDiagCheckUpdateCommand(),
+    );
+    return response.clientVersion;
   }
 
   Future<TailscaleStatus> status({required String stateDir}) async {

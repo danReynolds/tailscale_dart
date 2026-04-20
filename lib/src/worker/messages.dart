@@ -8,6 +8,10 @@ enum _WorkerOperation {
   tcpUnbind,
   whois,
   tlsDomains,
+  diagPing,
+  diagMetrics,
+  diagDERPMap,
+  diagCheckUpdate,
   status,
   peers,
   down,
@@ -21,6 +25,10 @@ enum _WorkerOperation {
         tcpUnbind => TailscaleTcpException(message),
         whois => TailscaleStatusException(message),
         tlsDomains => TailscaleStatusException(message),
+        diagPing => TailscaleDiagException(message),
+        diagMetrics => TailscaleDiagException(message),
+        diagDERPMap => TailscaleDiagException(message),
+        diagCheckUpdate => TailscaleDiagException(message),
         status => TailscaleStatusException(message),
         peers => TailscaleStatusException(message),
         down => TailscaleOperationException('down', message),
@@ -105,6 +113,31 @@ final class _WorkerWhoIsCommand extends _WorkerCommand {
 
 final class _WorkerTlsDomainsCommand extends _WorkerCommand {
   const _WorkerTlsDomainsCommand() : super(_WorkerOperation.tlsDomains);
+}
+
+final class _WorkerDiagPingCommand extends _WorkerCommand {
+  const _WorkerDiagPingCommand({
+    required this.ip,
+    required this.timeoutMillis,
+    required this.pingType,
+  }) : super(_WorkerOperation.diagPing);
+
+  final String ip;
+  final int timeoutMillis;
+  final String pingType;
+}
+
+final class _WorkerDiagMetricsCommand extends _WorkerCommand {
+  const _WorkerDiagMetricsCommand() : super(_WorkerOperation.diagMetrics);
+}
+
+final class _WorkerDiagDERPMapCommand extends _WorkerCommand {
+  const _WorkerDiagDERPMapCommand() : super(_WorkerOperation.diagDERPMap);
+}
+
+final class _WorkerDiagCheckUpdateCommand extends _WorkerCommand {
+  const _WorkerDiagCheckUpdateCommand()
+      : super(_WorkerOperation.diagCheckUpdate);
 }
 
 final class _WorkerStatusCommand extends _WorkerCommand {
@@ -221,6 +254,35 @@ final class _WorkerTlsDomainsResponse extends _WorkerResponse {
       : super(_WorkerOperation.tlsDomains);
 
   final List<String> domains;
+}
+
+final class _WorkerDiagPingResponse extends _WorkerResponse {
+  const _WorkerDiagPingResponse({required this.result})
+      : super(_WorkerOperation.diagPing);
+
+  final PingResult result;
+}
+
+final class _WorkerDiagMetricsResponse extends _WorkerResponse {
+  const _WorkerDiagMetricsResponse({required this.metrics})
+      : super(_WorkerOperation.diagMetrics);
+
+  final String metrics;
+}
+
+final class _WorkerDiagDERPMapResponse extends _WorkerResponse {
+  const _WorkerDiagDERPMapResponse({required this.map})
+      : super(_WorkerOperation.diagDERPMap);
+
+  final DERPMap map;
+}
+
+final class _WorkerDiagCheckUpdateResponse extends _WorkerResponse {
+  const _WorkerDiagCheckUpdateResponse({required this.clientVersion})
+      : super(_WorkerOperation.diagCheckUpdate);
+
+  /// Null when the node is on the latest version.
+  final ClientVersion? clientVersion;
 }
 
 final class _WorkerAckResponse extends _WorkerResponse {

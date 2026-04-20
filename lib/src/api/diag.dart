@@ -146,65 +146,114 @@ class DERPNode {
   String toString() => 'DERPNode(name: $name, hostName: $hostName)';
 }
 
-/// A published Tailscale client version (result of [Diag.checkUpdate]).
+/// An available client-version update (result of [Diag.checkUpdate]).
+///
+/// Mirrors `tailcfg.ClientVersion`. [Diag.checkUpdate] returns null
+/// when the node is already on the latest version, so the fields
+/// here always describe a concrete update to apply.
 @immutable
 class ClientVersion {
   const ClientVersion({
-    required this.shortVersion,
-    required this.longVersion,
+    required this.latestVersion,
+    required this.urgentSecurityUpdate,
+    this.notifyText,
   });
 
-  /// Short version string, e.g. `1.92.3`.
-  final String shortVersion;
+  /// The newer version available for this platform (e.g. `1.94.1`).
+  final String latestVersion;
 
-  /// Full build version including git hash.
-  final String longVersion;
+  /// When true, the update includes a security fix — apply promptly.
+  final bool urgentSecurityUpdate;
+
+  /// Optional human-readable notification text from the control
+  /// plane (when `Notify` is set upstream).
+  final String? notifyText;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ClientVersion &&
-          shortVersion == other.shortVersion &&
-          longVersion == other.longVersion;
+          latestVersion == other.latestVersion &&
+          urgentSecurityUpdate == other.urgentSecurityUpdate &&
+          notifyText == other.notifyText;
 
   @override
-  int get hashCode => Object.hash(shortVersion, longVersion);
+  int get hashCode =>
+      Object.hash(latestVersion, urgentSecurityUpdate, notifyText);
 
   @override
   String toString() =>
-      'ClientVersion(short: $shortVersion, long: $longVersion)';
+      'ClientVersion(latest: $latestVersion, '
+      'urgentSecurityUpdate: $urgentSecurityUpdate)';
 }
+
+typedef DiagPingFn = Future<PingResult> Function(
+  String ip,
+  Duration? timeout,
+  PingType type,
+);
+typedef DiagMetricsFn = Future<String> Function();
+typedef DiagDERPMapFn = Future<DERPMap> Function();
+typedef DiagCheckUpdateFn = Future<ClientVersion?> Function();
 
 /// Observability and diagnostics. All read-only; nothing here affects
 /// connectivity.
 ///
 /// Reached via [Tailscale.diag].
-class Diag {
-  /// Singleton namespace instance. Reach via `Tailscale.instance.diag`.
-  static const instance = Diag._();
-
-  const Diag._();
-
+abstract class Diag {
   /// Tailscale-level ping. Reports round-trip time and whether the path
   /// is direct peer-to-peer or DERP-relayed.
   Future<PingResult> ping(
     String ip, {
     Duration? timeout,
     PingType type = PingType.disco,
+  });
+
+  /// Prometheus-format metrics snapshot from the embedded runtime —
+  /// peer counts, DERP activity, byte totals, handshake stats, etc.
+  Future<String> metrics();
+
+  /// Current [DERP](https://tailscale.com/kb/1232/derp-servers) relay
+  /// map for this node.
+  Future<DERPMap> derpMap();
+
+  /// Checks whether a newer version of the embedded tsnet runtime is
+  /// available. Returns null when already on the latest.
+  Future<ClientVersion?> checkUpdate();
+}
+
+/// Library-internal factory. Reach via `Tailscale.instance.diag`.
+@internal
+Diag createDiag({
+  required DiagPingFn pingFn,
+  required DiagMetricsFn metricsFn,
+  required DiagDERPMapFn derpMapFn,
+  required DiagCheckUpdateFn checkUpdateFn,
+}) =>
+    _Diag(pingFn, metricsFn, derpMapFn, checkUpdateFn);
+
+final class _Diag implements Diag {
+  _Diag(this._ping, this._metrics, this._derpMap, this._checkUpdate);
+
+  final DiagPingFn _ping;
+  final DiagMetricsFn _metrics;
+  final DiagDERPMapFn _derpMap;
+  final DiagCheckUpdateFn _checkUpdate;
+
+  @override
+  Future<PingResult> ping(
+    String ip, {
+    Duration? timeout,
+    PingType type = PingType.disco,
   }) =>
-      throw UnimplementedError('diag.ping not yet implemented');
+      _ping(ip, timeout, type);
 
-  /// Prometheus-format metrics snapshot from the embedded runtime — peer
-  /// counts, DERP activity, byte totals, handshake stats, etc.
-  Future<String> metrics() =>
-      throw UnimplementedError('diag.metrics not yet implemented');
+  @override
+  Future<String> metrics() => _metrics();
 
-  /// Current DERP relay map.
-  Future<DERPMap> derpMap() =>
-      throw UnimplementedError('diag.derpMap not yet implemented');
+  @override
+  Future<DERPMap> derpMap() => _derpMap();
 
-  /// The latest available tsnet version if newer than the embedded one,
-  /// else null.
-  Future<ClientVersion?> checkUpdate() =>
-      throw UnimplementedError('diag.checkUpdate not yet implemented');
+  @override
+  Future<ClientVersion?> checkUpdate() => _checkUpdate();
 }

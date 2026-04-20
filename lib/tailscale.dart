@@ -19,7 +19,8 @@ import 'src/proxy_client.dart';
 import 'src/status.dart';
 import 'src/worker/worker.dart';
 
-export 'src/api/diag.dart';
+export 'src/api/diag.dart'
+    hide createDiag, DiagPingFn, DiagMetricsFn, DiagDERPMapFn, DiagCheckUpdateFn;
 export 'src/api/exit_node.dart';
 export 'src/api/funnel.dart' hide attachFunnelMetadata;
 export 'src/api/http.dart' hide createHttp;
@@ -136,7 +137,16 @@ class Tailscale {
   final Prefs prefs = Prefs.instance;
 
   // ─── Diagnostics ────────────────────────────────────────────────────
-  final Diag diag = Diag.instance;
+  late final Diag diag = createDiag(
+    pingFn: (ip, timeout, type) => _worker.diagPing(
+      ip: ip,
+      timeout: timeout,
+      pingType: type.name,
+    ),
+    metricsFn: _worker.diagMetrics,
+    derpMapFn: _worker.diagDERPMap,
+    checkUpdateFn: _worker.diagCheckUpdate,
+  );
 
   // ─── Streams ────────────────────────────────────────────────────────
 

@@ -18,8 +18,26 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
+	"time"
+
+	"tailscale.com/client/local"
+	"tailscale.com/tailcfg"
 )
+
+// lcOr returns the current LocalClient or an error if the embedded
+// engine hasn't been Started yet. Every wrapper in this file opens
+// with this call — factoring keeps each wrapper short.
+func lcOr(op string) (*local.Client, error) {
+	mu.Lock()
+	s := srv
+	mu.Unlock()
+	if s == nil {
+		return nil, fmt.Errorf("%s called before Start", op)
+	}
+	return s.LocalClient()
+}
 
 // WhoIs resolves a tailnet IP to peer identity. Returns a JSON object
 // matching the Dart PeerIdentity shape on success. Returns `{"found":
@@ -30,15 +48,7 @@ func WhoIs(ip string) string {
 	if err != nil {
 		return jsonError(fmt.Errorf("invalid IP %q: %w", ip, err))
 	}
-
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
-		return jsonError(errors.New("WhoIs called before Start"))
-	}
-
-	lc, err := s.LocalClient()
+	lc, err := lcOr("WhoIs")
 	if err != nil {
 		return jsonError(err)
 	}
@@ -97,17 +107,10 @@ func isNotFound(err error) bool {
 // Returns JSON `{"domains": [...]}` on success, `{"error": ...}` on
 // failure.
 func TlsDomains() string {
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
-		return jsonError(errors.New("TlsDomains called before Start"))
-	}
-	lc, err := s.LocalClient()
+	lc, err := lcOr("TlsDomains")
 	if err != nil {
 		return jsonError(err)
 	}
-
 	status, err := lc.Status(context.Background())
 	if err != nil {
 		return jsonError(err)
@@ -121,5 +124,141 @@ func TlsDomains() string {
 	if err != nil {
 		return jsonError(err)
 	}
+	return string(b)
+}
+
+// DiagPing runs a Tailscale-level ping against the given tailnet IP
+// and returns JSON matching the Dart PingResult shape.
+// `timeoutMillis <= 0` means no timeout. `pingType` is one of
+// "disco" (default), "tsmp", or "icmp".
+func DiagPing(ip string, timeoutMillis int, pingType string) string {
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return jsonError(fmt.Errorf("invalid IP %q: %w", ip, err))
+	}
+	var pt tailcfg.PingType
+	switch strings.ToLower(strings.TrimSpace(pingType)) {
+	case "", "disco":
+		pt = tailcfg.PingDisco
+	case "tsmp":
+		pt = tailcfg.PingTSMP
+	case "icmp":
+		pt = tailcfg.PingICMP
+	default:
+		return jsonError(fmt.Errorf("unknown ping type %q", pingType))
+	}
+
+	lc, err := lcOr("DiagPing")
+	if err != nil {
+		return jsonError(err)
+	}
+
+	ctx := context.Background()
+	if timeoutMillis > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMillis)*time.Millisecond)
+		defer cancel()
+	}
+
+	pr, err := lc.Ping(ctx, addr, pt)
+	if err != nil {
+		return jsonError(err)
+	}
+	if pr.Err != "" {
+		return jsonError(errors.New(pr.Err))
+	}
+
+	out := map[string]any{
+		"latencyMicros": int64(pr.LatencySeconds * 1_000_000),
+		"direct":        pr.Endpoint != "" && pr.DERPRegionID == 0,
+	}
+	if pr.DERPRegionCode != "" {
+		out["derpRegion"] = pr.DERPRegionCode
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
+// DiagMetrics returns the Prometheus-format user metrics scrape from
+// the embedded runtime verbatim.
+func DiagMetrics() string {
+	lc, err := lcOr("DiagMetrics")
+	if err != nil {
+		return jsonError(err)
+	}
+	body, err := lc.UserMetrics(context.Background())
+	if err != nil {
+		return jsonError(err)
+	}
+	b, _ := json.Marshal(map[string]any{"metrics": string(body)})
+	return string(b)
+}
+
+// DiagDERPMap returns the node's current DERP relay map.
+func DiagDERPMap() string {
+	lc, err := lcOr("DiagDERPMap")
+	if err != nil {
+		return jsonError(err)
+	}
+	m, err := lc.CurrentDERPMap(context.Background())
+	if err != nil {
+		return jsonError(err)
+	}
+	regions := map[string]any{}
+	for id, r := range m.Regions {
+		if r == nil {
+			continue
+		}
+		nodes := make([]map[string]any, 0, len(r.Nodes))
+		for _, n := range r.Nodes {
+			if n == nil {
+				continue
+			}
+			nodes = append(nodes, map[string]any{
+				"name":     n.Name,
+				"hostName": n.HostName,
+			})
+		}
+		regions[strconv.Itoa(id)] = map[string]any{
+			"regionId":   r.RegionID,
+			"regionCode": r.RegionCode,
+			"regionName": r.RegionName,
+			"nodes":      nodes,
+		}
+	}
+	b, _ := json.Marshal(map[string]any{
+		"regions":            regions,
+		"omitDefaultRegions": m.OmitDefaultRegions,
+	})
+	return string(b)
+}
+
+// DiagCheckUpdate asks the control plane if a newer client version is
+// available. Returns `{"available": false}` when the node is already
+// on the latest. On success with an update, returns
+// `{"available": true, "latestVersion": "...", "urgentSecurityUpdate": bool, "notifyText": "..."}`.
+func DiagCheckUpdate() string {
+	lc, err := lcOr("DiagCheckUpdate")
+	if err != nil {
+		return jsonError(err)
+	}
+	cv, err := lc.CheckUpdate(context.Background())
+	if err != nil {
+		return jsonError(err)
+	}
+	// Nil, RunningLatest, or empty LatestVersion all mean "no update".
+	if cv == nil || cv.RunningLatest || cv.LatestVersion == "" {
+		b, _ := json.Marshal(map[string]any{"available": false})
+		return string(b)
+	}
+	out := map[string]any{
+		"available":            true,
+		"latestVersion":        cv.LatestVersion,
+		"urgentSecurityUpdate": cv.UrgentSecurityUpdate,
+	}
+	if cv.NotifyText != "" {
+		out["notifyText"] = cv.NotifyText
+	}
+	b, _ := json.Marshal(out)
 	return string(b)
 }

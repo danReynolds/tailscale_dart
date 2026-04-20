@@ -219,6 +219,49 @@ void _workerEntrypoint(SendPort sendPort) {
             final domains =
                 (result['domains'] as List?)?.cast<String>() ?? const [];
             sendPort.send(_WorkerTlsDomainsResponse(domains: domains));
+          case _WorkerDiagPingCommand request:
+            final ipPtr = request.ip.toNativeUtf8();
+            final pingTypePtr = request.pingType.toNativeUtf8();
+            try {
+              final result = _callNativeJson(
+                () => native.duneDiagPing(
+                  ipPtr,
+                  request.timeoutMillis,
+                  pingTypePtr,
+                ),
+                onError: TailscaleDiagException.new,
+              ) as Map<String, dynamic>;
+              sendPort.send(_WorkerDiagPingResponse(
+                result: _parsePingResult(result),
+              ));
+            } finally {
+              calloc.free(ipPtr);
+              calloc.free(pingTypePtr);
+            }
+          case _WorkerDiagMetricsCommand():
+            final result = _callNativeJson(
+              native.duneDiagMetrics,
+              onError: TailscaleDiagException.new,
+            ) as Map<String, dynamic>;
+            sendPort.send(_WorkerDiagMetricsResponse(
+              metrics: result['metrics'] as String? ?? '',
+            ));
+          case _WorkerDiagDERPMapCommand():
+            final result = _callNativeJson(
+              native.duneDiagDERPMap,
+              onError: TailscaleDiagException.new,
+            ) as Map<String, dynamic>;
+            sendPort.send(_WorkerDiagDERPMapResponse(
+              map: _parseDERPMap(result),
+            ));
+          case _WorkerDiagCheckUpdateCommand():
+            final result = _callNativeJson(
+              native.duneDiagCheckUpdate,
+              onError: TailscaleDiagException.new,
+            ) as Map<String, dynamic>;
+            sendPort.send(_WorkerDiagCheckUpdateResponse(
+              clientVersion: _parseClientVersion(result),
+            ));
           case _WorkerStatusCommand(:final stateDir):
             sendPort.send(_WorkerStatusResponse(
               status: _loadStatusSnapshot(stateDir: stateDir),
@@ -359,5 +402,48 @@ PeerIdentity? _parseWhoIsResponse(Map<String, dynamic> json) {
     userLoginName: json['userLoginName'] as String? ?? '',
     tags: (json['tags'] as List?)?.cast<String>() ?? const [],
     tailscaleIPs: (json['tailscaleIPs'] as List?)?.cast<String>() ?? const [],
+  );
+}
+
+PingResult _parsePingResult(Map<String, dynamic> json) {
+  final micros = (json['latencyMicros'] as num?)?.toInt() ?? 0;
+  return PingResult(
+    latency: Duration(microseconds: micros),
+    direct: json['direct'] as bool? ?? false,
+    derpRegion: json['derpRegion'] as String?,
+  );
+}
+
+DERPMap _parseDERPMap(Map<String, dynamic> json) {
+  final rawRegions = json['regions'] as Map<String, dynamic>? ?? const {};
+  final regions = <int, DERPRegion>{};
+  rawRegions.forEach((id, value) {
+    final regionId = int.tryParse(id);
+    if (regionId == null || value is! Map<String, dynamic>) return;
+    regions[regionId] = DERPRegion(
+      regionId: (value['regionId'] as num?)?.toInt() ?? regionId,
+      regionCode: value['regionCode'] as String? ?? '',
+      regionName: value['regionName'] as String? ?? '',
+      nodes: ((value['nodes'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map((n) => DERPNode(
+                name: n['name'] as String? ?? '',
+                hostName: n['hostName'] as String? ?? '',
+              ))
+          .toList(growable: false),
+    );
+  });
+  return DERPMap(
+    regions: regions,
+    omitDefaultRegions: json['omitDefaultRegions'] as bool? ?? false,
+  );
+}
+
+ClientVersion? _parseClientVersion(Map<String, dynamic> json) {
+  if (json['available'] != true) return null;
+  return ClientVersion(
+    latestVersion: json['latestVersion'] as String? ?? '',
+    urgentSecurityUpdate: json['urgentSecurityUpdate'] as bool? ?? false,
+    notifyText: json['notifyText'] as String?,
   );
 }

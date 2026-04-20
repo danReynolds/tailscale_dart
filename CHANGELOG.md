@@ -3,20 +3,25 @@
 **Phase 4 — LocalAPI one-shots:**
 
 - `Tailscale.whois(ip)` → `Future<PeerIdentity?>` is live. Wraps `local.Client.WhoIs`; 404 from LocalAPI (unknown IP on this tailnet) maps to `null`, other errors throw.
-- `Tailscale.onPeersChange` → `Stream<List<PeerStatus>>` is live. The Go-side IPN bus watcher now subscribes to `NotifyInitialNetMap` in addition to `NotifyInitialState`; each NetMap delta triggers a `lc.Status()` fetch that's serialized and pushed to the Dart stream. Dedup is left to subscribers — pipe through `.distinct()` if you only want transitions.
+- `Tailscale.onPeersChange` → `Stream<List<PeerStatus>>` is live. The Go-side IPN bus watcher now subscribes to `NotifyInitialNetMap` in addition to `NotifyInitialState`. A NetMap burst is debounced with a 100ms trailing-edge timer before fetching `lc.Status()` and serializing the peer list, so endpoint reshuffles and relay flaps don't produce one publish per tick. Dedup is left to subscribers — pipe through `.distinct()` if you only want real transitions.
 - `tls.domains()` → `Future<List<String>>` is live. Reads `lc.Status().CertDomains`; empty list when MagicDNS or HTTPS is disabled on the tailnet.
-- `diag.ping(ip, {timeout, type})` → `Future<PingResult>` is live. Wraps `local.Client.Ping`; `type` maps to `tailcfg.PingType` (`disco` / `tsmp` / `icmp`). Result fields: `latency` (Duration, microsecond precision), `direct` (true iff a direct endpoint was used and no DERP region was involved), `derpRegion` (three-letter code, null when direct).
+- `diag.ping(ip, {timeout, type})` → `Future<PingResult>` is live. Wraps `local.Client.Ping`; accepts either a tailnet IP *or* a MagicDNS hostname (resolved locally against `lc.Status()` before dialing). `type` maps to `tailcfg.PingType` (`disco` / `tsmp` / `icmp`). Result fields: `latency` (Duration, microsecond precision), `path` (a `PingPath` enum of `direct` / `derp` / `unknown` — ping types that don't expose endpoint metadata classify as `unknown` rather than falsely claiming relayed), `derpRegion` (three-letter code, populated only when `path == derp`). Convenience getters `.direct` and `.isRelayed` read off `path`.
 - `diag.metrics()` → `Future<String>` is live. Returns the Prometheus-format scrape from `lc.UserMetrics` verbatim.
-- `diag.derpMap()` → `Future<DERPMap>` is live. Wraps `lc.CurrentDERPMap`; marshals the upstream `tailcfg.DERPMap` into the existing Dart value types.
+- `diag.derpMap()` → `Future<DERPMap>` is live. Wraps `lc.CurrentDERPMap`; marshals the upstream `tailcfg.DERPMap` with extended fields — `DERPRegion.{latitude,longitude,avoid,noMeasureNoHome}` and `DERPNode.{ipv4,ipv6,derpPort,stunPort,canPort80}` — so callers can build maps, diagnostics UI, or home-region pickers without dropping back to LocalAPI.
 - `diag.checkUpdate()` → `Future<ClientVersion?>` is live. Returns `null` when already on the latest; otherwise a `ClientVersion` whose shape matches upstream `tailcfg.ClientVersion` (`latestVersion`, `urgentSecurityUpdate`, optional `notifyText`).
 
-**Breaking — Phase 4 shape change:**
+**Breaking — Phase 4 shape changes:**
 
 - `ClientVersion` fields changed from `shortVersion` / `longVersion` to `latestVersion` / `urgentSecurityUpdate` / `notifyText?`. The previous fields had no direct upstream source and would have always been empty once this landed.
+- `PingResult.direct` (bool) → `PingResult.path` (`PingPath` enum). The old bool collapsed "DERP-relayed" and "ping-type-didn't-report" into the same `false` value; the enum distinguishes them. A convenience `.direct` getter preserves the terse spelling for callers that only care about the positive case.
+
+**Non-breaking — structured error codes:**
+
+- Every Phase 4 LocalAPI wrapper now emits `{error, code?, statusCode?}` JSON envelopes; Dart side reads the code (`notFound` / `forbidden` / `conflict` / `preconditionFailed` / `featureDisabled`) and throws the per-namespace exception with the real `TailscaleErrorCode` instead of always `unknown`. Classification is HTTP-status-first (from `apitype.HTTPErr`) with a message-substring fallback for `featureDisabled`.
 
 **Internal — Phase 4 refactors:**
 
-- New `go/localapi.go` hosts all LocalAPI wrappers. Shared `lcOr(op)` helper factors the "running-check + LocalClient acquisition" pattern.
+- New `go/localapi.go` hosts all LocalAPI wrappers. Shared `lcOr(op)` helper factors the "running-check + LocalClient acquisition" pattern; `classifyLocalAPIError` + `localAPIError` centralize error-code emission.
 - `Tls` and `Diag` namespaces refactored from const-singletons to abstract / `_impl` / factory shape (matching the existing `Tcp` pattern). Dependency-injected via `createTls` / `createDiag` from `Tailscale`; factories + typedefs hidden from the public `tailscale.dart` export.
 - Worker isolate routing: new `tcpDial` / `tcpBind` / `tcpUnbind` / `whois` / `tlsDomains` / `diagPing` / `diagMetrics` / `diagDERPMap` / `diagCheckUpdate` operations, plus a new `_WorkerPeersEvent` pushed from the watcher isolate when `NotifyInitialNetMap` fires.
 

@@ -36,16 +36,19 @@ and that [`Tailscale.init`](#lifecycle-top-level) has already been called.
 
 Engine lifecycle and reactive streams. These live directly on
 `Tailscale.instance` rather than under a namespace because they don't
-fit one topic. `up()` resolves on the **first stable state** (`running`
-/ `needsLogin` / `needsMachineAuth`) so interactive auth flows can
-branch on the returned status without re-calling `up()`.
+fit one topic. `up()` resolves on the **first stable state only**
+(`running` / `needsLogin` / `needsMachineAuth`) so interactive auth
+flows can branch on the returned status without re-calling `up()`. If
+startup fails or the implementation gives up waiting before a stable
+state is reached, it should throw `TailscaleUpException` rather than
+returning a transitional state such as `starting`.
 
 **Completed in:** Phase 1 (parity) — fully working.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
 | `Tailscale.init({stateDir, logLevel})` | ✅ | One-time library configuration at app startup. | `Tailscale.init(stateDir: '/app/state');` |
-| `up({hostname, authKey, controlUrl})` → `TailscaleStatus` | ✅ | Start engine; resolves on first stable state. | `final s = await tsnet.up(authKey: 'tskey-...');` |
+| `up({hostname, authKey, controlUrl})` → `TailscaleStatus` | ✅ | Start engine; resolves on the first stable state only. Throws `TailscaleUpException` if startup fails before that. | `final s = await tsnet.up(authKey: 'tskey-...');` |
 | `down()` | ✅ | Stop engine, keep persisted credentials. | `await tsnet.down();` |
 | `logout()` | ✅ | Stop + wipe persisted credentials. | `await tsnet.logout();` |
 | `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. | `final s = await tsnet.status();` |
@@ -73,14 +76,18 @@ stacks work unchanged.
 Raw TCP between tailnet peers. Verb split: `dial` for outbound (mirrors
 Go's `tsnet.Server.Dial`), `bind` for inbound (mirrors
 `ServerSocket.bind` in `dart:io`). Returns standard `dart:io` types so
-accept loops are just `await for (conn in server)`.
+accept loops are just `await for (conn in server)`. The bridge
+implementation is expected to preserve normal TCP half-close behavior
+and to close its loopback listener immediately after the first accepted
+bridge connection so the public API behaves like a standard socket, not
+an approximation of one.
 
 **Completed in:** Phase 3 — depends on the shared loopback-bridge
 helper in Go, which also unblocks TLS / UDP / Funnel / Taildrop.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `tcp.dial(host, port, {timeout})` → `Future<Socket>` | ⛔ | Outbound TCP to a tailnet peer. `host` may be IP or MagicDNS name. | `final s = await tsnet.tcp.dial('100.64.0.5', 22);` |
+| `tcp.dial(host, port, {timeout})` → `Future<Socket>` | ⛔ | Outbound TCP to a tailnet peer. `host` may be IP or MagicDNS name. The timeout contract should be documented as one clear model, preferably one end-to-end budget spanning tailnet dial, loopback connect, and token handshake. | `final s = await tsnet.tcp.dial('100.64.0.5', 22);` |
 | `tcp.bind(port, {host})` → `Future<ServerSocket>` | ⛔ | Accept inbound TCP. `host` pins to one of this node's tailnet IPs. | `final srv = await tsnet.tcp.bind(1234);` |
 
 ## `tls`
@@ -135,7 +142,9 @@ mobile-to-desktop sync, collab tools, anywhere you'd otherwise stand up
 a file server. Byte streams use `Stream<Uint8List>` throughout so
 producer/consumer can pipe without intermediate buffering.
 
-**Completed in:** Phase 8. **Depends on:** Phase 3 loopback bridge.
+**Completed in:** Phase 8. **Depends on:** Phase 3 loopback bridge or
+an equivalent LocalAPI-backed byte-stream path, whichever yields the
+simpler stream-safe implementation first.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |

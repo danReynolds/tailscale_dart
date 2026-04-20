@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/tailcfg"
 )
 
 func TestPeerStatusAddrMatchesHostAndDNSName(t *testing.T) {
@@ -26,19 +25,26 @@ func TestPeerStatusAddrMatchesHostAndDNSName(t *testing.T) {
 	}
 }
 
-func TestPingWasDirectTSMPSuccess(t *testing.T) {
+func TestPingPathUnknownWhenRouteMetadataMissing(t *testing.T) {
 	pr := &ipnstate.PingResult{}
-	if !pingWasDirect(pr, tailcfg.PingTSMP) {
-		t.Fatal("successful TSMP ping should be treated as non-DERP")
+	if got := pingPath(pr); got != "unknown" {
+		t.Fatalf("pingPath(empty) = %q, want unknown", got)
 	}
 }
 
-func TestPingWasDirectDiscoDerp(t *testing.T) {
+func TestPingPathDerp(t *testing.T) {
 	pr := &ipnstate.PingResult{
 		DERPRegionID:   1,
 		DERPRegionCode: "nyc",
 	}
-	if pingWasDirect(pr, tailcfg.PingDisco) {
-		t.Fatal("DERP disco ping incorrectly reported as direct")
+	if got := pingPath(pr); got != "derp" {
+		t.Fatalf("pingPath(derp) = %q, want derp", got)
+	}
+}
+
+func TestPingPathDirect(t *testing.T) {
+	pr := &ipnstate.PingResult{Endpoint: "100.64.0.2:41641"}
+	if got := pingPath(pr); got != "direct" {
+		t.Fatalf("pingPath(direct) = %q, want direct", got)
 	}
 }

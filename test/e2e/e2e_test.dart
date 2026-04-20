@@ -292,8 +292,8 @@ void main() {
 
     test('onPeersChange emits while peers are online', () async {
       for (var i = 0; i < 30; i++) {
-        final peers = await tsnet.peers();
-        if (peers.any((p) => p.ipv4 == peer.ipv4)) break;
+        final identity = await tsnet.whois(peer.ipv4);
+        if (identity != null) break;
         await Future<void>.delayed(const Duration(seconds: 1));
       }
 
@@ -308,6 +308,7 @@ void main() {
           .ping(peer.ipv4, timeout: const Duration(seconds: 10))
           .timeout(const Duration(seconds: 15));
       expect(result.latency, greaterThan(Duration.zero));
+      expect(result.path, isNot(PingPath.unknown));
     });
 
     test('diag.ping resolves MagicDNS hostnames', () async {

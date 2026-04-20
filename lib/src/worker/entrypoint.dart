@@ -415,9 +415,14 @@ PeerIdentity? _parseWhoIsResponse(Map<String, dynamic> json) {
 
 PingResult _parsePingResult(Map<String, dynamic> json) {
   final micros = (json['latencyMicros'] as num?)?.toInt() ?? 0;
+  final path = switch (json['path'] as String?) {
+    'direct' => PingPath.direct,
+    'derp' => PingPath.derp,
+    _ => PingPath.unknown,
+  };
   return PingResult(
     latency: Duration(microseconds: micros),
-    direct: json['direct'] as bool? ?? false,
+    path: path,
     derpRegion: json['derpRegion'] as String?,
   );
 }

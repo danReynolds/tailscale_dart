@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:http/http.dart' as pkg_http;
 import 'package:path/path.dart' as p;
 import 'src/api/diag.dart';
@@ -126,6 +127,13 @@ class Tailscale {
     _peersController.add(snapshot);
   }
 
+  Future<List<PeerStatus>> _snapshotPeers() async {
+    final peers = await _worker.peers();
+    final snapshot = List<PeerStatus>.unmodifiable(peers);
+    _latestPeers = snapshot;
+    return snapshot;
+  }
+
   // ─── Transport namespaces ───────────────────────────────────────────
   late final Tcp tcp = createTcp(
     dialFn: (host, port, timeout) =>
@@ -187,16 +195,30 @@ class Tailscale {
   /// the list has actually changed.
   Stream<List<PeerStatus>> get onPeersChange => Stream<List<PeerStatus>>.multi(
         (controller) {
-          final cached = _latestPeers;
-          if (cached != null) {
-            controller.add(cached);
-          }
+          var canceled = false;
           final subscription = _peersController.stream.listen(
             controller.add,
             onError: controller.addError,
             onDone: controller.close,
           );
-          controller.onCancel = subscription.cancel;
+
+          unawaited(() async {
+            try {
+              final snapshot = _latestPeers ?? await _snapshotPeers();
+              if (!canceled) {
+                controller.add(snapshot);
+              }
+            } catch (error, stackTrace) {
+              if (!canceled) {
+                controller.addError(error, stackTrace);
+              }
+            }
+          }());
+
+          controller.onCancel = () {
+            canceled = true;
+            return subscription.cancel();
+          };
         },
         isBroadcast: true,
       );
@@ -350,7 +372,7 @@ class Tailscale {
   /// Separate from [status] so apps can poll lightweight node state
   /// without re-pulling the full peer list on every refresh. For
   /// push-style updates, see [onPeersChange].
-  Future<List<PeerStatus>> peers() async => _worker.peers();
+  Future<List<PeerStatus>> peers() => _snapshotPeers();
 
   /// Resolves a tailnet IP to the peer's identity — stable node ID,
   /// owner login, hostname, and ACL tags — by querying the local

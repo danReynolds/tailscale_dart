@@ -22,23 +22,43 @@ enum PingType {
   icmp,
 }
 
+/// How confidently [Diag.ping] could classify the route to the peer.
+enum PingPath {
+  /// The ping result positively identified a direct peer-to-peer path.
+  direct,
+
+  /// The ping result positively identified a DERP-relayed path.
+  derp,
+
+  /// The ping succeeded, but the chosen ping type did not expose enough
+  /// routing metadata to classify the path confidently.
+  unknown,
+}
+
 /// Result of a [Diag.ping].
 @immutable
 class PingResult {
   const PingResult({
     required this.latency,
-    required this.direct,
+    required this.path,
     this.derpRegion,
   });
 
   /// Round-trip time to the peer.
   final Duration latency;
 
-  /// True if the path is direct peer-to-peer (WireGuard), false if routed
-  /// through a DERP relay.
-  final bool direct;
+  /// Best-effort classification of the route to the peer.
+  final PingPath path;
 
-  /// DERP region code (e.g. `nyc`, `sfo`) when [direct] is false.
+  /// Convenience getter for callers that only care about the positive case.
+  ///
+  /// Returns true only when [path] is definitively [PingPath.direct].
+  bool get direct => path == PingPath.direct;
+
+  /// True when the ping was definitively routed through DERP.
+  bool get isRelayed => path == PingPath.derp;
+
+  /// DERP region code (e.g. `nyc`, `sfo`) when [path] is [PingPath.derp].
   final String? derpRegion;
 
   @override
@@ -46,15 +66,15 @@ class PingResult {
       identical(this, other) ||
       other is PingResult &&
           latency == other.latency &&
-          direct == other.direct &&
+          path == other.path &&
           derpRegion == other.derpRegion;
 
   @override
-  int get hashCode => Object.hash(latency, direct, derpRegion);
+  int get hashCode => Object.hash(latency, path, derpRegion);
 
   @override
   String toString() =>
-      'PingResult(latency: $latency, direct: $direct, derpRegion: $derpRegion)';
+      'PingResult(latency: $latency, path: $path, derpRegion: $derpRegion)';
 }
 
 /// Current DERP relay map — the set of regions and nodes Tailscale
@@ -182,8 +202,7 @@ class ClientVersion {
       Object.hash(latestVersion, urgentSecurityUpdate, notifyText);
 
   @override
-  String toString() =>
-      'ClientVersion(latest: $latestVersion, '
+  String toString() => 'ClientVersion(latest: $latestVersion, '
       'urgentSecurityUpdate: $urgentSecurityUpdate)';
 }
 
@@ -202,7 +221,8 @@ typedef DiagCheckUpdateFn = Future<ClientVersion?> Function();
 /// Reached via [Tailscale.diag].
 abstract class Diag {
   /// Tailscale-level ping. Reports round-trip time and whether the path
-  /// is direct peer-to-peer or DERP-relayed.
+  /// is direct peer-to-peer, DERP-relayed, or not classifiable for the
+  /// chosen ping type.
   Future<PingResult> ping(
     String ip, {
     Duration? timeout,

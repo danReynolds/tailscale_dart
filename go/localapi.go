@@ -176,16 +176,12 @@ func DiagPing(ip string, timeoutMillis int, pingType string) string {
 		return jsonError(errors.New(pr.Err))
 	}
 
-	// "direct" is most meaningful for disco pings (the default), which
-	// report Endpoint whenever a direct UDP path was used. TSMP / ICMP
-	// pings don't always populate Endpoint even when the path is
-	// direct, so for those types a false value should be read as
-	// "unknown / not reported" rather than "definitely relayed".
+	path := pingPath(pr)
 	out := map[string]any{
 		"latencyMicros": int64(pr.LatencySeconds * 1_000_000),
-		"direct":        pingWasDirect(pr, pt),
+		"path":          path,
 	}
-	if pr.DERPRegionCode != "" {
+	if path == "derp" && pr.DERPRegionCode != "" {
 		out["derpRegion"] = pr.DERPRegionCode
 	}
 	b, _ := json.Marshal(out)
@@ -241,16 +237,14 @@ func firstPeerAddr(addrs []netip.Addr) (netip.Addr, bool) {
 	return netip.Addr{}, false
 }
 
-func pingWasDirect(pr *ipnstate.PingResult, pingType tailcfg.PingType) bool {
+func pingPath(pr *ipnstate.PingResult) string {
 	if pr.DERPRegionID != 0 || pr.PeerRelay != "" {
-		return false
+		return "derp"
 	}
-	// ipnstate.PingResult does not currently populate Endpoint/DERP fields for
-	// TSMP, so the best available contract is "successful TSMP ping => not DERP".
-	if pingType == tailcfg.PingTSMP {
-		return true
+	if pr.Endpoint != "" {
+		return "direct"
 	}
-	return pr.Endpoint != ""
+	return "unknown"
 }
 
 // DiagMetrics returns the Prometheus-format user metrics scrape from

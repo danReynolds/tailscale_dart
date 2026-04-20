@@ -263,11 +263,11 @@ ICMP).
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `diag.ping(ip, {timeout, type})` → `Future<PingResult>` | ✅ | RTT + direct-vs-DERP diagnostic. `type` is one of `disco` (default, no privileges), `tsmp`, `icmp`. | `final r = await tsnet.diag.ping('100.64.0.5');` |
+| `diag.ping(ip, {timeout, type})` → `Future<PingResult>` | ✅ | RTT + route diagnostic. `PingResult.path` distinguishes `direct`, `derp`, and `unknown` when the chosen ping type does not expose enough metadata. `type` is one of `disco` (default, no privileges), `tsmp`, `icmp`. | `final r = await tsnet.diag.ping('100.64.0.5');` |
 | `diag.metrics()` → `Future<String>` | ✅ | Prometheus-format metrics snapshot from the embedded runtime. | `print(await tsnet.diag.metrics());` |
 | `diag.derpMap()` → `Future<DERPMap>` | ✅ | Current DERP relay map. | `final m = await tsnet.diag.derpMap();` |
 | `diag.checkUpdate()` → `Future<ClientVersion?>` | ✅ | Newer version if available, else null. Fields match `tailcfg.ClientVersion` (latestVersion, urgentSecurityUpdate, notifyText). | `final v = await tsnet.diag.checkUpdate();` |
-| `PingResult`, `DERPMap`, `DERPRegion`, `DERPNode`, `ClientVersion` value types | ✅ | Immutable returns with `==` / `hashCode`. | `ping.direct ? ping.latency : ping.derpRegion` |
+| `PingResult`, `DERPMap`, `DERPRegion`, `DERPNode`, `ClientVersion` value types | ✅ | Immutable returns with `==` / `hashCode`. | `switch (ping.path) { ... }` |
 
 ## `whois` (top-level)
 

@@ -10,17 +10,40 @@ import 'package:tailscale/tailscale.dart';
 void main() {
   group('PingResult', () {
     test('==', () {
-      const a = PingResult(latency: Duration(milliseconds: 10), direct: true);
-      const b = PingResult(latency: Duration(milliseconds: 10), direct: true);
+      const a = PingResult(
+        latency: Duration(milliseconds: 10),
+        path: PingPath.direct,
+      );
+      const b = PingResult(
+        latency: Duration(milliseconds: 10),
+        path: PingPath.direct,
+      );
       const relayed = PingResult(
         latency: Duration(milliseconds: 10),
-        direct: false,
+        path: PingPath.derp,
         derpRegion: 'nyc',
       );
 
       expect(a, equals(b));
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(equals(relayed)));
+      expect(a.direct, isTrue);
+      expect(relayed.isRelayed, isTrue);
+    });
+
+    test('unknown path stays distinct from relayed', () {
+      const unknown = PingResult(
+        latency: Duration(milliseconds: 10),
+        path: PingPath.unknown,
+      );
+      const relayed = PingResult(
+        latency: Duration(milliseconds: 10),
+        path: PingPath.derp,
+      );
+
+      expect(unknown.direct, isFalse);
+      expect(unknown.isRelayed, isFalse);
+      expect(unknown, isNot(equals(relayed)));
     });
   });
 

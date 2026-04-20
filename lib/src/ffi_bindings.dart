@@ -113,7 +113,8 @@ external ffi.Pointer<Utf8> duneTlsDomains();
 /// "disco" (default), "tsmp", "icmp".
 ///
 /// Returns JSON:
-///   {"latencyMicros": N, "direct": bool, "derpRegion": "..."?}
+///   {"latencyMicros": N, "path": "direct"|"derp"|"unknown",
+///    "derpRegion": "..."?}
 ///     on success.
 ///   {"error": "..."} on failure.
 @ffi.Native<

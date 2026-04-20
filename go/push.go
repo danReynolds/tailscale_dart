@@ -15,7 +15,9 @@ import (
 	"sync"
 	"unsafe"
 
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 )
 
 var (
@@ -64,7 +66,8 @@ func StartWatch() {
 	}
 	watchCancel = cancel
 
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
+	watcher, err := lc.WatchIPNBus(ctx,
+		ipn.NotifyInitialState|ipn.NotifyInitialNetMap)
 	if err != nil {
 		postMessage(map[string]any{
 			"type":  "error",
@@ -91,25 +94,48 @@ func StartWatch() {
 				return
 			}
 
-			msg := map[string]any{"type": "status"}
-			changed := false
-
 			if n.State != nil {
-				msg["state"] = n.State.String()
-				changed = true
+				postMessage(map[string]any{
+					"type":  "status",
+					"state": n.State.String(),
+				})
 			}
 			if n.ErrMessage != nil {
-				msg["type"] = "error"
-				msg["code"] = "node"
-				msg["error"] = *n.ErrMessage
-				changed = true
+				postMessage(map[string]any{
+					"type":  "error",
+					"code":  "node",
+					"error": *n.ErrMessage,
+				})
 			}
-
-			if changed {
-				postMessage(msg)
+			if n.NetMap != nil {
+				publishPeerSnapshot(ctx, lc)
 			}
 		}
 	}()
+}
+
+// publishPeerSnapshot fetches the current peer list via LocalAPI and
+// pushes it to Dart. Called from the IPN bus watcher whenever the
+// NetMap changes — dedup/distinct is left to Dart subscribers.
+func publishPeerSnapshot(ctx context.Context, lc *local.Client) {
+	status, err := lc.Status(ctx)
+	if err != nil {
+		// Non-fatal — the app will pick up the next NetMap tick.
+		return
+	}
+	peers := make([]*ipnstate.PeerStatus, 0, len(status.Peer))
+	for _, peer := range status.Peer {
+		peers = append(peers, peer)
+	}
+	ipnstate.SortPeers(peers)
+	body, err := json.Marshal(peers)
+	if err != nil {
+		return
+	}
+	postMessage(map[string]any{
+		"type":  "peers",
+		"peers": json.RawMessage(body),
+	})
 }
 
 // StopWatch cancels the state watcher goroutine.

@@ -194,6 +194,12 @@ final class _WorkerRuntimeErrorEvent extends _WorkerEvent {
   final TailscaleRuntimeError error;
 }
 
+final class _WorkerPeersEvent extends _WorkerEvent {
+  const _WorkerPeersEvent({required this.peers});
+
+  final List<PeerStatus> peers;
+}
+
 sealed class _WorkerResponse extends _WorkerMainMessage {
   const _WorkerResponse(this.operation);
 

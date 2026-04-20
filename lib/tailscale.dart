@@ -90,6 +90,7 @@ class Tailscale {
   late final _worker = Worker(
     publishState: _stateController.add,
     publishRuntimeError: _errorController.add,
+    publishPeers: _peersController.add,
   );
 
   // Singleton broadcast controllers — live for the process lifetime alongside
@@ -100,6 +101,9 @@ class Tailscale {
   // ignore: close_sinks
   final StreamController<TailscaleRuntimeError> _errorController =
       StreamController<TailscaleRuntimeError>.broadcast();
+  // ignore: close_sinks
+  final StreamController<List<PeerStatus>> _peersController =
+      StreamController<List<PeerStatus>>.broadcast();
 
   static String get _stateDir =>
       p.join(_stateBaseDir!, _ownedStateSubdirectory);
@@ -159,13 +163,16 @@ class Tailscale {
   /// only see events for actual transitions.
   Stream<NodeState> get onStateChange => _stateController.stream.distinct();
 
-  /// Emits the full peer list on any change (node joined, left, went
-  /// on/off-line, tags or DNS name changed).
+  /// Emits the full peer list on any change (node joined, left,
+  /// went on/off-line, tags or DNS name changed).
   ///
-  /// Saves callers from polling [peers] on a timer. Derived from the
-  /// same IPN bus as [onStateChange].
-  Stream<List<PeerStatus>> get onPeersChange =>
-      throw UnimplementedError('onPeersChange not yet implemented');
+  /// Saves callers from polling [peers] on a timer. Derived from
+  /// the same IPN bus `NotifyInitialNetMap` subscription as
+  /// [onStateChange]; subscribers get the current peer inventory as
+  /// the first emission, then one emission per NetMap change.
+  /// Pipe through `.distinct()` if you only want to react when
+  /// the list has actually changed.
+  Stream<List<PeerStatus>> get onPeersChange => _peersController.stream;
 
   /// Background runtime errors pushed from the embedded node.
   Stream<TailscaleRuntimeError> get onError => _errorController.stream;

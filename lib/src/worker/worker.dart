@@ -17,12 +17,17 @@ part 'entrypoint.dart';
 
 /// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
 final class Worker {
-  Worker({required this.publishState, required this.publishRuntimeError}) {
+  Worker({
+    required this.publishState,
+    required this.publishRuntimeError,
+    required this.publishPeers,
+  }) {
     _start();
   }
 
   final void Function(NodeState state) publishState;
   final void Function(TailscaleRuntimeError error) publishRuntimeError;
+  final void Function(List<PeerStatus> peers) publishPeers;
 
   // Requests are processed synchronously on the worker isolate and each
   // command produces exactly one response in request order, so a FIFO queue is
@@ -66,6 +71,8 @@ final class Worker {
         publishRuntimeError(error);
       case _WorkerStateEvent(:final state):
         publishState(state);
+      case _WorkerPeersEvent(:final peers):
+        publishPeers(peers);
       case _WorkerResponse():
         _pendingRequests.removeFirst().complete(message);
     }

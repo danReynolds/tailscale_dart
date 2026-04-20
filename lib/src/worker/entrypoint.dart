@@ -41,6 +41,14 @@ void _workerEntrypoint(SendPort sendPort) {
         if (parsed['type'] == 'status') {
           final state = NodeState.parse(parsed['state'] as String?);
           sendPort.send(_WorkerStateEvent(state: state));
+          return;
+        }
+
+        if (parsed['type'] == 'peers') {
+          final raw = parsed['peers'] as List<dynamic>? ?? const [];
+          sendPort.send(_WorkerPeersEvent(
+            peers: PeerStatus.listFromJson(raw),
+          ));
         }
       } catch (_) {
         // Malformed message from Go — ignore.

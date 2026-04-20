@@ -1,4 +1,7 @@
+import 'package:meta/meta.dart';
+
 /// A saved login profile — one per account/tailnet stored on this node.
+@immutable
 class LoginProfile {
   const LoginProfile({
     required this.id,
@@ -14,6 +17,22 @@ class LoginProfile {
 
   /// Tailnet this profile belongs to (e.g. `example.com`).
   final String tailnetName;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LoginProfile &&
+          id == other.id &&
+          userLoginName == other.userLoginName &&
+          tailnetName == other.tailnetName;
+
+  @override
+  int get hashCode => Object.hash(id, userLoginName, tailnetName);
+
+  @override
+  String toString() =>
+      'LoginProfile(id: $id, userLoginName: $userLoginName, '
+      'tailnetName: $tailnetName)';
 }
 
 /// Multi-account / multi-tailnet support: one node, several identities.
@@ -23,22 +42,37 @@ class LoginProfile {
 class Profiles {
   const Profiles();
 
-  /// The currently active profile.
-  Future<LoginProfile> current() =>
+  /// The currently active profile, or null if no profile is active on
+  /// this node (e.g. the node has never logged in).
+  Future<LoginProfile?> current() =>
       throw UnimplementedError('profiles.current not yet implemented');
 
   /// All profiles saved on this node.
   Future<List<LoginProfile>> list() =>
       throw UnimplementedError('profiles.list not yet implemented');
 
-  /// Switches to [profileId]. The engine disconnects from the current
+  /// Switches to [profile]. The engine disconnects from the current
   /// tailnet and connects with the target profile's credentials.
-  Future<void> switchTo(String profileId) =>
-      throw UnimplementedError('profiles.switchTo not yet implemented');
+  ///
+  /// Prefer this over [switchToId] — passing a [LoginProfile] you got
+  /// from [list] catches stale IDs at the type level.
+  Future<void> switchTo(LoginProfile profile) => switchToId(profile.id);
+
+  /// Escape hatch for switching by stable profile ID — useful when the
+  /// caller has persisted an ID across sessions and doesn't have the
+  /// full [LoginProfile] handy.
+  Future<void> switchToId(String profileId) =>
+      throw UnimplementedError('profiles.switchToId not yet implemented');
 
   /// Removes a profile and its persisted credentials.
-  Future<void> delete(String profileId) =>
-      throw UnimplementedError('profiles.delete not yet implemented');
+  ///
+  /// Prefer this over [deleteById] — passing a [LoginProfile] you got
+  /// from [list] catches stale IDs at the type level.
+  Future<void> delete(LoginProfile profile) => deleteById(profile.id);
+
+  /// Escape hatch for deleting by stable profile ID.
+  Future<void> deleteById(String profileId) =>
+      throw UnimplementedError('profiles.deleteById not yet implemented');
 
   /// Creates an empty profile slot. The next [Tailscale.up] with a fresh
   /// authkey registers a new node under this slot without touching other

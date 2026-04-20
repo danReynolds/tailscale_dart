@@ -4,6 +4,10 @@
 /// fields useful at the application level.
 library;
 
+import 'package:meta/meta.dart';
+
+import '_equality.dart';
+
 /// The node's position in the connection lifecycle.
 ///
 /// Matches Go's `ipn.State` values. See
@@ -52,6 +56,7 @@ enum NodeState {
 ///
 /// Includes the node's connection status, assigned IPs, and health
 /// information. Peer inventory is exposed separately through `Tailscale.peers`.
+@immutable
 class TailscaleStatus {
   const TailscaleStatus({
     required this.state,
@@ -118,14 +123,40 @@ class TailscaleStatus {
     tailscaleIPs: [],
     health: [],
   );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TailscaleStatus &&
+          state == other.state &&
+          authUrl == other.authUrl &&
+          listEquals(tailscaleIPs, other.tailscaleIPs) &&
+          listEquals(health, other.health) &&
+          magicDNSSuffix == other.magicDNSSuffix;
+
+  @override
+  int get hashCode => Object.hash(
+        state,
+        authUrl,
+        Object.hashAll(tailscaleIPs),
+        Object.hashAll(health),
+        magicDNSSuffix,
+      );
+
+  @override
+  String toString() =>
+      'TailscaleStatus(state: $state, ips: $tailscaleIPs, '
+      'health: $health, magicDNSSuffix: $magicDNSSuffix)';
 }
 
 /// The status of a peer on the tailnet.
 ///
 /// Returned by `Tailscale.peers()`. Matches Go's `ipnstate.PeerStatus`.
+@immutable
 class PeerStatus {
   const PeerStatus({
     required this.publicKey,
+    required this.stableNodeId,
     required this.hostName,
     required this.dnsName,
     required this.os,
@@ -141,6 +172,14 @@ class PeerStatus {
 
   /// The peer's WireGuard public key.
   final String publicKey;
+
+  /// Stable Tailscale node identifier (e.g. `n1234AbCd`).
+  ///
+  /// Prefer this over [publicKey] when naming a peer in durable state —
+  /// the public key rotates when a node re-authenticates, the stable ID
+  /// does not. This is the value accepted by exit-node handles (see
+  /// `ExitNode.useById`).
+  final String stableNodeId;
 
   /// The peer's hostname on the tailnet.
   final String hostName;
@@ -203,6 +242,7 @@ class PeerStatus {
   factory PeerStatus.fromJson(Map<String, dynamic> json) {
     return PeerStatus(
       publicKey: json['PublicKey'] as String? ?? '',
+      stableNodeId: json['ID'] as String? ?? '',
       hostName: json['HostName'] as String? ?? '',
       dnsName: json['DNSName'] as String? ?? '',
       os: json['OS'] as String? ?? '',
@@ -216,6 +256,46 @@ class PeerStatus {
       curAddr: json['CurAddr'] as String?,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PeerStatus &&
+          publicKey == other.publicKey &&
+          stableNodeId == other.stableNodeId &&
+          hostName == other.hostName &&
+          dnsName == other.dnsName &&
+          os == other.os &&
+          listEquals(tailscaleIPs, other.tailscaleIPs) &&
+          online == other.online &&
+          active == other.active &&
+          rxBytes == other.rxBytes &&
+          txBytes == other.txBytes &&
+          lastSeen == other.lastSeen &&
+          relay == other.relay &&
+          curAddr == other.curAddr;
+
+  @override
+  int get hashCode => Object.hash(
+        publicKey,
+        stableNodeId,
+        hostName,
+        dnsName,
+        os,
+        Object.hashAll(tailscaleIPs),
+        online,
+        active,
+        rxBytes,
+        txBytes,
+        lastSeen,
+        relay,
+        curAddr,
+      );
+
+  @override
+  String toString() =>
+      'PeerStatus(id: $stableNodeId, hostName: $hostName, '
+      'ips: $tailscaleIPs, online: $online)';
 }
 
 extension on List<String> {

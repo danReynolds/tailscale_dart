@@ -155,7 +155,14 @@ class Tailscale {
 
   /// Brings the embedded Tailscale node up and connects to the control plane.
   ///
-  /// State transitions delivered via [onStateChange]:
+  /// Resolves on the first **stable** state: `running`, `needsLogin`, or
+  /// `needsMachineAuth`. This intentionally differs from Go's
+  /// `tsnet.Server.Up`, which blocks only on `running` — a Dart app that
+  /// needs to drive an in-app auth flow should not have to re-enter `up`
+  /// just to see the [TailscaleStatus.authUrl]. Inspect the returned
+  /// [TailscaleStatus.state] to decide what to do next.
+  ///
+  /// Transitions delivered via [onStateChange]:
   /// - First launch: `noState → starting → running`
   /// - Reconnect with persisted creds: `stopped → starting → running`
   /// - If creds are expired: `stopped → starting → needsLogin` (with
@@ -165,20 +172,45 @@ class Tailscale {
   ///
   /// Throws [TailscaleUpException] if no [authKey] is provided and no
   /// persisted session state exists.
-  Future<void> up({
+  Future<TailscaleStatus> up({
     String hostname = '',
     String? authKey,
     Uri? controlUrl,
   }) async {
     final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
-    final (:proxyPort, :proxyAuthToken) = await _worker.start(
-      hostname: hostname,
-      authKey: authKey ?? '',
-      controlUrl: resolvedControlUrl.toString(),
-      stateDir: _stateDir,
-    );
-    _http = TailscaleProxyClient(proxyPort, proxyAuthToken);
+
+    // Subscribe before start() so we don't miss an early Running emission.
+    final stable = Completer<void>();
+    final sub = onStateChange.listen((state) {
+      if (_isStableState(state) && !stable.isCompleted) {
+        stable.complete();
+      }
+    });
+
+    try {
+      final (:proxyPort, :proxyAuthToken) = await _worker.start(
+        hostname: hostname,
+        authKey: authKey ?? '',
+        controlUrl: resolvedControlUrl.toString(),
+        stateDir: _stateDir,
+      );
+      _http = TailscaleProxyClient(proxyPort, proxyAuthToken);
+
+      await stable.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {},
+      );
+    } finally {
+      await sub.cancel();
+    }
+
+    return status();
   }
+
+  static bool _isStableState(NodeState s) =>
+      s == NodeState.running ||
+      s == NodeState.needsLogin ||
+      s == NodeState.needsMachineAuth;
 
   /// Returns the current status snapshot.
   Future<TailscaleStatus> status() async =>
@@ -189,10 +221,10 @@ class Tailscale {
 
   /// Resolves a tailnet IP to the peer's identity (owner, hostname, tags).
   ///
-  /// Useful for authorization decisions on incoming connections —
-  /// combine with [tcp] `.bind(...)` and check tags before handling
-  /// the connection.
-  Future<PeerIdentity> whois(String ip) =>
+  /// Returns null if [ip] is not known on the current tailnet. Useful
+  /// for authorization decisions on incoming connections — combine
+  /// with `tcp.bind(...)` and check tags before handling.
+  Future<PeerIdentity?> whois(String ip) =>
       throw UnimplementedError('whois not yet implemented');
 
   /// Brings the embedded node down while preserving persisted credentials.

@@ -1,3 +1,39 @@
+/// Library-level exception types for embedded Tailscale operations.
+///
+/// - [TailscaleUsageException] — API used in an invalid lifecycle state.
+/// - [TailscaleOperationException] (+ subclasses) — operation-specific
+///   failures carrying a structured [TailscaleErrorCode].
+/// - [TailscaleRuntimeError] — async background failures pushed from Go.
+library;
+
+/// Structured category for operation failures.
+///
+/// Lets callers branch on common outcomes without string-matching
+/// [TailscaleException.message]. Maps to the distinctions the Go
+/// LocalAPI surface exposes (e.g. `IsAccessDeniedError`,
+/// `IsPreconditionsFailedError`).
+enum TailscaleErrorCode {
+  /// Target does not exist (unknown peer, waiting file, profile, route…).
+  notFound,
+
+  /// Authenticated but the operator's ACLs disallow the action.
+  forbidden,
+
+  /// Another concurrent writer landed first (ETag / version mismatch).
+  conflict,
+
+  /// A required precondition is not met — node not running, tailnet
+  /// feature disabled, missing capability, etc.
+  preconditionFailed,
+
+  /// The tailnet feature this call depends on is disabled by the
+  /// operator (Funnel off, MagicDNS off, Taildrop off, …).
+  featureDisabled,
+
+  /// Anything the runtime didn't categorize.
+  unknown,
+}
+
 /// Stable library-level exception base for embedded Tailscale operations.
 sealed class TailscaleException implements Exception {
   const TailscaleException(this.message, {this.cause});
@@ -23,47 +59,140 @@ final class TailscaleUsageException extends TailscaleException {
 }
 
 /// Base class for operation-specific failures such as `up()` or `listen()`.
+///
+/// Carries a structured [code] so callers can branch on outcomes without
+/// matching [message], plus the HTTP [statusCode] from the local API when
+/// the failure originated there (useful when [code] is
+/// [TailscaleErrorCode.unknown]).
 class TailscaleOperationException extends TailscaleException {
   const TailscaleOperationException(
     this.operation,
     String message, {
+    this.code = TailscaleErrorCode.unknown,
+    this.statusCode,
     super.cause,
   }) : super(message);
 
   /// Public API operation that failed.
   final String operation;
 
+  /// Structured failure category.
+  final TailscaleErrorCode code;
+
+  /// HTTP status code when the failure came from the local API, else null.
+  final int? statusCode;
+
   @override
   String toString() {
-    if (cause == null) {
-      return '$runtimeType($operation): $message';
+    final buffer = StringBuffer('$runtimeType($operation)');
+    if (code != TailscaleErrorCode.unknown) {
+      buffer.write('[${code.name}]');
     }
-    return '$runtimeType($operation): $message (cause: $cause)';
+    buffer.write(': $message');
+    if (cause != null) buffer.write(' (cause: $cause)');
+    return buffer.toString();
   }
 }
 
-/// Thrown when `up()` fails before the node reaches Running.
+/// Thrown when `up()` fails before the node reaches a stable state.
 final class TailscaleUpException extends TailscaleOperationException {
-  const TailscaleUpException(String message, {Object? cause})
-      : super('up', message, cause: cause);
+  const TailscaleUpException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('up', message);
 }
 
-/// Thrown when `listen()` fails to expose a local HTTP server.
+/// Thrown when `http.expose()` fails to forward tailnet traffic.
 final class TailscaleListenException extends TailscaleOperationException {
-  const TailscaleListenException(String message, {Object? cause})
-      : super('listen', message, cause: cause);
+  const TailscaleListenException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('listen', message);
 }
 
 /// Thrown when `status()` fails to decode or fetch native status.
 final class TailscaleStatusException extends TailscaleOperationException {
-  const TailscaleStatusException(String message, {Object? cause})
-      : super('status', message, cause: cause);
+  const TailscaleStatusException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('status', message);
 }
 
 /// Thrown when `logout()` fails to clear persisted state.
 final class TailscaleLogoutException extends TailscaleOperationException {
-  const TailscaleLogoutException(String message, {Object? cause})
-      : super('logout', message, cause: cause);
+  const TailscaleLogoutException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('logout', message);
+}
+
+/// Thrown when a `taildrop.*` call fails.
+final class TailscaleTaildropException extends TailscaleOperationException {
+  const TailscaleTaildropException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('taildrop', message);
+}
+
+/// Thrown when a `serve.*` call fails — most notably a conflicting
+/// [ServeConfig] write (the ETag didn't match).
+final class TailscaleServeException extends TailscaleOperationException {
+  const TailscaleServeException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('serve', message);
+}
+
+/// Thrown when a `prefs.*` call fails.
+final class TailscalePrefsException extends TailscaleOperationException {
+  const TailscalePrefsException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('prefs', message);
+}
+
+/// Thrown when a `profiles.*` call fails.
+final class TailscaleProfilesException extends TailscaleOperationException {
+  const TailscaleProfilesException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('profiles', message);
+}
+
+/// Thrown when an `exitNode.*` call fails.
+final class TailscaleExitNodeException extends TailscaleOperationException {
+  const TailscaleExitNodeException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('exitNode', message);
+}
+
+/// Thrown when a `diag.*` call fails.
+final class TailscaleDiagException extends TailscaleOperationException {
+  const TailscaleDiagException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('diag', message);
 }
 
 /// High-level category for asynchronous runtime errors pushed from Go.
@@ -93,6 +222,16 @@ final class TailscaleRuntimeError {
 
   /// High-level category for the background error.
   final TailscaleRuntimeErrorCode code;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TailscaleRuntimeError &&
+          message == other.message &&
+          code == other.code;
+
+  @override
+  int get hashCode => Object.hash(message, code);
 
   @override
   String toString() => '$runtimeType(${code.name}): $message';

@@ -2,15 +2,15 @@
 ///
 /// Fields cover the long tail of tsnet configuration that doesn't warrant
 /// its own top-level namespace. Use [Prefs.get] to read; use the named
-/// setters on [Prefs] (`advertiseRoutes(...)`, `setShieldsUp(true)`, etc.)
-/// for common single-field changes, or [Prefs.update] for atomic
-/// multi-field edits.
+/// setters on [Prefs] (`setAdvertisedRoutes(...)`, `setShieldsUp(true)`,
+/// etc.) for common single-field changes, or [Prefs.updateMasked] for
+/// atomic multi-field edits.
 class TailscalePrefs {
   const TailscalePrefs({
-    required this.advertiseRoutes,
+    required this.advertisedRoutes,
     required this.acceptRoutes,
     required this.shieldsUp,
-    required this.advertiseTags,
+    required this.advertisedTags,
     required this.wantRunning,
     required this.autoUpdate,
     required this.hostname,
@@ -18,7 +18,7 @@ class TailscalePrefs {
   });
 
   /// CIDRs this node advertises as subnet routes.
-  final List<String> advertiseRoutes;
+  final List<String> advertisedRoutes;
 
   /// Accept subnet routes advertised by other nodes.
   final bool acceptRoutes;
@@ -27,7 +27,7 @@ class TailscalePrefs {
   final bool shieldsUp;
 
   /// ACL tags to advertise when registering the node.
-  final List<String> advertiseTags;
+  final List<String> advertisedTags;
 
   /// Whether the engine should be connected (i.e. not manually paused).
   final bool wantRunning;
@@ -45,29 +45,33 @@ class TailscalePrefs {
 /// A multi-field atomic update to [TailscalePrefs]. Only fields set on
 /// this object are modified; unset fields are left alone.
 ///
-/// Mirrors `ipn.MaskedPrefs` on the Go side.
-class MaskedPrefs {
-  const MaskedPrefs({
-    this.advertiseRoutes,
+/// Mirrors `ipn.MaskedPrefs` on the Go side. Renamed to [PrefsUpdate] in
+/// this library because the "masked" terminology is a Go-isms that does
+/// not translate — in Dart, the builder-plus-mask pattern is expressed
+/// naturally as an object whose fields default to null.
+class PrefsUpdate {
+  const PrefsUpdate({
+    this.advertisedRoutes,
     this.acceptRoutes,
     this.shieldsUp,
-    this.advertiseTags,
+    this.advertisedTags,
     this.wantRunning,
     this.autoUpdate,
     this.hostname,
     this.exitNodeId,
   });
 
-  final List<String>? advertiseRoutes;
+  final List<String>? advertisedRoutes;
   final bool? acceptRoutes;
   final bool? shieldsUp;
-  final List<String>? advertiseTags;
+  final List<String>? advertisedTags;
   final bool? wantRunning;
   final bool? autoUpdate;
   final String? hostname;
 
   /// Pass empty string to clear the current exit node; `null` leaves
-  /// unchanged (Dart's single-null problem; use named setters for clarity).
+  /// unchanged (Dart's single-null problem; use named setters on
+  /// [Prefs] or [ExitNode] for clarity).
   final String? exitNodeId;
 }
 
@@ -84,8 +88,8 @@ class Prefs {
       throw UnimplementedError('prefs.get not yet implemented');
 
   /// Replaces the set of advertised subnet routes.
-  Future<TailscalePrefs> advertiseRoutes(List<String> cidrs) =>
-      throw UnimplementedError('prefs.advertiseRoutes not yet implemented');
+  Future<TailscalePrefs> setAdvertisedRoutes(List<String> cidrs) =>
+      throw UnimplementedError('prefs.setAdvertisedRoutes not yet implemented');
 
   /// Enables or disables accepting routes advertised by other nodes.
   Future<TailscalePrefs> setAcceptRoutes(bool enabled) =>
@@ -99,8 +103,12 @@ class Prefs {
   Future<TailscalePrefs> setAutoUpdate(bool enabled) =>
       throw UnimplementedError('prefs.setAutoUpdate not yet implemented');
 
-  /// Applies a [MaskedPrefs] atomically. Fields set on the mask are
-  /// updated; fields left null are unchanged.
-  Future<TailscalePrefs> updateMasked(MaskedPrefs mask) =>
+  /// Replaces the set of ACL tags advertised when registering the node.
+  Future<TailscalePrefs> setAdvertisedTags(List<String> tags) =>
+      throw UnimplementedError('prefs.setAdvertisedTags not yet implemented');
+
+  /// Applies a [PrefsUpdate] atomically. Fields set on the update are
+  /// written; fields left null are unchanged.
+  Future<TailscalePrefs> updateMasked(PrefsUpdate update) =>
       throw UnimplementedError('prefs.updateMasked not yet implemented');
 }

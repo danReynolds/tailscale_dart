@@ -37,8 +37,20 @@ export 'src/status.dart';
 const _ownedStateSubdirectory = 'tailscale';
 final Uri _defaultControlUrl = Uri.parse('https://controlplane.tailscale.com');
 
-/// Native log verbosity for the embedded Tailscale runtime.
-enum TailscaleLogLevel { silent, error, info }
+/// Native log verbosity for the embedded Tailscale runtime — controls
+/// what the Go side writes to stderr. Dart-side logging (e.g.
+/// [TailscaleRuntimeError]) is unaffected.
+enum TailscaleLogLevel {
+  /// No native logs at all.
+  silent,
+
+  /// Only error-level log lines.
+  error,
+
+  /// Informational + error logs. Useful during development; noisy in
+  /// production.
+  info,
+}
 
 extension on TailscaleLogLevel {
   int get nativeValue => switch (this) {
@@ -49,9 +61,12 @@ extension on TailscaleLogLevel {
 }
 
 /// Singleton embedded Tailscale node for the current Dart process.
+/// Wraps Tailscale's [tsnet](https://tailscale.com/kb/1244/tsnet)
+/// userspace library — the Dart app itself becomes a node on the
+/// tailnet, no OS-level VPN required.
 ///
-/// This package runs one node per process. Configure it once with [init],
-/// then access the singleton through [instance].
+/// This package runs one node per process. Configure it once with
+/// [init], then access the singleton through [instance].
 ///
 /// ## Shape
 ///
@@ -140,6 +155,14 @@ class Tailscale {
 
   /// Configures the Tailscale library. Call this once at app startup,
   /// alongside other library initializers.
+  ///
+  /// [stateDir] is an app-owned directory where Tailscale persists
+  /// its node identity, keys, and profile data under a `tailscale/`
+  /// subdirectory. Pick somewhere durable — on Flutter, the
+  /// `application_documents_directory` is a good default. On a fresh
+  /// install this directory is empty; after the first successful
+  /// [up], it contains credentials that let subsequent launches
+  /// reconnect without an auth key.
   static void init({
     required String stateDir,
     TailscaleLogLevel logLevel = TailscaleLogLevel.silent,
@@ -153,14 +176,40 @@ class Tailscale {
     native.duneSetLogLevel(logLevel.nativeValue);
   }
 
-  /// Brings the embedded Tailscale node up and connects to the control plane.
+  /// Brings the embedded Tailscale node up and connects to the control
+  /// plane — Tailscale's coordination service at
+  /// `controlplane.tailscale.com`, or a self-hosted
+  /// [Headscale](https://github.com/juanfont/headscale) if you set
+  /// [controlUrl]. Registers the node on first launch, reconnects from
+  /// persisted credentials on subsequent launches.
   ///
-  /// Resolves on the first **stable** state: `running`, `needsLogin`, or
-  /// `needsMachineAuth`. This intentionally differs from Go's
-  /// `tsnet.Server.Up`, which blocks only on `running` — a Dart app that
-  /// needs to drive an in-app auth flow should not have to re-enter `up`
-  /// just to see the [TailscaleStatus.authUrl]. Inspect the returned
-  /// [TailscaleStatus.state] to decide what to do next.
+  /// [authKey] is required for first registration; get one from the
+  /// tailnet admin panel at
+  /// <https://login.tailscale.com/admin/settings/keys> (see
+  /// <https://tailscale.com/kb/1085/auth-keys>). Reusable keys let you
+  /// call [up] from multiple processes; ephemeral keys auto-expire
+  /// after the node goes offline. Subsequent launches can omit it —
+  /// the persisted session state reconnects automatically.
+  ///
+  /// [hostname] sets the tailnet-visible hostname and the
+  /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) label, so the
+  /// node becomes reachable at `<hostname>.<tailnet>.ts.net`. Leave
+  /// unset to let the embedded runtime pick the OS default.
+  ///
+  /// Resolves on the first **stable** state: `running`, `needsLogin`,
+  /// or `needsMachineAuth`. This intentionally differs from Go's
+  /// `tsnet.Server.Up`, which blocks only on `running` — a Dart app
+  /// that needs to drive an in-app auth flow should not have to
+  /// re-enter [up] just to see the [TailscaleStatus.authUrl]. Inspect
+  /// the returned [TailscaleStatus.state] to decide what to do next:
+  ///
+  /// - `running` — ready; [http], [tcp], etc. are usable.
+  /// - `needsLogin` — open [TailscaleStatus.authUrl] in a browser /
+  ///   web view; the node finishes connecting after the user completes
+  ///   the flow.
+  /// - `needsMachineAuth` — authenticated but awaiting admin approval
+  ///   on the control plane (
+  ///   [device approval](https://tailscale.com/kb/1099/device-approval)).
   ///
   /// Transitions delivered via [onStateChange]:
   /// - First launch: `noState → starting → running`
@@ -233,18 +282,33 @@ class Tailscale {
       s == NodeState.needsLogin ||
       s == NodeState.needsMachineAuth;
 
-  /// Returns the current status snapshot.
+  /// Returns the current node status — lifecycle state, assigned
+  /// tailnet IPs, health warnings, and MagicDNS suffix. Peer
+  /// inventory is separate; call [peers] when you need it.
+  ///
+  /// Safe to call before [up] — returns [NodeState.stopped] when
+  /// persisted credentials exist (ready to reconnect) and
+  /// [NodeState.noState] when they don't.
   Future<TailscaleStatus> status() async =>
       _worker.status(stateDir: _stateDir);
 
-  /// Returns the current peer snapshot.
+  /// Returns the current peer inventory — every node on the tailnet
+  /// this node is aware of, whether online right now or not.
+  ///
+  /// Separate from [status] so apps can poll lightweight node state
+  /// without re-pulling the full peer list on every refresh. For
+  /// push-style updates, see [onPeersChange].
   Future<List<PeerStatus>> peers() async => _worker.peers();
 
-  /// Resolves a tailnet IP to the peer's identity (owner, hostname, tags).
+  /// Resolves a tailnet IP to the peer's identity — stable node ID,
+  /// owner login, hostname, and ACL tags — by querying the local
+  /// LocalAPI.
   ///
-  /// Returns null if [ip] is not known on the current tailnet. Useful
-  /// for authorization decisions on incoming connections — combine
-  /// with `tcp.bind(...)` and check tags before handling.
+  /// Returns null if [ip] is not known on the current tailnet.
+  /// Useful for authorization decisions on incoming connections:
+  /// combine with [tcp] `.bind(...)` and check
+  /// [PeerIdentity.tags] before handling. See
+  /// <https://tailscale.com/kb/1068/tags> for the tag model.
   Future<PeerIdentity?> whois(String ip) =>
       throw UnimplementedError('whois not yet implemented');
 

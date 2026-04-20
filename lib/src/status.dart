@@ -8,10 +8,8 @@ import 'package:meta/meta.dart';
 
 import '_equality.dart';
 
-/// The node's position in the connection lifecycle.
-///
-/// Matches Go's `ipn.State` values. See
-/// https://pkg.go.dev/tailscale.com/ipn#State
+/// The node's position in the connection lifecycle. Mirrors Go's
+/// [`ipn.State`](https://pkg.go.dev/tailscale.com/ipn#State).
 enum NodeState {
   /// No persisted credentials and the engine has not been started.
   ///
@@ -19,14 +17,18 @@ enum NodeState {
   /// An [authKey] must be provided to [Tailscale.up] to proceed.
   noState,
 
-  /// The node needs authentication. Provide an auth key via [Tailscale.up].
+  /// The node needs authentication. Open
+  /// [TailscaleStatus.authUrl] in a browser / web view to complete
+  /// the login flow.
   needsLogin,
 
   /// The node is authenticated but waiting for admin approval on the
-  /// control plane.
+  /// control plane. See
+  /// <https://tailscale.com/kb/1099/device-approval>.
   needsMachineAuth,
 
-  /// The node is connecting to the tailnet (WireGuard tunnel coming up).
+  /// The node is connecting to the tailnet
+  /// ([WireGuard](https://www.wireguard.com/) tunnel coming up).
   starting,
 
   /// The node is connected and ready to send/receive traffic.
@@ -71,16 +73,23 @@ class TailscaleStatus {
 
   /// Login URL from the control plane, if authentication is required.
   ///
-  /// Open this in a browser or web view when [needsLogin] is true.
+  /// Open this in a browser or web view when [needsLogin] is true;
+  /// the control plane will complete the flow and this node will
+  /// transition to `running` once the user approves the login.
   final Uri? authUrl;
 
-  /// This node's assigned Tailscale IP addresses.
+  /// This node's assigned Tailscale IP addresses — one IPv4 in the
+  /// [CGNAT range](https://tailscale.com/kb/1304/ip-pool) (100.64.0.0/10)
+  /// and one IPv6 in `fd7a:115c:a1e0::/48`.
   final List<String> tailscaleIPs;
 
-  /// Health check warnings. Empty means healthy.
+  /// Health check warnings from the embedded runtime (e.g. "no
+  /// connectivity to DERP servers"). Empty means all checks pass.
   final List<String> health;
 
-  /// The MagicDNS suffix for the tailnet (e.g. "tailnet-name.ts.net").
+  /// The [MagicDNS](https://tailscale.com/kb/1081/magicdns) suffix for
+  /// the tailnet (e.g. `tailnet-name.ts.net`) — append this to any
+  /// peer's hostname to get a resolvable name.
   ///
   /// May be null when tailnet metadata is not yet available.
   final String? magicDNSSuffix;
@@ -149,9 +158,11 @@ class TailscaleStatus {
       'health: $health, magicDNSSuffix: $magicDNSSuffix)';
 }
 
-/// The status of a peer on the tailnet.
+/// The status of a peer on the tailnet — any other node this node
+/// knows about, including offline peers.
 ///
-/// Returned by `Tailscale.peers()`. Matches Go's `ipnstate.PeerStatus`.
+/// Returned by `Tailscale.peers()`. Matches Go's
+/// [`ipnstate.PeerStatus`](https://pkg.go.dev/tailscale.com/ipnstate#PeerStatus).
 @immutable
 class PeerStatus {
   const PeerStatus({
@@ -170,7 +181,9 @@ class PeerStatus {
     this.curAddr,
   });
 
-  /// The peer's WireGuard public key.
+  /// The peer's [WireGuard](https://www.wireguard.com/) public key.
+  /// Rotates whenever the peer re-registers — prefer [stableNodeId]
+  /// for durable references.
   final String publicKey;
 
   /// Stable Tailscale node identifier (e.g. `n1234AbCd`).
@@ -181,13 +194,16 @@ class PeerStatus {
   /// `ExitNode.useById`).
   final String stableNodeId;
 
-  /// The peer's hostname on the tailnet.
+  /// The peer's hostname on the tailnet. Also the
+  /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) label.
   final String hostName;
 
-  /// The peer's MagicDNS name (for example, `my-laptop.tailnet.ts.net.`).
+  /// The peer's full
+  /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) name
+  /// (for example, `my-laptop.tailnet.ts.net.`).
   ///
-  /// The upstream value may be a fully-qualified domain name with a trailing
-  /// dot.
+  /// The upstream value may be a fully-qualified domain name with a
+  /// trailing dot.
   final String dnsName;
 
   /// The peer's operating system.
@@ -216,7 +232,9 @@ class PeerStatus {
   /// Most useful for offline peers.
   final DateTime? lastSeen;
 
-  /// The DERP relay region code in use (for example, `nyc`), or null if direct.
+  /// The [DERP](https://tailscale.com/kb/1232/derp-servers) relay
+  /// region code in use (for example, `nyc`), or null when the path
+  /// to this peer is direct (peer-to-peer WireGuard).
   final String? relay;
 
   /// The current direct address in `host:port` form, or null if relayed.

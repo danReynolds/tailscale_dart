@@ -36,13 +36,17 @@ class ServeConfig {
   String toString() => 'ServeConfig(etag: $etag)';
 }
 
-/// HTTP routing (`tailscale serve`) + public-internet publishing
-/// (`tailscale funnel`) config.
+/// Programmatic access to the routing configuration the
+/// [`tailscale serve`](https://tailscale.com/kb/1242/tailscale-serve)
+/// and [`tailscale funnel`](https://tailscale.com/kb/1223/funnel) CLIs
+/// edit — path-prefix routing, static file serving, reverse proxying,
+/// and per-port Funnel enablement.
 ///
-/// Reached via [Tailscale.serve]. The API is intentionally minimal — get
-/// the current config, transform it as an immutable value client-side,
-/// push the new one. All the addRoute/removeRoute operations compose as
-/// transforms on [ServeConfig], not methods on this class.
+/// Reached via [Tailscale.serve]. The API is intentionally minimal —
+/// get the current config, transform it as an immutable value
+/// client-side, push the new one. All the addRoute/removeRoute
+/// operations compose as transforms on [ServeConfig], not methods on
+/// this class.
 class Serve {
   /// Library-internal. Reach via `Tailscale.instance.serve`.
   @internal

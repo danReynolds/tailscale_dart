@@ -55,11 +55,19 @@ class WaitingFile {
   String toString() => 'WaitingFile(name: $name, size: $size)';
 }
 
-/// Peer-to-peer file transfer ("Taildrop") over the tailnet.
+/// Peer-to-peer file transfer ("Taildrop") over the tailnet. Sends
+/// travel directly between nodes with no third-party service in the
+/// middle — good fit for mobile-to-desktop sync, collab tools, and
+/// anywhere you'd otherwise set up a file server.
 ///
-/// Reached via [Tailscale.taildrop]. Sends arrive directly between nodes
-/// with no intermediary — good fit for mobile-to-desktop sync, collab
-/// tools, and anywhere you'd otherwise set up a file server.
+/// See <https://tailscale.com/kb/1106/taildrop> for the full feature
+/// (send targets, ACL requirements, receive directory semantics on
+/// native Tailscale clients — `package:tailscale` exposes the same
+/// LocalAPI surface but leaves file persistence to the caller).
+///
+/// Reached via [Tailscale.taildrop]. Requires the tailnet operator to
+/// have Taildrop enabled in ACLs (on by default); targets are
+/// filtered to the set the ACLs allow this node to send to.
 class Taildrop {
   /// Library-internal. Reach via `Tailscale.instance.taildrop`.
   @internal

@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:meta/meta.dart';
 
-/// UDP datagram primitives over the tailnet.
+/// UDP datagram sockets over the tailnet — tunneled over WireGuard,
+/// same direct-or-DERP fallback as TCP (see
+/// <https://tailscale.com/kb/1257/connection-types>).
 ///
 /// Reached via [Tailscale.udp].
 class Udp {

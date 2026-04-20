@@ -3,14 +3,22 @@ import 'package:meta/meta.dart';
 import '../_equality.dart';
 
 /// Path type for [Diag.ping]. Matches `ipnstate.PingType`.
+///
+/// [disco] is the recommended default — it's Tailscale's own
+/// lightweight probe, doesn't require elevated privileges, and
+/// reports the real path (direct vs DERP). [icmp] crosses the
+/// tunnel and uses the kernel's raw-socket stack, which typically
+/// requires root / the `CAP_NET_RAW` capability.
 enum PingType {
-  /// Disco pings (Tailscale's own lightweight probe).
+  /// Disco pings — Tailscale's own lightweight path probe.
+  /// Preferred for direct-vs-DERP diagnostics.
   disco,
 
-  /// TSMP — Tailscale's reliable-message protocol.
+  /// TSMP — Tailscale's reliable-message protocol. Crosses the tunnel
+  /// and exercises the full peer stack.
   tsmp,
 
-  /// ICMP (platform-dependent; may require privileges).
+  /// ICMP (platform-dependent; typically requires privileges).
   icmp,
 }
 
@@ -49,7 +57,10 @@ class PingResult {
       'PingResult(latency: $latency, direct: $direct, derpRegion: $derpRegion)';
 }
 
-/// Current DERP relay map. Mirrors `tailcfg.DERPMap`.
+/// Current DERP relay map — the set of regions and nodes Tailscale
+/// will route through when a direct peer-to-peer path isn't available.
+/// Mirrors `tailcfg.DERPMap`. See
+/// <https://tailscale.com/kb/1232/derp-servers>.
 @immutable
 class DERPMap {
   const DERPMap({required this.regions, required this.omitDefaultRegions});

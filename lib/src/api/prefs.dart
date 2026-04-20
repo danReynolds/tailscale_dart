@@ -19,16 +19,22 @@ class TailscalePrefs {
     this.exitNodeId,
   });
 
-  /// CIDRs this node advertises as subnet routes.
+  /// CIDRs this node advertises as a subnet router. Requires operator
+  /// approval in the admin panel before peers will pick them up.
+  /// See <https://tailscale.com/kb/1019/subnets>.
   final List<String> advertisedRoutes;
 
-  /// Accept subnet routes advertised by other nodes.
+  /// Accept subnet routes advertised by other nodes on the tailnet.
   final bool acceptRoutes;
 
-  /// When true, no inbound connections are accepted.
+  /// When true, reject all inbound connections to this node — useful
+  /// for locked-down laptops / servers that should only initiate.
+  /// See <https://tailscale.com/kb/1072/client-preferences#block-incoming-connections>.
   final bool shieldsUp;
 
-  /// ACL tags to advertise when registering the node.
+  /// [ACL tags](https://tailscale.com/kb/1068/tags) to advertise when
+  /// registering the node. Tags let authz decisions reference this
+  /// node by role (e.g. `tag:server`) rather than by owner.
   final List<String> advertisedTags;
 
   /// Whether the engine should be connected (i.e. not manually paused).
@@ -91,23 +97,28 @@ class Prefs {
   Future<TailscalePrefs> get() =>
       throw UnimplementedError('prefs.get not yet implemented');
 
-  /// Replaces the set of advertised subnet routes.
+  /// Replaces the set of CIDRs this node advertises as a subnet router.
+  /// See <https://tailscale.com/kb/1019/subnets>. Still requires admin
+  /// approval of each route in the control plane before peers use it.
   Future<TailscalePrefs> setAdvertisedRoutes(List<String> cidrs) =>
       throw UnimplementedError('prefs.setAdvertisedRoutes not yet implemented');
 
-  /// Enables or disables accepting routes advertised by other nodes.
+  /// Accept subnet routes advertised by other nodes on the tailnet.
   Future<TailscalePrefs> setAcceptRoutes(bool enabled) =>
       throw UnimplementedError('prefs.setAcceptRoutes not yet implemented');
 
-  /// Enables or disables "shields up" (reject all inbound connections).
+  /// Reject all inbound connections when true. See
+  /// <https://tailscale.com/kb/1072/client-preferences#block-incoming-connections>.
   Future<TailscalePrefs> setShieldsUp(bool enabled) =>
       throw UnimplementedError('prefs.setShieldsUp not yet implemented');
 
-  /// Enables or disables auto-updating the embedded runtime.
+  /// Opt in or out of automatic tsnet version updates from the control
+  /// plane.
   Future<TailscalePrefs> setAutoUpdate(bool enabled) =>
       throw UnimplementedError('prefs.setAutoUpdate not yet implemented');
 
-  /// Replaces the set of ACL tags advertised when registering the node.
+  /// Replaces the set of [ACL tags](https://tailscale.com/kb/1068/tags)
+  /// this node advertises when registering.
   Future<TailscalePrefs> setAdvertisedTags(List<String> tags) =>
       throw UnimplementedError('prefs.setAdvertisedTags not yet implemented');
 

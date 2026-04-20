@@ -59,11 +59,21 @@ extension FunnelSocket on Socket {
   FunnelMetadata? get funnel => _funnelMetadata[this];
 }
 
-/// Public-internet HTTPS via Tailscale Funnel.
+/// Public-internet HTTPS via Tailscale Funnel: expose this node to the
+/// open internet (not just the tailnet) at `https://<node>.<tailnet>.ts.net`,
+/// with edge TLS termination by Tailscale's Funnel relay. The cert is
+/// auto-provisioned (same mechanism as [Tls]), and traffic is proxied
+/// from the Funnel edge through the tailnet to this node.
 ///
-/// Reached via [Tailscale.funnel]. Requires the tailnet operator to have
-/// enabled Funnel in ACLs for this node and an allowed Funnel port
-/// (typically 443, 8443, or 10000).
+/// See <https://tailscale.com/kb/1223/funnel> for the full feature
+/// (ACL configuration, allowed ports, rate limits).
+///
+/// Reached via [Tailscale.funnel]. Requires:
+/// - Funnel enabled for this node in the tailnet's
+///   [ACLs](https://tailscale.com/kb/1018/acls) (operator action —
+///   check with an admin if [bind] returns a `featureDisabled` error).
+/// - One of Tailscale's allowed Funnel ports: **443**, **8443**,
+///   or **10000**.
 ///
 /// Accepted sockets carry a [FunnelMetadata] side-channel accessible
 /// via `socket.funnel` (see [FunnelSocket]) — use that to get the

@@ -10,13 +10,14 @@ library;
 ///
 /// Lets callers branch on common outcomes without string-matching
 /// [TailscaleException.message]. Maps to the distinctions the Go
-/// LocalAPI surface exposes (e.g. `IsAccessDeniedError`,
-/// `IsPreconditionsFailedError`).
+/// [LocalAPI](https://pkg.go.dev/tailscale.com/client/local) surface
+/// exposes (e.g. `IsAccessDeniedError`, `IsPreconditionsFailedError`).
 enum TailscaleErrorCode {
   /// Target does not exist (unknown peer, waiting file, profile, route…).
   notFound,
 
-  /// Authenticated but the operator's ACLs disallow the action.
+  /// Authenticated but the tailnet's
+  /// [ACLs](https://tailscale.com/kb/1018/acls) disallow the action.
   forbidden,
 
   /// Another concurrent writer landed first (ETag / version mismatch).
@@ -27,7 +28,9 @@ enum TailscaleErrorCode {
   preconditionFailed,
 
   /// The tailnet feature this call depends on is disabled by the
-  /// operator (Funnel off, MagicDNS off, Taildrop off, …).
+  /// operator (Funnel off,
+  /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) off, Taildrop
+  /// off, …).
   featureDisabled,
 
   /// Anything the runtime didn't categorize.

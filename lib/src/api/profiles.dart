@@ -36,10 +36,17 @@ class LoginProfile {
       'tailnetName: $tailnetName)';
 }
 
-/// Multi-account / multi-tailnet support: one node, several identities.
+/// Multi-account / multi-tailnet support: one node with several saved
+/// login profiles. Switching changes which tailnet this node is a
+/// member of without re-authenticating from scratch. Useful for a
+/// single app that needs to operate in both a personal and a work
+/// tailnet, or dev vs prod.
 ///
-/// Reached via [Tailscale.profiles]. Useful for a single app that needs to
-/// operate in both a personal and a work tailnet, or dev vs. prod.
+/// Mirrors the profile-management surface of the `tailscale` CLI —
+/// see <https://tailscale.com/kb/1331/login-profiles> for the
+/// end-user-facing concept.
+///
+/// Reached via [Tailscale.profiles].
 class Profiles {
   /// Library-internal. Reach via `Tailscale.instance.profiles`.
   @internal

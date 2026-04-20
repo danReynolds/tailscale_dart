@@ -118,8 +118,7 @@ void main() {
     expect(
       sequence,
       containsAllInOrder([NodeState.starting, NodeState.running]),
-      reason:
-          'a fresh up() must emit Starting before Running — skipping '
+      reason: 'a fresh up() must emit Starting before Running — skipping '
           'Starting leaves UI subscribers without the "connecting" state',
     );
 
@@ -216,7 +215,8 @@ void main() {
           .timeout(const Duration(seconds: 30));
 
       try {
-        final payload = utf8.encode('tcp-echo-${DateTime.now().microsecondsSinceEpoch}');
+        final payload =
+            utf8.encode('tcp-echo-${DateTime.now().microsecondsSinceEpoch}');
         socket.add(payload);
         await socket.flush();
 
@@ -291,8 +291,14 @@ void main() {
     });
 
     test('onPeersChange emits while peers are online', () async {
-      final first = await tsnet.onPeersChange.first
-          .timeout(const Duration(seconds: 30));
+      for (var i = 0; i < 30; i++) {
+        final peers = await tsnet.peers();
+        if (peers.any((p) => p.ipv4 == peer.ipv4)) break;
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+
+      final first =
+          await tsnet.onPeersChange.first.timeout(const Duration(seconds: 2));
       expect(first, isNotEmpty);
       expect(first.any((p) => p.ipv4 == peer.ipv4), isTrue);
     });
@@ -300,6 +306,13 @@ void main() {
     test('diag.ping reaches the peer', () async {
       final result = await tsnet.diag
           .ping(peer.ipv4, timeout: const Duration(seconds: 10))
+          .timeout(const Duration(seconds: 15));
+      expect(result.latency, greaterThan(Duration.zero));
+    });
+
+    test('diag.ping resolves MagicDNS hostnames', () async {
+      final result = await tsnet.diag
+          .ping(peer.hostname, timeout: const Duration(seconds: 10))
           .timeout(const Duration(seconds: 15));
       expect(result.latency, greaterThan(Duration.zero));
     });
@@ -452,8 +465,7 @@ void main() {
     test('down from running emits [Stopped]', () async {
       await _recordUntil(tsnet, NodeState.running, bringUp);
 
-      final sequence =
-          await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
+      final sequence = await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
 
       expect(
         sequence,
@@ -465,8 +477,7 @@ void main() {
       expect((await tsnet.status()).state, NodeState.stopped);
     });
 
-    test('up without auth key reconnects via persisted credentials',
-        () async {
+    test('up without auth key reconnects via persisted credentials', () async {
       final sequence = await _recordUntil(tsnet, NodeState.running, reconnect);
 
       expect(
@@ -535,8 +546,7 @@ void main() {
       );
     });
 
-    test('logout from stopped emits [NoState] (no phantom Stopped)',
-        () async {
+    test('logout from stopped emits [NoState] (no phantom Stopped)', () async {
       final sequence =
           await _recordUntil(tsnet, NodeState.noState, tsnet.logout);
 

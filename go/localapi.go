@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
 
@@ -134,14 +135,10 @@ func TlsDomains() string {
 }
 
 // DiagPing runs a Tailscale-level ping against the given tailnet IP
-// and returns JSON matching the Dart PingResult shape.
+// or MagicDNS name and returns JSON matching the Dart PingResult shape.
 // `timeoutMillis <= 0` means no timeout. `pingType` is one of
 // "disco" (default), "tsmp", or "icmp".
 func DiagPing(ip string, timeoutMillis int, pingType string) string {
-	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
-	if err != nil {
-		return jsonError(fmt.Errorf("invalid IP %q: %w", ip, err))
-	}
 	var pt tailcfg.PingType
 	switch strings.ToLower(strings.TrimSpace(pingType)) {
 	case "", "disco":
@@ -166,6 +163,11 @@ func DiagPing(ip string, timeoutMillis int, pingType string) string {
 		defer cancel()
 	}
 
+	addr, err := resolvePingAddr(ctx, lc, ip)
+	if err != nil {
+		return jsonError(err)
+	}
+
 	pr, err := lc.Ping(ctx, addr, pt)
 	if err != nil {
 		return jsonError(err)
@@ -181,13 +183,74 @@ func DiagPing(ip string, timeoutMillis int, pingType string) string {
 	// "unknown / not reported" rather than "definitely relayed".
 	out := map[string]any{
 		"latencyMicros": int64(pr.LatencySeconds * 1_000_000),
-		"direct":        pr.Endpoint != "" && pr.DERPRegionID == 0,
+		"direct":        pingWasDirect(pr, pt),
 	}
 	if pr.DERPRegionCode != "" {
 		out["derpRegion"] = pr.DERPRegionCode
 	}
 	b, _ := json.Marshal(out)
 	return string(b)
+}
+
+func resolvePingAddr(ctx context.Context, lc *local.Client, target string) (netip.Addr, error) {
+	target = strings.TrimSpace(target)
+	if addr, err := netip.ParseAddr(target); err == nil {
+		return addr, nil
+	}
+
+	status, err := lc.Status(ctx)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+
+	trimmedTarget := strings.TrimSuffix(target, ".")
+	if addr, ok := peerStatusAddr(status.Self, trimmedTarget); ok {
+		return addr, nil
+	}
+	for _, peer := range status.Peer {
+		if addr, ok := peerStatusAddr(peer, trimmedTarget); ok {
+			return addr, nil
+		}
+	}
+	return netip.Addr{}, fmt.Errorf("unknown tailnet IP or MagicDNS name %q", target)
+}
+
+func peerStatusAddr(peer *ipnstate.PeerStatus, target string) (netip.Addr, bool) {
+	if peer == nil {
+		return netip.Addr{}, false
+	}
+	hostName := strings.TrimSpace(peer.HostName)
+	dnsName := strings.TrimSuffix(strings.TrimSpace(peer.DNSName), ".")
+	if !strings.EqualFold(target, hostName) && !strings.EqualFold(target, dnsName) {
+		return netip.Addr{}, false
+	}
+	return firstPeerAddr(peer.TailscaleIPs)
+}
+
+func firstPeerAddr(addrs []netip.Addr) (netip.Addr, bool) {
+	for _, addr := range addrs {
+		if addr.Is4() {
+			return addr, true
+		}
+	}
+	for _, addr := range addrs {
+		if addr.IsValid() {
+			return addr, true
+		}
+	}
+	return netip.Addr{}, false
+}
+
+func pingWasDirect(pr *ipnstate.PingResult, pingType tailcfg.PingType) bool {
+	if pr.DERPRegionID != 0 || pr.PeerRelay != "" {
+		return false
+	}
+	// ipnstate.PingResult does not currently populate Endpoint/DERP fields for
+	// TSMP, so the best available contract is "successful TSMP ping => not DERP".
+	if pingType == tailcfg.PingTSMP {
+		return true
+	}
+	return pr.Endpoint != ""
 }
 
 // DiagMetrics returns the Prometheus-format user metrics scrape from

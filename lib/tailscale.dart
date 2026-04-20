@@ -20,7 +20,12 @@ import 'src/status.dart';
 import 'src/worker/worker.dart';
 
 export 'src/api/diag.dart'
-    hide createDiag, DiagPingFn, DiagMetricsFn, DiagDERPMapFn, DiagCheckUpdateFn;
+    hide
+        createDiag,
+        DiagPingFn,
+        DiagMetricsFn,
+        DiagDERPMapFn,
+        DiagCheckUpdateFn;
 export 'src/api/exit_node.dart';
 export 'src/api/funnel.dart' hide attachFunnelMetadata;
 export 'src/api/http.dart' hide createHttp;
@@ -86,11 +91,12 @@ class Tailscale {
   static String? _stateBaseDir;
 
   pkg_http.Client? _http;
+  List<PeerStatus>? _latestPeers;
 
   late final _worker = Worker(
     publishState: _stateController.add,
     publishRuntimeError: _errorController.add,
-    publishPeers: _peersController.add,
+    publishPeers: _publishPeers,
   );
 
   // Singleton broadcast controllers — live for the process lifetime alongside
@@ -111,6 +117,13 @@ class Tailscale {
   void _reset() {
     _http?.close();
     _http = null;
+    _latestPeers = null;
+  }
+
+  void _publishPeers(List<PeerStatus> peers) {
+    final snapshot = List<PeerStatus>.unmodifiable(peers);
+    _latestPeers = snapshot;
+    _peersController.add(snapshot);
   }
 
   // ─── Transport namespaces ───────────────────────────────────────────
@@ -172,7 +185,21 @@ class Tailscale {
   /// the first emission, then one emission per NetMap change.
   /// Pipe through `.distinct()` if you only want to react when
   /// the list has actually changed.
-  Stream<List<PeerStatus>> get onPeersChange => _peersController.stream;
+  Stream<List<PeerStatus>> get onPeersChange => Stream<List<PeerStatus>>.multi(
+        (controller) {
+          final cached = _latestPeers;
+          if (cached != null) {
+            controller.add(cached);
+          }
+          final subscription = _peersController.stream.listen(
+            controller.add,
+            onError: controller.addError,
+            onDone: controller.close,
+          );
+          controller.onCancel = subscription.cancel;
+        },
+        isBroadcast: true,
+      );
 
   /// Background runtime errors pushed from the embedded node.
   Stream<TailscaleRuntimeError> get onError => _errorController.stream;

@@ -317,8 +317,7 @@ class Tailscale {
   /// combine with [tcp] `.bind(...)` and check
   /// [PeerIdentity.tags] before handling. See
   /// <https://tailscale.com/kb/1068/tags> for the tag model.
-  Future<PeerIdentity?> whois(String ip) =>
-      throw UnimplementedError('whois not yet implemented');
+  Future<PeerIdentity?> whois(String ip) => _worker.whois(ip);
 
   /// Brings the embedded node down while preserving persisted credentials.
   Future<void> down() async {

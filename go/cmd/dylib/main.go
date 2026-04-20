@@ -85,6 +85,11 @@ func DuneTcpUnbind(loopbackPort C.int) {
 	tailscale.TcpUnbind(int(loopbackPort))
 }
 
+//export DuneWhoIs
+func DuneWhoIs(ip *C.char) *C.char {
+	return C.CString(tailscale.WhoIs(C.GoString(ip)))
+}
+
 //export DuneHasState
 func DuneHasState(stateDir *C.char) C.int {
 	dir := C.GoString(stateDir)

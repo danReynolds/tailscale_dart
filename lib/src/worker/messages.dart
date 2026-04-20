@@ -6,6 +6,7 @@ enum _WorkerOperation {
   tcpDial,
   tcpBind,
   tcpUnbind,
+  whois,
   status,
   peers,
   down,
@@ -17,6 +18,7 @@ enum _WorkerOperation {
         tcpDial => TailscaleTcpException(message),
         tcpBind => TailscaleTcpException(message),
         tcpUnbind => TailscaleTcpException(message),
+        whois => TailscaleStatusException(message),
         status => TailscaleStatusException(message),
         peers => TailscaleStatusException(message),
         down => TailscaleOperationException('down', message),
@@ -90,6 +92,13 @@ final class _WorkerTcpUnbindCommand extends _WorkerCommand {
       : super(_WorkerOperation.tcpUnbind);
 
   final int loopbackPort;
+}
+
+final class _WorkerWhoIsCommand extends _WorkerCommand {
+  const _WorkerWhoIsCommand({required this.ip})
+      : super(_WorkerOperation.whois);
+
+  final String ip;
 }
 
 final class _WorkerStatusCommand extends _WorkerCommand {
@@ -191,6 +200,14 @@ final class _WorkerPeersResponse extends _WorkerResponse {
       : super(_WorkerOperation.peers);
 
   final List<PeerStatus> peers;
+}
+
+final class _WorkerWhoIsResponse extends _WorkerResponse {
+  const _WorkerWhoIsResponse({required this.identity})
+      : super(_WorkerOperation.whois);
+
+  /// Null when LocalAPI reported the IP is not known on this tailnet.
+  final PeerIdentity? identity;
 }
 
 final class _WorkerAckResponse extends _WorkerResponse {

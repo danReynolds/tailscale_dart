@@ -88,6 +88,17 @@ external ffi.Pointer<Utf8> duneTcpBind(
 @ffi.Native<ffi.Void Function(ffi.Int32)>(symbol: 'DuneTcpUnbind')
 external void duneTcpUnbind(int loopbackPort);
 
+/// Resolves a tailnet IP to its peer identity via LocalAPI.
+///
+/// Returns JSON:
+///   {"found": true, "nodeId": "...", "hostName": "...",
+///    "userLoginName": "...", "tags": [...], "tailscaleIPs": [...]}
+///     on success.
+///   {"found": false} if the IP isn't known on this tailnet.
+///   {"error": "..."} on other failures.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(symbol: 'DuneWhoIs')
+external ffi.Pointer<Utf8> duneWhoIs(ffi.Pointer<Utf8> ip);
+
 /// Returns 1 if the state directory has a valid machine key, 0 otherwise.
 @ffi.Native<ffi.Int32 Function(ffi.Pointer<Utf8>)>(symbol: 'DuneHasState')
 external int duneHasState(ffi.Pointer<Utf8> stateDir);

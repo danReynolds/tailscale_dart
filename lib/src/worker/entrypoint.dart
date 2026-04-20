@@ -198,6 +198,19 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.tcpUnbind),
             );
+          case _WorkerWhoIsCommand request:
+            final ipPtr = request.ip.toNativeUtf8();
+            try {
+              final result = _callNativeJson(
+                () => native.duneWhoIs(ipPtr),
+                onError: TailscaleStatusException.new,
+              ) as Map<String, dynamic>;
+              sendPort.send(_WorkerWhoIsResponse(
+                identity: _parseWhoIsResponse(result),
+              ));
+            } finally {
+              calloc.free(ipPtr);
+            }
           case _WorkerStatusCommand(:final stateDir):
             sendPort.send(_WorkerStatusResponse(
               status: _loadStatusSnapshot(stateDir: stateDir),
@@ -328,4 +341,15 @@ List<PeerStatus> _loadPeerSnapshot() {
       cause: error,
     );
   }
+}
+
+PeerIdentity? _parseWhoIsResponse(Map<String, dynamic> json) {
+  if (json['found'] != true) return null;
+  return PeerIdentity(
+    nodeId: json['nodeId'] as String? ?? '',
+    hostName: json['hostName'] as String? ?? '',
+    userLoginName: json['userLoginName'] as String? ?? '',
+    tags: (json['tags'] as List?)?.cast<String>() ?? const [],
+    tailscaleIPs: (json['tailscaleIPs'] as List?)?.cast<String>() ?? const [],
+  );
 }

@@ -6,6 +6,7 @@ import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
+import '../api/identity.dart';
 import '../errors.dart';
 import '../ffi_bindings.dart' as native;
 import '../status.dart';
@@ -165,6 +166,13 @@ final class Worker {
     await _request<_WorkerAckResponse>(
       _WorkerTcpUnbindCommand(loopbackPort: loopbackPort),
     );
+  }
+
+  Future<PeerIdentity?> whois(String ip) async {
+    final response = await _request<_WorkerWhoIsResponse>(
+      _WorkerWhoIsCommand(ip: ip),
+    );
+    return response.identity;
   }
 
   Future<TailscaleStatus> status({required String stateDir}) async {

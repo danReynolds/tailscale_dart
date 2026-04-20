@@ -39,7 +39,16 @@ jobs:
       - name: Analyze
         run: dart analyze lib/ test/ hook/
       - name: Unit tests
-        run: dart test test/tailscale_test.dart
+        run: |
+          dart test \
+            test/errors_test.dart \
+            test/diag_test.dart \
+            test/funnel_test.dart \
+            test/identity_test.dart \
+            test/profiles_test.dart \
+            test/proxy_client_test.dart \
+            test/serve_test.dart \
+            test/taildrop_test.dart
 
   ffi-integration-tests:
     name: FFI integration (${{ matrix.os }})
@@ -58,7 +67,11 @@ jobs:
           go-version: '1.25'
       - run: dart pub get
       - name: FFI integration tests
-        run: dart test test/ffi_integration_test.dart
+        run: |
+          dart test \
+            test/ffi_bindings_test.dart \
+            test/lifecycle_test.dart \
+            test/http_test.dart
 
   e2e-tests:
     name: E2E (Headscale)

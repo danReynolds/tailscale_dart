@@ -1,0 +1,6 @@
+# The FFI-backed tests (lifecycle, http, ffi_bindings) drive the embedded
+# Go runtime, which holds per-process global state (tsnet.Server,
+# SQLiteStore). Running them in parallel isolates causes the processes
+# to stomp each other's state. Pure-Dart tests are fast enough that
+# forcing the whole run serial is cheaper than tagging selectively.
+concurrency: 1

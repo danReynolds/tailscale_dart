@@ -276,6 +276,65 @@ void main() {
         await socket.close();
       }
     });
+
+    test('whois(peer.ipv4) returns the peer identity', () async {
+      final identity = await tsnet.whois(peer.ipv4);
+      expect(identity, isNotNull);
+      expect(identity!.hostName, peer.hostname);
+      expect(identity.nodeId, isNotEmpty);
+      expect(identity.tailscaleIPs, contains(peer.ipv4));
+    });
+
+    test('whois returns null for an IP not on the tailnet', () async {
+      final identity = await tsnet.whois('100.127.255.254');
+      expect(identity, isNull);
+    });
+
+    test('onPeersChange emits while peers are online', () async {
+      final first = await tsnet.onPeersChange.first
+          .timeout(const Duration(seconds: 30));
+      expect(first, isNotEmpty);
+      expect(first.any((p) => p.ipv4 == peer.ipv4), isTrue);
+    });
+
+    test('diag.ping reaches the peer', () async {
+      final result = await tsnet.diag
+          .ping(peer.ipv4, timeout: const Duration(seconds: 10))
+          .timeout(const Duration(seconds: 15));
+      expect(result.latency, greaterThan(Duration.zero));
+    });
+
+    test('diag.metrics returns Prometheus-format text', () async {
+      final metrics = await tsnet.diag.metrics();
+      expect(metrics, isNotEmpty);
+      // Prometheus scrapes always start with `# HELP` / `# TYPE`
+      // comment lines, or at minimum contain a metric_name counter.
+      expect(metrics, anyOf(contains('# HELP'), contains('# TYPE')));
+    });
+
+    test('diag.derpMap returns at least one region', () async {
+      final map = await tsnet.diag.derpMap();
+      expect(map.regions, isNotEmpty);
+      final first = map.regions.values.first;
+      expect(first.regionCode, isNotEmpty);
+    });
+
+    test('diag.checkUpdate returns without throwing', () async {
+      // Either null (already on latest, or Headscale doesn't advertise
+      // a newer version) or a populated ClientVersion. Anything else
+      // would be a contract violation.
+      final result = await tsnet.diag.checkUpdate();
+      if (result != null) {
+        expect(result.latestVersion, isNotEmpty);
+      }
+    });
+
+    test('tls.domains returns a list (empty on Headscale)', () async {
+      final domains = await tsnet.tls.domains();
+      // Headscale doesn't provision certs, so this is expected empty.
+      // The important thing is no exception.
+      expect(domains, isA<List<String>>());
+    });
   });
 
   group('peer reconnects with persisted credentials', () {
@@ -602,10 +661,11 @@ Future<List<NodeState>> _recordUntil(
 /// Handle to a `peer_main.dart` subprocess that has reached Running and
 /// announced its tailnet IPv4.
 class _PeerProcess {
-  _PeerProcess._(this._process, this.ipv4);
+  _PeerProcess._(this._process, this.ipv4, this.hostname);
 
   final Process _process;
   final String ipv4;
+  final String hostname;
 
   static Future<_PeerProcess> spawn({
     required String stateDir,
@@ -655,7 +715,7 @@ class _PeerProcess {
         throw StateError('peer "$hostname" did not become ready within 90s');
       },
     );
-    return _PeerProcess._(process, ipv4);
+    return _PeerProcess._(process, ipv4, hostname);
   }
 
   /// Gracefully shut the peer down by closing its stdin; falls back to

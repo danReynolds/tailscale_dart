@@ -319,25 +319,45 @@ path for each diagnostic.
 
 ### Phase 5 — Remaining transports
 
-**Goal:** apply the Phase 3 bridge pattern to the remaining
-transports. `tls.bind` is the clearest next transport win for Dart
-servers; `udp.bind` is plausible but more niche; Funnel remains
-explicitly advanced and demand-driven.
+**Goal:** apply the Phase 3 bridge pattern to the remaining advanced
+transports: TLS-terminated server sockets and UDP datagram sockets.
+Funnel is explicitly deferred — see "Optional follow-ups" below.
 
 **Dependencies:** Phase 3.
 
 | # | API                                                          | Purpose                                                                   | Done |
 | - | ------------------------------------------------------------ | ------------------------------------------------------------------------- | ---- |
-| 1 | `tls.bind(port)` → `Future<SecureServerSocket>`              | TLS-terminated listener with auto-provisioned cert                        | [ ]  |
+| 1 | `tls.bind(port)` → `Future<ServerSocket>`                    | TLS-terminated listener with auto-provisioned cert. TLS is terminated in Go via `tsnet.Server.ListenTLS`; accepted Dart connections are plain `Socket`s carrying plaintext bytes. Returning `ServerSocket` (not `SecureServerSocket`) matches the actual data flow and avoids promising Dart TLS semantics (`SecurityContext`, peer cert access) the bridge doesn't provide. | [ ]  |
 | 2 | UDP datagram bridge variant                                  | Frame `[peerIP, peerPort, payload]` envelopes over loopback               | [ ]  |
 | 3 | `udp.bind(host, port)` → `Future<RawDatagramSocket>`         | UDP datagram listener on a specific tailnet IP                             | [ ]  |
-| 4 | `funnel.bind(port, {funnelOnly})` → `Future<SecureServerSocket>` | Public-internet HTTPS via Funnel. **Advanced / optional:** keep the surface thin and close to upstream; do not block v1 on additional ergonomics. Returns a standard `SecureServerSocket`; Funnel-specific metadata is accessible via extension (see next row). | [ ]  |
-| 5 | `FunnelMetadata` + `Socket.funnel` extension                 | Expose original public-client source IP + SNI target without breaking the "standard `dart:io` types" principle. Internal `Expando<FunnelMetadata>` keyed by `Socket`; extension getter resolves it. Non-Funnel sockets return null. | [ ]  |
-| 6 | Example: all-transports demo                                 | `/example/transports.dart` exercising TCP + TLS + UDP + Funnel            | [ ]  |
+| 4 | Example: TLS + UDP demo                                      | `/example/transports.dart` exercising TCP + TLS + UDP                     | [ ]  |
 
-**Exit criteria:** demo runs against a live tailnet; CI e2e covers
-each transport. Funnel/TLS tests are opt-in (see Testing matrix below)
-since Headscale doesn't support them.
+**Exit criteria:** demo runs against a live tailnet; CI e2e covers TCP
+(from Phase 3) and UDP. TLS tests are opt-in (see Testing matrix below)
+since Headscale doesn't provision certs.
+
+**Rationale for returning `ServerSocket`, not `SecureServerSocket`.**
+`dart:io`'s `SecureServerSocket` is contractually a TLS-terminating
+listener: callers are expected to pass a `SecurityContext` and receive
+`SecureSocket` instances with `.peerCertificate`. Our bridge terminates
+TLS in Go using the node's auto-provisioned LetsEncrypt cert and hands
+plaintext bytes to the Dart handler — the Dart app never holds the
+private key, which is a genuine security win (no accidental logging,
+no rotation handling, no second TLS stack to audit). Returning a
+`SecureServerSocket` would be semantically misleading. The dartdoc on
+`tls.bind` spells this out so users know what TLS guarantees they're
+and aren't getting.
+
+### Optional follow-ups (post-v1, demand-gated)
+
+These sat on the original Phase 5 list but are no longer on the core
+path. If real consumers ask, any of them is a thin follow-up:
+
+- `funnel.bind(port, {funnelOnly})` → `Future<ServerSocket>` (same
+  Go-terminates-TLS rationale as `tls.bind`).
+- `FunnelMetadata` population via the `attachFunnelMetadata` hook
+  already wired in Phase 2.
+- A combined TCP + TLS + UDP + Funnel demo.
 
 ---
 
@@ -500,9 +520,9 @@ land before or after v1.0 without changing the core ship criteria.
 | v0.3    | 1                                 | Namespaced API shape; no functional change                                 |
 | v0.4    | 2 + 4                             | Hygiene fixes (incl. interactive login via new `up()` semantics) + LocalAPI one-shots (whois, diag, ping) |
 | v0.5    | 3                                 | Raw TCP                                                                    |
-| v0.6    | 5 + 6                             | Remaining advanced/core-adjacent transports (TLS/UDP/Funnel thin surface) + prefs + exit node |
+| v0.6    | 5 + 6                             | Remaining advanced transports (TLS-terminated server sockets, UDP) + prefs + exit node |
 | v1.0    | 10 + core path                    | Core embedding story: lifecycle, private HTTP/TCP, identity/diagnostics, advanced prefs/exit-node controls, LocalAPI escape hatch, docs, API lock |
-| post-v1 | 7 + 8 + 9                         | Optional: Profiles, Taildrop, raw Serve config                             |
+| post-v1 | 7 + 8 + 9 + Funnel                | Optional: Profiles, Taildrop, raw Serve config, Funnel transport          |
 
 ---
 

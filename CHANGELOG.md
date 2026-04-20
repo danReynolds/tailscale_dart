@@ -1,3 +1,14 @@
+## Unreleased
+
+**Breaking — namespaced API surface (Phase 1 of the API RFC; see `docs/api-roadmap.md`):**
+
+- `Tailscale.http` (previously an `http.Client` getter) is now the `Http` namespace. Access the client via `Tailscale.http.client`.
+- `Tailscale.listen(localPort, {tailnetPort})` (HTTP reverse-proxy helper) moved to `Tailscale.http.expose(localPort, {tailnetPort})` — same behavior, namespaced home.
+- New namespaces declared on `Tailscale.instance`: `tcp`, `tls`, `udp`, `funnel`, `taildrop`, `serve`, `exitNode`, `profiles`, `prefs`, `diag`. All methods on these namespaces currently throw `UnimplementedError` — later RFC phases fill them in.
+- New top-level members `Tailscale.whois(ip)` and `Tailscale.onPeersChange` declared but not yet implemented (Phase 2 / Phase 4).
+
+Lifecycle (`up` / `down` / `logout` / `status` / `peers`), streams (`onStateChange` / `onError`), and the HTTP transport (`http.client` / `http.expose`) are fully wired through to existing behavior — no functional regression for callers that adopt the new names.
+
 ## 0.2.0
 
 - tsnet.Server.Close() doesn't fire a terminal state through the IPN bus, so onStateChange subscribers drifted from the engine — stuck at the pre-stop value (usually Running) and their UI routing went stale.

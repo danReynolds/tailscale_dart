@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:http/http.dart' as pkg_http;
 import 'package:path/path.dart' as p;
 import 'src/api/diag.dart';
 import 'src/api/exit_node.dart';
@@ -14,6 +15,7 @@ import 'src/api/tls.dart';
 import 'src/api/udp.dart';
 import 'src/errors.dart';
 import 'src/ffi_bindings.dart' as native;
+import 'src/proxy_client.dart';
 import 'src/status.dart';
 import 'src/worker/worker.dart';
 
@@ -67,6 +69,8 @@ class Tailscale {
 
   static String? _stateBaseDir;
 
+  pkg_http.Client? _http;
+
   late final _worker = Worker(
     publishState: _stateController.add,
     publishRuntimeError: _errorController.add,
@@ -84,12 +88,21 @@ class Tailscale {
   static String get _stateDir =>
       p.join(_stateBaseDir!, _ownedStateSubdirectory);
 
+  void _reset() {
+    _http?.close();
+    _http = null;
+  }
+
   // ─── Transport namespaces ───────────────────────────────────────────
   final Tcp    tcp    = const Tcp();
   final Tls    tls    = const Tls();
   final Udp    udp    = const Udp();
   final Funnel funnel = const Funnel();
-  final Http   http   = const Http();
+  late final Http http = Http.internal(
+    clientGetter: () => _http,
+    exposeFn: (localPort, tailnetPort) =>
+        _worker.listen(localPort: localPort, tailnetPort: tailnetPort),
+  );
 
   // ─── Feature namespaces ─────────────────────────────────────────────
   final Taildrop taildrop = const Taildrop();
@@ -158,12 +171,13 @@ class Tailscale {
     Uri? controlUrl,
   }) async {
     final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
-    await _worker.start(
+    final (:proxyPort, :proxyAuthToken) = await _worker.start(
       hostname: hostname,
       authKey: authKey ?? '',
       controlUrl: resolvedControlUrl.toString(),
       stateDir: _stateDir,
     );
+    _http = TailscaleProxyClient(proxyPort, proxyAuthToken);
   }
 
   /// Returns the current status snapshot.
@@ -182,8 +196,14 @@ class Tailscale {
       throw UnimplementedError('whois not yet implemented');
 
   /// Brings the embedded node down while preserving persisted credentials.
-  Future<void> down() async => _worker.down();
+  Future<void> down() async {
+    _reset();
+    await _worker.down();
+  }
 
   /// Logs out and clears persisted credentials.
-  Future<void> logout() async => _worker.logout(_stateDir);
+  Future<void> logout() async {
+    _reset();
+    await _worker.logout(_stateDir);
+  }
 }

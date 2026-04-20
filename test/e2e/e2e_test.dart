@@ -137,7 +137,7 @@ void main() {
   });
 
   test('http client is available', () async {
-    expect(tsnet.http, isA<http.Client>());
+    expect(tsnet.http.client, isA<http.Client>());
   });
 
   // Two-node groups spawn `dart run test/e2e/peer_main.dart` as a subprocess.

@@ -254,9 +254,9 @@ void main() {
       await expectLater(Tailscale.instance.logout(), completes);
     });
 
-    test('http throws', () {
+    test('http.client throws', () {
       expect(
-        () => Tailscale.instance.http,
+        () => Tailscale.instance.http.client,
         throwsA(isA<TailscaleUsageException>()),
       );
     });
@@ -280,8 +280,8 @@ void main() {
       expect(state, isA<NodeState>());
     });
 
-    test('http is available after up()', () {
-      expect(() => Tailscale.instance.http, returnsNormally);
+    test('http.client is available after up()', () {
+      expect(() => Tailscale.instance.http.client, returnsNormally);
     });
 
     test('down() succeeds', () async {

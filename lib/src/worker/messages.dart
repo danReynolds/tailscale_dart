@@ -6,6 +6,7 @@ enum _WorkerOperation {
   tcpDial,
   tcpBind,
   tcpUnbind,
+  tlsBind,
   whois,
   tlsDomains,
   diagPing,
@@ -23,8 +24,9 @@ enum _WorkerOperation {
         tcpDial => TailscaleTcpException(message),
         tcpBind => TailscaleTcpException(message),
         tcpUnbind => TailscaleTcpException(message),
+        tlsBind => TailscaleTlsException(message),
         whois => TailscaleStatusException(message),
-        tlsDomains => TailscaleStatusException(message),
+        tlsDomains => TailscaleTlsException(message),
         diagPing => TailscaleDiagException(message),
         diagMetrics => TailscaleDiagException(message),
         diagDERPMap => TailscaleDiagException(message),
@@ -102,6 +104,23 @@ final class _WorkerTcpUnbindCommand extends _WorkerCommand {
       : super(_WorkerOperation.tcpUnbind);
 
   final int loopbackPort;
+}
+
+final class _WorkerTlsBindCommand extends _WorkerCommand {
+  const _WorkerTlsBindCommand({
+    required this.tailnetPort,
+    required this.loopbackPort,
+  }) : super(_WorkerOperation.tlsBind);
+
+  final int tailnetPort;
+  final int loopbackPort;
+}
+
+final class _WorkerTlsBindResponse extends _WorkerResponse {
+  const _WorkerTlsBindResponse({required this.tailnetPort})
+      : super(_WorkerOperation.tlsBind);
+
+  final int tailnetPort;
 }
 
 final class _WorkerWhoIsCommand extends _WorkerCommand {

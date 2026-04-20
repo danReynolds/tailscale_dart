@@ -176,6 +176,19 @@ final class Worker {
     );
   }
 
+  Future<int> tlsBind({
+    required int tailnetPort,
+    required int loopbackPort,
+  }) async {
+    final response = await _request<_WorkerTlsBindResponse>(
+      _WorkerTlsBindCommand(
+        tailnetPort: tailnetPort,
+        loopbackPort: loopbackPort,
+      ),
+    );
+    return response.tailnetPort;
+  }
+
   Future<PeerIdentity?> whois(String ip) async {
     final response = await _request<_WorkerWhoIsResponse>(
       _WorkerWhoIsCommand(ip: ip),

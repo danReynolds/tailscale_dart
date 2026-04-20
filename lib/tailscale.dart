@@ -36,7 +36,8 @@ export 'src/api/profiles.dart';
 export 'src/api/serve.dart';
 export 'src/api/taildrop.dart';
 export 'src/api/tcp.dart' hide createTcp, TcpDialFn, TcpBindFn, TcpUnbindFn;
-export 'src/api/tls.dart' hide createTls, TlsDomainsFn;
+export 'src/api/tls.dart'
+    hide createTls, TlsBindFn, TlsUnbindFn, TlsDomainsFn;
 export 'src/api/udp.dart';
 export 'src/errors.dart';
 export 'src/status.dart';
@@ -154,7 +155,16 @@ class Tailscale {
     ),
     unbindFn: (loopbackPort) => _worker.tcpUnbind(loopbackPort: loopbackPort),
   );
-  late final Tls tls = createTls(domainsFn: _worker.tlsDomains);
+  late final Tls tls = createTls(
+    bindFn: (tailnetPort, loopbackPort) => _worker.tlsBind(
+      tailnetPort: tailnetPort,
+      loopbackPort: loopbackPort,
+    ),
+    // Go-side bind registry is shared between plaintext and TLS
+    // listeners — same DuneTcpUnbind tears down either kind.
+    unbindFn: (loopbackPort) => _worker.tcpUnbind(loopbackPort: loopbackPort),
+    domainsFn: _worker.tlsDomains,
+  );
   final Udp udp = Udp.instance;
   final Funnel funnel = Funnel.instance;
   late final Http http = createHttp(

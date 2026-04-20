@@ -129,6 +129,19 @@ final class TailscaleTcpException extends TailscaleOperationException {
   }) : super('tcp', message);
 }
 
+/// Thrown when a `tls.*` call fails — notably `tls.bind` failing to set
+/// up the tailnet listener (MagicDNS/HTTPS off, tailnet port in use,
+/// loopback bridge setup failure), or `tls.domains` failing to reach the
+/// LocalAPI.
+final class TailscaleTlsException extends TailscaleOperationException {
+  const TailscaleTlsException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('tls', message);
+}
+
 /// Thrown when `status()` fails to decode or fetch native status.
 final class TailscaleStatusException extends TailscaleOperationException {
   const TailscaleStatusException(

@@ -85,6 +85,20 @@ func DuneTcpUnbind(loopbackPort C.int) {
 	tailscale.TcpUnbind(int(loopbackPort))
 }
 
+//export DuneTlsBind
+func DuneTlsBind(tailnetPort C.int, loopbackPort C.int) *C.char {
+	actualPort, err := tailscale.TlsBind(int(tailnetPort), int(loopbackPort))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	result, _ := json.Marshal(map[string]any{
+		"tailnetPort": actualPort,
+	})
+	return C.CString(string(result))
+}
+
 //export DuneWhoIs
 func DuneWhoIs(ip *C.char) *C.char {
 	return C.CString(tailscale.WhoIs(C.GoString(ip)))

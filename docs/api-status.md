@@ -36,8 +36,8 @@ module bump before they can land here.
 | [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Core      | Phase 1 ✅        |
 | [`http`](#http)         | HTTP over the tailnet + reverse-proxy helper                      | Core      | Phase 1 ✅        |
 | [`tcp`](#tcp)           | Raw TCP between tailnet peers                                      | Core      | Phase 3 ✅        |
-| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | Phase 4 (`domains` ✅) + 5 (`bind`) |
-| [`udp`](#udp)           | UDP datagram sockets on a tailnet IP                                | Advanced  | Phase 5          |
+| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | Phase 4 (`domains` ✅) + 5 (`bind` ✅) |
+| [`udp`](#udp)           | UDP datagram sockets on a tailnet IP                                | Advanced  | Phase 5 ✅        |
 | [`funnel`](#funnel)     | Public-internet HTTPS via Tailscale Funnel                         | Optional  | Phase 5          |
 | [`taildrop`](#taildrop) | Peer-to-peer file transfer                                          | Optional  | Phase 8          |
 | [`serve`](#serve)       | Raw `tailscale serve` / `tailscale funnel` config                   | Optional  | Phase 9          |
@@ -125,7 +125,7 @@ operator. Not covered by the Headscale CI — live-Tailscale test only.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `tls.bind(port)` → `Future<SecureServerSocket>` | ⛔ | TLS-terminated listener with auto-cert. | `final srv = await tsnet.tls.bind(443);` |
+| `tls.bind(port)` → `Future<ServerSocket>` | ✅ | TLS-terminated listener with auto-cert. TLS is terminated by the embedded Go runtime — handlers receive plaintext bytes, so the return is `ServerSocket` rather than `SecureServerSocket`. | `final srv = await tsnet.tls.bind(443);` |
 | `tls.domains()` → `Future<List<String>>` | ✅ | Cert SANs; preflight for `bind`. Empty = MagicDNS or HTTPS disabled on the tailnet. | `final sans = await tsnet.tls.domains();` |
 
 ## `udp`
@@ -139,7 +139,7 @@ than core v1 functionality.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `udp.bind(host, port)` → `Future<RawDatagramSocket>` | ⛔ | UDP listener on a tailnet IP of this node. | `final sock = await tsnet.udp.bind(ip, 4000);` |
+| `udp.bind(host, port)` → `Future<RawDatagramSocket>` | ✅ | UDP listener on a tailnet IP of this node. Returns a `RawDatagramSocket` whose `Datagram.address` is the real tailnet peer address (not an opaque loopback mapping); framing is invisible to callers. Multicast and raw socket options throw `UnsupportedError`. | `final sock = await tsnet.udp.bind(ip, 4000);` |
 
 ## `funnel`
 
@@ -326,6 +326,9 @@ surface `featureDisabled`, rethrow otherwise).
 | `TailscaleUsageException` | ✅ | Misuse: `http.client` before `up()`, empty `stateDir`, etc. | `on TailscaleUsageException catch (_) { ... }` |
 | `TailscaleUpException` | ✅ | `up()` failed before reaching a stable state. | `on TailscaleUpException catch (e) { showAuth(e); }` |
 | `TailscaleHttpException` | ✅ | `http.*`. | `on TailscaleHttpException catch (_) { ... }` |
+| `TailscaleTcpException` | ✅ | `tcp.*`. | `on TailscaleTcpException catch (_) { ... }` |
+| `TailscaleTlsException` | ✅ | `tls.*`. | `on TailscaleTlsException catch (_) { ... }` |
+| `TailscaleUdpException` | ✅ | `udp.*`. | `on TailscaleUdpException catch (_) { ... }` |
 | `TailscaleStatusException` | ✅ | `status()`. | `on TailscaleStatusException catch (_) { ... }` |
 | `TailscaleLogoutException` | ✅ | `logout()`. | `on TailscaleLogoutException catch (_) { ... }` |
 | `TailscaleTaildropException` | ✅ | `taildrop.*`. | `on TailscaleTaildropException catch (_) { ... }` |

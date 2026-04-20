@@ -327,10 +327,10 @@ Funnel is explicitly deferred — see "Optional follow-ups" below.
 
 | # | API                                                          | Purpose                                                                   | Done |
 | - | ------------------------------------------------------------ | ------------------------------------------------------------------------- | ---- |
-| 1 | `tls.bind(port)` → `Future<ServerSocket>`                    | TLS-terminated listener with auto-provisioned cert. TLS is terminated in Go via `tsnet.Server.ListenTLS`; accepted Dart connections are plain `Socket`s carrying plaintext bytes. Returning `ServerSocket` (not `SecureServerSocket`) matches the actual data flow and avoids promising Dart TLS semantics (`SecurityContext`, peer cert access) the bridge doesn't provide. | [ ]  |
-| 2 | UDP datagram bridge variant                                  | Frame `[peerIP, peerPort, payload]` envelopes over loopback               | [ ]  |
-| 3 | `udp.bind(host, port)` → `Future<RawDatagramSocket>`         | UDP datagram listener on a specific tailnet IP                             | [ ]  |
-| 4 | Example: TLS + UDP demo                                      | `/example/transports.dart` exercising TCP + TLS + UDP                     | [ ]  |
+| 1 | `tls.bind(port)` → `Future<ServerSocket>`                    | TLS-terminated listener with auto-provisioned cert. TLS is terminated in Go via `tsnet.Server.ListenTLS`; accepted Dart connections are plain `Socket`s carrying plaintext bytes. Returning `ServerSocket` (not `SecureServerSocket`) matches the actual data flow and avoids promising Dart TLS semantics (`SecurityContext`, peer cert access) the bridge doesn't provide. | [x]  |
+| 2 | UDP datagram bridge variant                                  | Frame `[addrFam, peerIP, peerPort, len, payload]` envelopes over a loopback TCP control conn | [x]  |
+| 3 | `udp.bind(host, port)` → `Future<RawDatagramSocket>`         | UDP datagram listener on a specific tailnet IP. Returns a genuine `implements RawDatagramSocket` whose `Datagram.address` is the real tailnet peer (not a loopback mapping). | [x]  |
+| 4 | Example: TLS + UDP demo                                      | `/example/transports.dart` exercising TCP + TLS + UDP                     | [x]  |
 
 **Exit criteria:** demo runs against a live tailnet; CI e2e covers TCP
 (from Phase 3) and UDP. TLS tests are opt-in (see Testing matrix below)

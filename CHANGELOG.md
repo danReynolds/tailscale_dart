@@ -1,5 +1,23 @@
 ## Unreleased
 
+**Phase 5 — TLS + UDP transports:**
+
+- `tls.bind(port)` → `Future<ServerSocket>` is live. Wraps `tsnet.Server.ListenTLS`; TLS is terminated inside the Go runtime using the node's auto-provisioned Let's Encrypt cert, and Dart handlers receive plaintext `Socket`s. Private key never crosses the FFI boundary. Requires MagicDNS + HTTPS enabled on the tailnet — `tls.domains()` is the preflight; failures surface as `TailscaleTlsException` with `featureDisabled` when either is off.
+- `udp.bind(host, port)` → `Future<RawDatagramSocket>` is live. Wraps `tsnet.Server.ListenPacket`. The returned socket genuinely `implements RawDatagramSocket` — `.receive()` yields a `Datagram` whose `.address` is the real tailnet peer IP (100.x / fd7a:), not an opaque loopback mapping. `.send(buffer, tailnetAddr, port)` takes a tailnet destination. Framing is invisible to callers. Multicast and raw socket options throw `UnsupportedError` (genuinely unavailable over the bridge; explicit error beats silent no-op). `host` is required per `tsnet.ListenPacket` semantics — read it off `(await tsnet.status()).ipv4` at call time.
+- `example/transports.dart` — runnable demo exercising TCP + TLS + UDP as client/server pairs.
+
+**Breaking — Phase 5 shape changes:**
+
+- `Tls.bind` signature changed from `Future<SecureServerSocket>` to `Future<ServerSocket>`. `SecureServerSocket` is contractually a TLS-terminating listener (`SecurityContext`, peer cert access); our bridge terminates TLS in Go and hands plaintext to Dart. Returning the stricter type would have misled callers about what TLS guarantees Dart has access to. The doc comment on `tls.bind` spells out what terminates where.
+- `tls.domains()` failures now throw `TailscaleTlsException` instead of `TailscaleStatusException`. Matches the per-namespace exception pattern used by `tcp` / `taildrop` / `serve` / `prefs` / `profiles` / `exitNode` / `diag` / `http`. Callers that catch on `TailscaleOperationException` (or the `sealed` base `TailscaleException`) are unaffected.
+
+**Internal — Phase 5:**
+
+- New `go/udp.go` with `UdpBind` + framed packet pump; shared `registerInboundBridge` helper extracted from `TcpBind` for the `ListenTLS` path. No separate UDP unbind — bridge conn close is the canonical teardown signal.
+- Frame wire format (both directions): `[1 byte addrFam=4|16][4 or 16 bytes IP][2 bytes BE port][2 bytes BE len][payload]`. Roundtrip unit tests in `go/udp_test.go`; parse-time unit tests for the Dart socket in `test/udp_test.dart` using a real connected loopback TCP pair.
+- `Udp` namespace refactored from const-singleton to abstract / `_Udp` / factory shape (matching `Tcp` / `Tls` / `Diag`).
+- New per-namespace exceptions: `TailscaleTlsException`, `TailscaleUdpException`.
+
 **Phase 4 — LocalAPI one-shots:**
 
 - `Tailscale.whois(ip)` → `Future<PeerIdentity?>` is live. Wraps `local.Client.WhoIs`; 404 from LocalAPI (unknown IP on this tailnet) maps to `null`, other errors throw.

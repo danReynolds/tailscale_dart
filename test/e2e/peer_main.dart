@@ -87,6 +87,17 @@ Future<void> main(List<String> args) async {
     return;
   }
 
+  // UDP datagram echo on tailnet:7001 — used by the E2E `udp.bind`
+  // test. Mirrors the TCP shape: echo any incoming datagram back to
+  // its source (which, by design, is the peer's real tailnet addr).
+  final udpSock = await tsnet.udp.bind(ipv4, 7001);
+  udpSock.listen((event) {
+    if (event != RawSocketEvent.read) return;
+    final dg = udpSock.receive();
+    if (dg == null) return;
+    udpSock.send(dg.data, dg.address, dg.port);
+  });
+
   // Leading newline: the Dart build hook writes `Running build hooks...`
   // without a trailing newline, so force a line break before our sentinel.
   stdout.write('\nREADY $ipv4\n');
@@ -95,6 +106,9 @@ Future<void> main(List<String> args) async {
   // Shut down when the parent closes stdin.
   await stdin.drain<void>();
 
+  try {
+    udpSock.close();
+  } catch (_) {}
   try {
     await echoServer.close();
   } catch (_) {}

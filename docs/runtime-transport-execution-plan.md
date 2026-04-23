@@ -75,6 +75,27 @@ They are **not** fully hardened yet. The remaining work is mostly:
 - operational bounds and observability
 - public-surface stabilization
 
+### Cleanup boundaries for the remaining work
+
+During the remaining phases, cleanup work should stay tightly scoped to
+things that reduce conformance risk or make testing easier.
+
+Good cleanup during Phase 3:
+
+- factor repeated runtime/session state guards and helpers
+- move transport test harnesses into shared `test/support` helpers
+- consolidate duplicated protocol/constants code when it removes drift
+  risk without changing semantics
+- remove dead spike/review ballast once the production path no longer
+  depends on it
+
+Explicitly deferred until later phases unless conformance uncovers real
+pain:
+
+- HTTP-lane IPC unification with the raw session substrate
+- deeper internal substrate refactors done only for code-shape purity
+- public-surface simplification beyond the current RFC-approved shapes
+
 ---
 
 ## Phase 1: Lock the foundation

@@ -315,8 +315,8 @@ func (rt *runtimeTransportSession) attach(reqJSON string) error {
 
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if rt.state != transportStateIdle {
-		return fmt.Errorf("attach invalid in state %s", rt.state)
+	if err := rt.requireIdleLocked("attach"); err != nil {
+		return err
 	}
 	if req.ListenerOwner == "" {
 		req.ListenerOwner = "dart"
@@ -331,15 +331,36 @@ func (rt *runtimeTransportSession) attach(reqJSON string) error {
 	return nil
 }
 
+func (rt *runtimeTransportSession) requireIdleLocked(op string) error {
+	if rt.state != transportStateIdle {
+		return fmt.Errorf("%s invalid in state %s", op, rt.state)
+	}
+	return nil
+}
+
+func (rt *runtimeTransportSession) requireOpenLocked(scope string) error {
+	if rt.state != transportStateOpen {
+		return fmt.Errorf("transport session not open for %s: %s", scope, rt.state)
+	}
+	return nil
+}
+
+func (rt *runtimeTransportSession) requireOperationalLocked() error {
+	if rt.state != transportStateOpen && rt.state != transportStateClosing {
+		return fmt.Errorf("transport session not open: %s", rt.state)
+	}
+	return nil
+}
+
 func (rt *runtimeTransportSession) bindTCP(s *tsnet.Server, port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("invalid tcp port %d", port)
 	}
 
 	rt.mu.Lock()
-	if rt.state != transportStateOpen {
+	if err := rt.requireOpenLocked("new listeners"); err != nil {
 		rt.mu.Unlock()
-		return fmt.Errorf("transport session not open for new listeners: %s", rt.state)
+		return err
 	}
 	if _, ok := rt.tcpListeners[port]; ok {
 		rt.mu.Unlock()
@@ -386,9 +407,9 @@ func (rt *runtimeTransportSession) bindUDP(s *tsnet.Server, port int) (uint64, e
 	}
 
 	rt.mu.Lock()
-	if rt.state != transportStateOpen {
+	if err := rt.requireOpenLocked("new bindings"); err != nil {
 		rt.mu.Unlock()
-		return 0, fmt.Errorf("transport session not open for new bindings: %s", rt.state)
+		return 0, err
 	}
 	rt.mu.Unlock()
 
@@ -409,10 +430,10 @@ func (rt *runtimeTransportSession) bindUDP(s *tsnet.Server, port int) (uint64, e
 	}
 
 	rt.mu.Lock()
-	if rt.state != transportStateOpen {
+	if err := rt.requireOpenLocked("new bindings"); err != nil {
 		rt.mu.Unlock()
 		_ = pc.Close()
-		return 0, fmt.Errorf("transport session not open for new bindings: %s", rt.state)
+		return 0, err
 	}
 	binding.id = rt.nextBindingID
 	rt.nextBindingID += 2
@@ -471,9 +492,9 @@ func (rt *runtimeTransportSession) dialTCP(s *tsnet.Server, host string, port in
 	}
 
 	rt.mu.Lock()
-	if rt.state != transportStateOpen {
+	if err := rt.requireOpenLocked("new streams"); err != nil {
 		rt.mu.Unlock()
-		return 0, fmt.Errorf("transport session not open for new streams: %s", rt.state)
+		return 0, err
 	}
 	streamID := rt.nextOutboundStreamID
 	rt.nextOutboundStreamID += 2
@@ -511,9 +532,9 @@ func (rt *runtimeTransportSession) registerStream(streamID uint64, conn net.Conn
 	st.cond = sync.NewCond(&st.mu)
 
 	rt.mu.Lock()
-	if rt.state != transportStateOpen {
+	if err := rt.requireOpenLocked("new streams"); err != nil {
 		rt.mu.Unlock()
-		return fmt.Errorf("transport session not open for new streams: %s", rt.state)
+		return err
 	}
 	rt.streams[streamID] = st
 	rt.mu.Unlock()
@@ -1267,8 +1288,8 @@ func (rt *runtimeTransportSession) enqueueFrame(kind uint8, payload []byte) erro
 func (rt *runtimeTransportSession) tryEnqueueFrame(kind uint8, payload []byte) (bool, error) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if rt.state != transportStateOpen && rt.state != transportStateClosing {
-		return false, fmt.Errorf("transport session not open: %s", rt.state)
+	if err := rt.requireOperationalLocked(); err != nil {
+		return false, err
 	}
 	if rt.writerQ == nil {
 		return false, errors.New("writer queue not ready")
@@ -1286,8 +1307,8 @@ func (rt *runtimeTransportSession) tryEnqueueFrame(kind uint8, payload []byte) (
 }
 
 func (rt *runtimeTransportSession) enqueueFrameLocked(kind uint8, payload []byte) error {
-	if rt.state != transportStateOpen && rt.state != transportStateClosing {
-		return fmt.Errorf("transport session not open: %s", rt.state)
+	if err := rt.requireOperationalLocked(); err != nil {
+		return err
 	}
 	if rt.writerQ == nil {
 		return errors.New("writer queue not ready")

@@ -115,32 +115,6 @@ external ffi.Pointer<Utf8> duneStatus();
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DunePeers')
 external ffi.Pointer<Utf8> dunePeers();
 
-/// Resets the isolated substrate spike runtime.
-@ffi.Native<ffi.Void Function()>(symbol: 'DuneSpikeReset')
-external void duneSpikeReset();
-
-/// Bootstraps the isolated substrate spike runtime.
-/// Returns JSON containing the bootstrap secret and carrier preference.
-@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneSpikeBootstrap')
-external ffi.Pointer<Utf8> duneSpikeBootstrap();
-
-/// Attaches the substrate spike runtime to a caller-provided carrier endpoint.
-/// Accepts JSON and returns JSON.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneSpikeAttach',
-)
-external ffi.Pointer<Utf8> duneSpikeAttach(ffi.Pointer<Utf8> requestJson);
-
-/// Executes a spike control-plane command encoded as JSON and returns JSON.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneSpikeCommand',
-)
-external ffi.Pointer<Utf8> duneSpikeCommand(ffi.Pointer<Utf8> requestJson);
-
-/// Returns a JSON snapshot of the substrate spike runtime state.
-@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneSpikeSnapshot')
-external ffi.Pointer<Utf8> duneSpikeSnapshot();
-
 /// Attaches the canonical internal transport session to a caller-provided
 /// carrier endpoint. Accepts JSON and returns JSON.
 @ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(

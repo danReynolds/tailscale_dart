@@ -4,8 +4,6 @@
 **Priority:** Long-term architecture  
 **Scope:** Public transport API shape and the internal Dart↔Go runtime
 boundary  
-**Supersedes:** [`rfc-local-peer-attestation.md`](./rfc-local-peer-attestation.md),
-[`rfc-authenticated-local-session-transport.md`](./rfc-authenticated-local-session-transport.md)  
 **Related docs:** [`api-roadmap.md`](./api-roadmap.md),
 [`api-status.md`](./api-status.md)
 
@@ -596,9 +594,8 @@ This RFC chooses the architectural direction, but it does not redefine
 the transport-security details from scratch.
 
 Unless deliberately replaced in a follow-up transport/security spec, the
-security baseline from
-[`rfc-local-peer-attestation.md`](./rfc-local-peer-attestation.md)
-should be inherited conceptually:
+security baseline from the earlier local-attestation design work should
+be inherited conceptually:
 
 - process-scoped secret established at startup
 - derived subkeys for transport/domain separation

@@ -153,53 +153,6 @@ func DunePeers() *C.char {
 	return C.CString(tailscale.DunePeers())
 }
 
-//export DuneSpikeReset
-func DuneSpikeReset() {
-	tailscale.SpikeReset()
-}
-
-//export DuneSpikeBootstrap
-func DuneSpikeBootstrap() *C.char {
-	result, err := tailscale.SpikeBootstrap()
-	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
-	}
-	b, _ := json.Marshal(result)
-	return C.CString(string(b))
-}
-
-//export DuneSpikeAttach
-func DuneSpikeAttach(requestJSON *C.char) *C.char {
-	result, err := tailscale.SpikeAttach(C.GoString(requestJSON))
-	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
-	}
-	b, _ := json.Marshal(result)
-	return C.CString(string(b))
-}
-
-//export DuneSpikeCommand
-func DuneSpikeCommand(requestJSON *C.char) *C.char {
-	result, err := tailscale.SpikeCommand(C.GoString(requestJSON))
-	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
-	}
-	b, _ := json.Marshal(result)
-	return C.CString(string(b))
-}
-
-//export DuneSpikeSnapshot
-func DuneSpikeSnapshot() *C.char {
-	b, _ := json.Marshal(tailscale.SpikeSnapshot())
-	return C.CString(string(b))
-}
-
 //export DuneAttachTransport
 func DuneAttachTransport(requestJSON *C.char) *C.char {
 	if err := tailscale.AttachRuntimeTransport(C.GoString(requestJSON)); err != nil {

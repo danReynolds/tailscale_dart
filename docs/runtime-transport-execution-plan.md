@@ -7,10 +7,7 @@ checklist with clear ordering, completion criteria, and current status
 [runtime-transport-invariants.md](./runtime-transport-invariants.md),
 [rfc-session-transport-security.md](./rfc-session-transport-security.md),
 [rfc-stream-datagram-semantics.md](./rfc-stream-datagram-semantics.md)  
-**Related docs:** [substrate-spike-findings.md](./substrate-spike-findings.md),
-[http-lane-spike-findings.md](./http-lane-spike-findings.md),
-[runtime-transport-execution-journal.md](./runtime-transport-execution-journal.md),
-[api-status.md](./api-status.md),
+**Related docs:** [api-status.md](./api-status.md),
 [api-roadmap.md](./api-roadmap.md)
 
 ---
@@ -39,11 +36,6 @@ A checklist item is only really complete when one of these is true:
 
 Implemented-but-untested behavior still counts as incomplete for the
 purposes of RFC execution.
-
-The companion
-[runtime-transport-execution-journal.md](./runtime-transport-execution-journal.md)
-records how each step actually went, including emergent changes,
-reflections, blockers, and context to carry between rounds.
 
 ---
 

@@ -23,17 +23,30 @@ final peers = await tailscale.peers(); // List<PeerStatus>
 final peer = peers.firstWhere((peer) => peer.online);
 
 // Make requests — standard http.Client, routed through the tunnel
-await tailscale.http.client.get(Uri.parse('http://${peer.ipv4}/api/data'));
+await tailscale.http.get(Uri.parse('http://${peer.ipv4}/api/data'));
 
 // Expose a local HTTP server to receive traffic from the tailnet
-await tailscale.http.expose(8080);
+await tailscale.listen(8080);
+
+// Open raw TCP connections with authenticated peer metadata
+final conn = await tailscale.tcp.dial(peer.ipv4!, 7001);
+await conn.output.write(Uint8List.fromList('ping'.codeUnits));
+await conn.output.close();
+print(await utf8.decoder.bind(conn.input).join());
+
+// Bind UDP and exchange datagrams
+final udp = await tailscale.udp.bind(7002);
+await udp.send(
+  Uint8List.fromList('ping'.codeUnits),
+  remote: TailscaleEndpoint(ip: InternetAddress(peer.ipv4!), port: 7002),
+);
 ```
 
 ### Install
 
 ```yaml
 dependencies:
-  tailscale: ^0.3.0
+  tailscale: ^0.1.0
 ```
 
 The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](hook/build.dart) that compiles Go for the target platform automatically. Subsequent builds are cached and only recompile when Go source changes.
@@ -42,7 +55,8 @@ The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](ho
 
 - **App-scoped networking** — your app joins the tailnet itself instead of depending on a separate VPN
 - **Familiar HTTP client** — standard [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) routed through [WireGuard](https://www.wireguard.com/)
-- **Inbound HTTP publishing** — expose a local server to tailnet peers with `http.expose()`
+- **Raw TCP/UDP transports** — package-native stream and datagram APIs with authenticated peer metadata
+- **Inbound HTTP publishing** — expose a local server to tailnet peers with `listen()`
 - **Typed runtime state** — observe node status, peers, and errors through Dart models
 - **Persistent identity** — reconnect across launches without re-authenticating
 - **Automatic cross-platform builds** — Go layer compiles for the target via Dart [build hooks](https://dart.dev/tools/build-hooks)
@@ -74,17 +88,29 @@ await tailscale.up();
 final peers = await tailscale.peers();
 final peer = peers.firstWhere((p) => p.online);
 
-final response = await tailscale.http.client.get(
+final response = await tailscale.http.get(
   Uri.parse('http://${peer.ipv4}/api/data'),
 );
 
 // 4. Accept incoming HTTP requests from peers
-await tailscale.http.expose(8080); // tailnet:80 -> localhost:8080
+await tailscale.listen(8080); // tailnet:80 -> localhost:8080
 
-// 5. Disconnect (keeps identity)
+// 5. Open raw TCP or UDP transports
+final tcp = await tailscale.tcp.dial(peer.ipv4!, 7001);
+await tcp.output.write(Uint8List.fromList('ping'.codeUnits));
+await tcp.output.close();
+final echoed = await utf8.decoder.bind(tcp.input).join();
+
+final udp = await tailscale.udp.bind(7002);
+await udp.send(
+  Uint8List.fromList('ping'.codeUnits),
+  remote: TailscaleEndpoint(ip: InternetAddress(peer.ipv4!), port: 7002),
+);
+
+// 6. Disconnect (keeps identity)
 await tailscale.down();
 
-// 6. Disconnect and fully remove state
+// 7. Disconnect and fully remove state
 await tailscale.logout();
 ```
 
@@ -105,16 +131,34 @@ await tailscale.logout();
 | `init({stateDir, logLevel})` | `static void` | Configure once at startup. Stores state in `stateDir/tailscale/`. |
 | `instance` | `static Tailscale` | Singleton accessor |
 | `up({hostname, authKey, controlUrl})` | `Future<void>` | Start the node. Subscribe to `onStateChange` to observe when it reaches Running. |
+| `listen(localPort, {tailnetPort})` | `Future<int>` | Expose a local HTTP server to peers |
+| `tcp.dial(host, port)` | `Future<TailscaleConnection>` | Open a raw TCP stream to a peer |
+| `tcp.bind(port)` | `Future<TailscaleListener>` | Accept inbound raw TCP streams |
+| `udp.bind(port)` | `Future<TailscaleDatagramPort>` | Bind a UDP datagram port on this node |
 | `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health). Before `up()`, returns `stopped` or `noState` based on whether persisted credentials exist. |
 | `peers()` | `Future<List<PeerStatus>>` | Current peer snapshot |
 | `onStateChange` | `Stream<NodeState>` | Pushed lifecycle state changes |
 | `onError` | `Stream<TailscaleRuntimeError>` | Pushed asynchronous runtime errors |
 | `down()` | `Future<void>` | Disconnect (preserves state for reconnection) |
 | `logout()` | `Future<void>` | Disconnect and clear persisted state |
-| `http.client` | [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) | HTTP client routed through the WireGuard tunnel |
-| `http.expose(localPort, {tailnetPort})` | `Future<int>` | Expose a local HTTP server to tailnet peers |
+| `http` | [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) | HTTP client routed through the WireGuard tunnel |
+| `tcp` | `TailscaleTcp` | Raw TCP namespace |
+| `udp` | `TailscaleUdp` | Raw UDP namespace |
 
-The `tcp`, `tls`, `udp`, `funnel`, `taildrop`, `serve`, `exitNode`, `profiles`, `prefs`, and `diag` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
+<details>
+<summary><strong>Raw transport types</strong></summary>
+
+| Type | Description |
+|------|-------------|
+| `TailscaleConnection` | Bidirectional logical stream with `local`, `remote`, `identity`, `input`, `output`, `close()`, and `abort()` |
+| `TailscaleListener` | Accepts `TailscaleConnection`s from `connections` |
+| `TailscaleWriter` | Write-half API for a connection (`write`, `writeAll`, `close`, `done`) |
+| `TailscaleDatagramPort` | Datagram binding with `datagrams`, `send`, `close`, and `abort` |
+| `TailscaleDatagram` | One immutable datagram delivery with `bytes`, `local`, `remote`, and optional `identity` |
+| `TailscaleEndpoint` | Value type for `ip` + `port` |
+| `TailscaleIdentity` | Immutable authenticated peer identity snapshot (`stableNodeId`, `nodeName`, `userLogin`, `userDisplayName`) |
+
+</details>
 
 <details>
 <summary><strong>TailscaleStatus</strong></summary>
@@ -203,6 +247,8 @@ The Go layer wraps [`tailscale.com/tsnet`](https://pkg.go.dev/tailscale.com/tsne
 **Dart -> Go** calls use [`@Native`](https://api.dart.dev/dart-ffi/Native-class.html) FFI annotations and run on background isolates so the main isolate is never blocked.
 
 **Go -> Dart** notifications use [`NativePort`](https://api.dart.dev/dart-isolate/SendPort/nativePort.html) to push state transitions from Go's `WatchIPNBus` goroutine directly to Dart's event loop.
+
+For raw transports, the package now uses one authenticated internal runtime session between Dart and Go. Public TCP/UDP APIs are package-native transport types rather than `dart:io Socket` wrappers. The outbound HTTP client is implemented as a Go-backed standard `http.Client`, not a localhost proxy.
 
 ## Testing
 

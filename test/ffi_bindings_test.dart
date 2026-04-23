@@ -119,14 +119,20 @@ void main() {
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
       expect(
-        parsed.containsKey('proxyPort') || parsed.containsKey('error'),
+        parsed.containsKey('transportBootstrap') || parsed.containsKey('error'),
         isTrue,
         reason:
-            'Expected {"proxyPort": N, "proxyAuthToken": "..."} or {"error": "..."}, got: $resultJson',
+            'Expected {"transportBootstrap": {...}} or {"error": "..."}, got: $resultJson',
       );
-      if (parsed.containsKey('proxyPort')) {
-        expect(parsed['proxyAuthToken'], isA<String>());
-        expect((parsed['proxyAuthToken'] as String), isNotEmpty);
+      if (parsed.containsKey('transportBootstrap')) {
+        final bootstrap =
+            parsed['transportBootstrap'] as Map<String, dynamic>;
+        expect(bootstrap['masterSecretB64'], isA<String>());
+        expect((bootstrap['masterSecretB64'] as String), isNotEmpty);
+        expect(bootstrap['sessionGenerationIdB64'], isA<String>());
+        expect((bootstrap['sessionGenerationIdB64'] as String), isNotEmpty);
+        expect(bootstrap['preferredCarrierKind'], isA<String>());
+        expect((bootstrap['preferredCarrierKind'] as String), isNotEmpty);
       }
     });
   });

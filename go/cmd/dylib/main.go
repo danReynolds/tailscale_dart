@@ -20,15 +20,14 @@ func DuneStart(hostname *C.char, authKey *C.char, controlURL *C.char, stateDir *
 	ctl := C.GoString(controlURL)
 	dir := C.GoString(stateDir)
 
-	port, proxyAuthToken, err := tailscale.Start(name, key, ctl, dir)
+	err := tailscale.Start(name, key, ctl, dir)
 	if err != nil {
 		m := map[string]string{"error": err.Error()}
 		b, _ := json.Marshal(m)
 		return C.CString(string(b))
 	}
 	result, _ := json.Marshal(map[string]any{
-		"proxyPort":      port,
-		"proxyAuthToken": proxyAuthToken,
+		"transportBootstrap": tailscale.RuntimeTransportBootstrap(),
 	})
 	return C.CString(string(result))
 }
@@ -152,6 +151,149 @@ func DuneStatus() *C.char {
 //export DunePeers
 func DunePeers() *C.char {
 	return C.CString(tailscale.DunePeers())
+}
+
+//export DuneSpikeReset
+func DuneSpikeReset() {
+	tailscale.SpikeReset()
+}
+
+//export DuneSpikeBootstrap
+func DuneSpikeBootstrap() *C.char {
+	result, err := tailscale.SpikeBootstrap()
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	b, _ := json.Marshal(result)
+	return C.CString(string(b))
+}
+
+//export DuneSpikeAttach
+func DuneSpikeAttach(requestJSON *C.char) *C.char {
+	result, err := tailscale.SpikeAttach(C.GoString(requestJSON))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	b, _ := json.Marshal(result)
+	return C.CString(string(b))
+}
+
+//export DuneSpikeCommand
+func DuneSpikeCommand(requestJSON *C.char) *C.char {
+	result, err := tailscale.SpikeCommand(C.GoString(requestJSON))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	b, _ := json.Marshal(result)
+	return C.CString(string(b))
+}
+
+//export DuneSpikeSnapshot
+func DuneSpikeSnapshot() *C.char {
+	b, _ := json.Marshal(tailscale.SpikeSnapshot())
+	return C.CString(string(b))
+}
+
+//export DuneAttachTransport
+func DuneAttachTransport(requestJSON *C.char) *C.char {
+	if err := tailscale.AttachRuntimeTransport(C.GoString(requestJSON)); err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneTCPBind
+func DuneTCPBind(port C.int) *C.char {
+	if err := tailscale.TCPBind(int(port)); err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(fmt.Sprintf(`{"port": %d}`, int(port)))
+}
+
+//export DuneTCPUnbind
+func DuneTCPUnbind(port C.int) *C.char {
+	if err := tailscale.TCPUnbind(int(port)); err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneTCPDial
+func DuneTCPDial(host *C.char, port C.int) *C.char {
+	streamID, err := tailscale.TCPDial(C.GoString(host), int(port))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	b, _ := json.Marshal(map[string]any{"streamId": streamID})
+	return C.CString(string(b))
+}
+
+//export DuneUDPBind
+func DuneUDPBind(port C.int) *C.char {
+	bindingID, err := tailscale.UDPBind(int(port))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	b, _ := json.Marshal(map[string]any{"bindingId": bindingID})
+	return C.CString(string(b))
+}
+
+//export DuneHTTPStartRequest
+func DuneHTTPStartRequest(requestJSON *C.char) *C.char {
+	result, err := tailscale.HTTPStartRequest(C.GoString(requestJSON))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	b, _ := json.Marshal(result)
+	return C.CString(string(b))
+}
+
+//export DuneHTTPWriteBodyChunk
+func DuneHTTPWriteBodyChunk(requestJSON *C.char) *C.char {
+	if err := tailscale.HTTPWriteBodyChunk(C.GoString(requestJSON)); err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneHTTPCloseRequestBody
+func DuneHTTPCloseRequestBody(requestJSON *C.char) *C.char {
+	if err := tailscale.HTTPCloseRequestBody(C.GoString(requestJSON)); err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneHTTPCancelRequest
+func DuneHTTPCancelRequest(requestJSON *C.char) *C.char {
+	if err := tailscale.HTTPCancelRequest(C.GoString(requestJSON)); err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(`{"ok":true}`)
 }
 
 //export DuneFree

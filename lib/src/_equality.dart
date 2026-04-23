@@ -1,7 +1,7 @@
 /// Internal equality helpers for value types.
 ///
 /// Kept in one place so we don't drag in `package:collection` for the
-/// ~15 lines of logic shared across the namespaced value types.
+/// ~15 lines of logic shared across ~13 value types.
 library;
 
 /// Element-wise equality for two lists, tolerating null on either side.

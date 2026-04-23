@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
@@ -10,13 +11,15 @@ import '../api/diag.dart';
 import '../api/identity.dart';
 import '../errors.dart';
 import '../ffi_bindings.dart' as native;
+import '../http_client.dart';
+import '../runtime_transport_delegate.dart';
 import '../status.dart';
 
 part 'messages.dart';
 part 'entrypoint.dart';
 
 /// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
-final class Worker {
+final class Worker implements RuntimeTransportDelegate {
   Worker({
     required this.publishState,
     required this.publishRuntimeError,
@@ -29,11 +32,12 @@ final class Worker {
   final void Function(TailscaleRuntimeError error) publishRuntimeError;
   final void Function(List<PeerStatus> peers) publishPeers;
 
-  // Requests are processed synchronously on the worker isolate and each
-  // command produces exactly one response in request order, so a FIFO queue is
-  // sufficient for matching RPC responses without request IDs.
   final Queue<Completer<_WorkerResponse>> _pendingRequests =
       Queue<Completer<_WorkerResponse>>();
+  final Map<int, _PendingHttpRequest> _pendingHttpRequests =
+      <int, _PendingHttpRequest>{};
+
+  int _nextHttpRequestId = 1;
 
   final _sendPortCompleter = Completer<SendPort>();
   final _receivePort = ReceivePort();
@@ -62,10 +66,12 @@ final class Worker {
       case _WorkerReadyMessage(:final sendPort):
         _sendPortCompleter.complete(sendPort);
       case _WorkerBootstrapFailureMessage(:final message):
-        publishRuntimeError(TailscaleRuntimeError(
-          message: message,
-          code: TailscaleRuntimeErrorCode.node,
-        ));
+        publishRuntimeError(
+          TailscaleRuntimeError(
+            message: message,
+            code: TailscaleRuntimeErrorCode.node,
+          ),
+        );
         _dispose();
       case _WorkerRuntimeErrorEvent(:final error):
         publishRuntimeError(error);
@@ -73,6 +79,16 @@ final class Worker {
         publishState(state);
       case _WorkerPeersEvent(:final peers):
         publishPeers(peers);
+      case _WorkerHttpResponseHeadEvent event:
+        _pendingHttpRequests[event.requestId]?.handleHead(event);
+      case _WorkerHttpResponseBodyEvent event:
+        _pendingHttpRequests[event.requestId]?.handleBody(event.bytes);
+      case _WorkerHttpResponseDoneEvent event:
+        _pendingHttpRequests.remove(event.requestId)?.handleDone();
+      case _WorkerHttpResponseErrorEvent event:
+        _pendingHttpRequests
+            .remove(event.requestId)
+            ?.handleError(TailscaleHttpException(event.message));
       case _WorkerResponse():
         _pendingRequests.removeFirst().complete(message);
     }
@@ -84,8 +100,10 @@ final class Worker {
     native.duneStop();
     _receivePort.close();
 
-    final error =
-        const TailscaleOperationException('worker', 'Worker terminated.');
+    final error = const TailscaleOperationException(
+      'worker',
+      'Worker terminated.',
+    );
 
     if (!_sendPortCompleter.isCompleted) {
       _sendPortCompleter.completeError(error);
@@ -94,6 +112,10 @@ final class Worker {
       c.completeError(error);
     }
     _pendingRequests.clear();
+    for (final request in _pendingHttpRequests.values) {
+      request.handleError(error);
+    }
+    _pendingHttpRequests.clear();
   }
 
   Future<TResponse> _request<TResponse extends _WorkerResponse>(
@@ -115,14 +137,24 @@ final class Worker {
     }
   }
 
-  Future<({int proxyPort, String proxyAuthToken})> start({
+  Future<
+    ({
+      String? transportMasterSecretB64,
+      String? transportSessionGenerationIdB64,
+      String? transportPreferredCarrierKind,
+    })
+  >
+  start({
     required String hostname,
     required String authKey,
     required String controlUrl,
     required String stateDir,
   }) async {
-    final _WorkerStartResponse(:proxyPort, :proxyAuthToken) =
-        await _request<_WorkerStartResponse>(
+    final _WorkerStartResponse(
+      :transportMasterSecretB64,
+      :transportSessionGenerationIdB64,
+      :transportPreferredCarrierKind,
+    ) = await _request<_WorkerStartResponse>(
       _WorkerStartCommand(
         hostname: hostname,
         authKey: authKey,
@@ -130,7 +162,11 @@ final class Worker {
         stateDir: stateDir,
       ),
     );
-    return (proxyPort: proxyPort, proxyAuthToken: proxyAuthToken);
+    return (
+      transportMasterSecretB64: transportMasterSecretB64,
+      transportSessionGenerationIdB64: transportSessionGenerationIdB64,
+      transportPreferredCarrierKind: transportPreferredCarrierKind,
+    );
   }
 
   Future<int> listen({required int localPort, required int tailnetPort}) async {
@@ -140,40 +176,44 @@ final class Worker {
     return response.listenPort;
   }
 
-  Future<({int loopbackPort, String token})> tcpDial({
+  @override
+  Future<void> attachTransport({
     required String host,
     required int port,
-    Duration? timeout,
+    required String listenerOwner,
   }) async {
-    final response = await _request<_WorkerTcpDialResponse>(
-      _WorkerTcpDialCommand(
+    await _request<_WorkerAckResponse>(
+      _WorkerAttachTransportCommand(
         host: host,
         port: port,
-        timeoutMillis: timeout?.inMilliseconds ?? 0,
+        listenerOwner: listenerOwner,
       ),
     );
-    return (loopbackPort: response.loopbackPort, token: response.token);
   }
 
-  Future<int> tcpBind({
-    required int tailnetPort,
-    required String tailnetHost,
-    required int loopbackPort,
-  }) async {
-    final response = await _request<_WorkerTcpBindResponse>(
-      _WorkerTcpBindCommand(
-        tailnetPort: tailnetPort,
-        tailnetHost: tailnetHost,
-        loopbackPort: loopbackPort,
-      ),
-    );
-    return response.tailnetPort;
+  Future<void> tcpBind({required int port}) async {
+    await _request<_WorkerAckResponse>(_WorkerTcpBindCommand(port: port));
   }
 
-  Future<void> tcpUnbind({required int loopbackPort}) async {
-    await _request<_WorkerAckResponse>(
-      _WorkerTcpUnbindCommand(loopbackPort: loopbackPort),
+  @override
+  Future<void> tcpUnbind({required int port}) async {
+    await _request<_WorkerAckResponse>(_WorkerTcpUnbindCommand(port: port));
+  }
+
+  @override
+  Future<int> tcpDial({required String host, required int port}) async {
+    final response = await _request<_WorkerTcpDialResponse>(
+      _WorkerTcpDialCommand(host: host, port: port),
     );
+    return response.streamId;
+  }
+
+  @override
+  Future<int> udpBind({required int port}) async {
+    final response = await _request<_WorkerUdpBindResponse>(
+      _WorkerUdpBindCommand(port: port),
+    );
+    return response.bindingId;
   }
 
   Future<PeerIdentity?> whois(String ip) async {
@@ -226,6 +266,60 @@ final class Worker {
     return response.clientVersion;
   }
 
+  Future<TailscaleHttpStream> openHttpRequest(
+    TailscaleHttpRequestHead request,
+  ) async {
+    final requestId = _nextHttpRequestId++;
+    final pending = _PendingHttpRequest(requestId: requestId);
+    _pendingHttpRequests[requestId] = pending;
+    try {
+      await _request<_WorkerHttpStartRequestResponse>(
+        _WorkerHttpStartRequestCommand(
+          requestId: requestId,
+          method: request.method,
+          url: request.url.toString(),
+          headers: request.headers,
+          followRedirects: request.followRedirects,
+          maxRedirects: request.maxRedirects,
+          persistentConnection: request.persistentConnection,
+        ),
+      );
+      return TailscaleHttpStream(
+        responseHead: pending.responseHead.future,
+        responseBody: pending.responseBody.stream,
+        sendBodyChunk: (bytes) =>
+            _httpWriteBodyChunk(requestId: requestId, bytes: bytes),
+        closeRequestBody: () => _httpCloseRequestBody(requestId: requestId),
+        cancel: () => _httpCancelRequest(requestId: requestId),
+      );
+    } catch (_) {
+      _pendingHttpRequests.remove(requestId);
+      rethrow;
+    }
+  }
+
+  Future<void> _httpWriteBodyChunk({
+    required int requestId,
+    required Uint8List bytes,
+  }) async {
+    await _request<_WorkerAckResponse>(
+      _WorkerHttpWriteBodyChunkCommand(requestId: requestId, bodyBytes: bytes),
+    );
+  }
+
+  Future<void> _httpCloseRequestBody({required int requestId}) async {
+    await _request<_WorkerAckResponse>(
+      _WorkerHttpCloseRequestBodyCommand(requestId: requestId),
+    );
+  }
+
+  Future<void> _httpCancelRequest({required int requestId}) async {
+    _pendingHttpRequests.remove(requestId)?.markCancelled();
+    await _request<_WorkerAckResponse>(
+      _WorkerHttpCancelRequestCommand(requestId: requestId),
+    );
+  }
+
   Future<TailscaleStatus> status({required String stateDir}) async {
     final response = await _request<_WorkerStatusResponse>(
       _WorkerStatusCommand(stateDir: stateDir),
@@ -249,5 +343,71 @@ final class Worker {
       _WorkerLogoutCommand(stateDir: stateDir),
     );
   }
+}
 
+final class _PendingHttpRequest {
+  _PendingHttpRequest({required this.requestId});
+
+  final int requestId;
+  final Completer<TailscaleHttpResponseHead> responseHead =
+      Completer<TailscaleHttpResponseHead>();
+  final StreamController<Uint8List> responseBody = StreamController<Uint8List>(
+    sync: true,
+  );
+
+  bool _cancelled = false;
+
+  void handleHead(_WorkerHttpResponseHeadEvent event) {
+    if (_cancelled || responseHead.isCompleted) {
+      return;
+    }
+    responseHead.complete(
+      TailscaleHttpResponseHead(
+        statusCode: event.statusCode,
+        headers: event.headers,
+        contentLength: event.contentLength,
+        isRedirect: event.isRedirect,
+        finalUrl: Uri.parse(event.finalUrl),
+        reasonPhrase: event.reasonPhrase,
+        connectionClose: event.connectionClose,
+      ),
+    );
+  }
+
+  void handleBody(Uint8List bytes) {
+    if (_cancelled || responseBody.isClosed) {
+      return;
+    }
+    responseBody.add(bytes);
+  }
+
+  void handleDone() {
+    if (!responseHead.isCompleted) {
+      responseHead.completeError(
+        const TailscaleHttpException(
+          'HTTP response completed before response headers were delivered.',
+        ),
+      );
+    }
+    if (!responseBody.isClosed) {
+      unawaited(responseBody.close());
+    }
+  }
+
+  void handleError(Object error) {
+    if (!responseHead.isCompleted) {
+      responseHead.completeError(error);
+    }
+    if (!responseBody.isClosed) {
+      responseBody.addError(error);
+      unawaited(responseBody.close());
+    }
+  }
+
+  void markCancelled() {
+    _cancelled = true;
+    if (!responseBody.isClosed) {
+      unawaited(responseBody.close());
+    }
+  }
 }

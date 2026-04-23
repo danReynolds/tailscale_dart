@@ -3,16 +3,12 @@ package tailscale
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -29,13 +25,10 @@ import (
 var LogLevel int32 // default 0 (silent)
 
 var (
-	mu sync.Mutex // protects srv, store, proxyPort, proxyLn, reverseProxyLn, proxyAuthToken
+	mu sync.Mutex // protects srv, store, reverseProxyLn
 
 	srv            *tsnet.Server
 	store          *SQLiteStore // package-owned; tsnet.Server doesn't close its Store, so we do in stopLocked
-	proxyPort      int
-	proxyLn        net.Listener // outgoing proxy listener
-	proxyAuthToken string
 
 	reverseProxyLn          net.Listener
 	reverseProxyTailnetPort int
@@ -53,8 +46,6 @@ var (
 const (
 	localForwardMaxAttempts = 3
 	localForwardRetryDelay  = 150 * time.Millisecond
-	proxyRequestPath        = "/proxy"
-	proxyAuthHeader         = "X-Tailscale-Proxy-Token"
 )
 
 // HasState checks if the state directory contains a valid machine key.
@@ -115,21 +106,17 @@ func Stop() {
 
 // stopLocked tears down the server and all listeners. Caller must hold mu.
 func stopLocked() {
+	closeRuntimeTransportLocked()
+	cancelAllHTTPRequests()
+
 	if reverseProxyLn != nil {
 		reverseProxyLn.Close()
 		reverseProxyLn = nil
 	}
 
-	if proxyLn != nil {
-		proxyLn.Close()
-		proxyLn = nil
-	}
-
 	if srv != nil {
 		srv.Close()
 		srv = nil
-		proxyPort = 0
-		proxyAuthToken = ""
 		reverseProxyTailnetPort = 0
 	}
 
@@ -142,15 +129,14 @@ func stopLocked() {
 	}
 }
 
-// Start initializes the Tailscale node and starts the outgoing HTTP proxy.
-// It returns the proxy port number and per-session proxy auth token.
-func Start(hostname, authKey, controlURL, stateDir string) (port int, token string, err error) {
+// Start initializes the Tailscale node.
+func Start(hostname, authKey, controlURL, stateDir string) (err error) {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if srv != nil {
 		if authKey == "" {
-			return proxyPort, proxyAuthToken, nil
+			return nil
 		}
 		// Auth key provided on an already-running server — tear down
 		// and restart so the new key is applied. Clear persisted state
@@ -158,24 +144,24 @@ func Start(hostname, authKey, controlURL, stateDir string) (port int, token stri
 		// NeedsLogin state causes tsnet to call StartLoginInteractive
 		// and ignore the auth key.
 		if strings.TrimSpace(stateDir) == "" {
-			return 0, "", fmt.Errorf("state dir is empty")
+			return fmt.Errorf("state dir is empty")
 		}
 		stopLocked()
 		if err := os.RemoveAll(stateDir); err != nil {
-			return 0, "", fmt.Errorf("failed to clear state dir for re-auth: %w", err)
+			return fmt.Errorf("failed to clear state dir for re-auth: %w", err)
 		}
 	}
 
 	os.Setenv("TS_ENABLE_RAW_DISCO", "false")
 
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
-		return 0, "", fmt.Errorf("failed to create state dir: %v", err)
+		return fmt.Errorf("failed to create state dir: %v", err)
 	}
 
 	statePath := stateDir + "/state.db"
 	newStore, err := NewSQLiteStore(statePath)
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to create sqlite store: %v", err)
+		return fmt.Errorf("failed to create sqlite store: %v", err)
 	}
 
 	newSrv := &tsnet.Server{
@@ -191,16 +177,11 @@ func Start(hostname, authKey, controlURL, stateDir string) (port int, token stri
 		},
 	}
 
-	// If we fail before committing newSrv/newStore/outLn to package state,
-	// release their resources. The named return `err` is the signal — any
-	// `return ..., err` with a non-nil error triggers cleanup.
-	var outLn net.Listener
+	// If we fail before committing newSrv/newStore to package state, release
+	// their resources. The named return `err` is the signal.
 	defer func() {
 		if err == nil {
 			return
-		}
-		if outLn != nil {
-			outLn.Close()
 		}
 		newSrv.Close()
 		newStore.Close()
@@ -210,30 +191,16 @@ func Start(hostname, authKey, controlURL, stateDir string) (port int, token stri
 		if strings.Contains(startErr.Error(), "permission denied") || strings.Contains(startErr.Error(), "netlink") {
 			logInfo("Ignoring expected Android permission error: %v", startErr)
 		} else {
-			return 0, "", fmt.Errorf("failed to start tsnet: %v", startErr)
+			return fmt.Errorf("failed to start tsnet: %v", startErr)
 		}
-	}
-
-	newToken, err := newProxyAuthToken()
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to create proxy auth token: %v", err)
-	}
-
-	// Start the outgoing HTTP proxy (Dart → tailnet peers)
-	outLn, err = net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to listen for outgoing proxy: %v", err)
 	}
 
 	// Commit to package state only after every allocation succeeded.
 	srv = newSrv
 	store = newStore
-	proxyLn = outLn
-	proxyPort = outLn.Addr().(*net.TCPAddr).Port
-	proxyAuthToken = newToken
-	go http.Serve(outLn, http.HandlerFunc(handleOutgoingProxy))
+	ensureRuntimeTransportLocked()
 
-	return proxyPort, proxyAuthToken, nil
+	return nil
 }
 
 // Listen starts the reverse proxy that accepts incoming tailnet HTTP traffic on
@@ -313,103 +280,6 @@ func Listen(localPort, tailnetPort int) (int, error) {
 	go http.Serve(ln, http.HandlerFunc(handleReverseProxy))
 
 	return localPort, nil
-}
-
-// handleOutgoingProxy proxies HTTP/HTTPS requests from Dart to Tailscale peers.
-func handleOutgoingProxy(w http.ResponseWriter, r *http.Request) {
-	mu.Lock()
-	s := srv
-	expectedToken := proxyAuthToken
-	mu.Unlock()
-	if s == nil {
-		http.Error(w, "Server not running", 503)
-		return
-	}
-	if r.URL.Path != proxyRequestPath {
-		http.Error(w, "Not Found", 404)
-		return
-	}
-	if !isAuthorizedOutgoingProxyRequest(r, expectedToken) {
-		http.Error(w, "Unauthorized", 401)
-		return
-	}
-
-	client := s.HTTPClient()
-
-	targetURL, err := parseOutgoingTarget(r.URL.Query().Get("target"))
-	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-
-	req, err := http.NewRequestWithContext(
-		r.Context(),
-		r.Method,
-		targetURL.String(),
-		r.Body,
-	)
-	if err != nil {
-		http.Error(w, "Bad Request", 400)
-		return
-	}
-	for k, v := range filteredProxyRequestHeaders(r.Header) {
-		req.Header[k] = append([]string(nil), v...)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Proxy Error: %v", err), 502)
-		return
-	}
-	defer resp.Body.Close()
-
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-}
-
-func parseOutgoingTarget(raw string) (*url.URL, error) {
-	if raw == "" {
-		return nil, fmt.Errorf("missing 'target' query param")
-	}
-
-	targetURL, err := url.Parse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("invalid target URL: %v", err)
-	}
-	if targetURL.Scheme != "http" && targetURL.Scheme != "https" {
-		return nil, fmt.Errorf("invalid target URL scheme %q", targetURL.Scheme)
-	}
-	if targetURL.Host == "" {
-		return nil, fmt.Errorf("invalid target URL: missing host")
-	}
-
-	return targetURL, nil
-}
-
-func isAuthorizedOutgoingProxyRequest(r *http.Request, expectedToken string) bool {
-	if expectedToken == "" {
-		return false
-	}
-	// Constant-time comparison to avoid leaking the token byte-by-byte via
-	// response-time measurement from a co-resident local process.
-	return subtle.ConstantTimeCompare(
-		[]byte(r.Header.Get(proxyAuthHeader)),
-		[]byte(expectedToken),
-	) == 1
-}
-
-func filteredProxyRequestHeaders(src http.Header) http.Header {
-	filtered := make(http.Header, len(src))
-	for k, v := range src {
-		if http.CanonicalHeaderKey(k) == proxyAuthHeader {
-			continue
-		}
-		filtered[k] = append([]string(nil), v...)
-	}
-	return filtered
 }
 
 // handleReverseProxy forwards incoming Tailscale traffic to the local Dart server.
@@ -530,12 +400,4 @@ func logInfo(format string, args ...any) {
 	if atomic.LoadInt32(&LogLevel) >= 2 {
 		log.Printf("TSNET: "+format, args...)
 	}
-}
-
-func newProxyAuthToken() (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(raw[:]), nil
 }

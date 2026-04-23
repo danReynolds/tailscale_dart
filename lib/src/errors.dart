@@ -118,6 +118,16 @@ final class TailscaleHttpException extends TailscaleOperationException {
   }) : super('http', message);
 }
 
+/// Thrown when `listen()` fails to expose a local HTTP server.
+final class TailscaleListenException extends TailscaleOperationException {
+  const TailscaleListenException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('listen', message);
+}
+
 /// Thrown when a `tcp.*` call fails — tailnet dial refused, no route
 /// to peer, loopback bridge setup failure, etc.
 final class TailscaleTcpException extends TailscaleOperationException {
@@ -127,6 +137,36 @@ final class TailscaleTcpException extends TailscaleOperationException {
     super.statusCode,
     super.cause,
   }) : super('tcp', message);
+}
+
+/// Thrown when `tcp.dial()` fails.
+final class TailscaleTcpDialException extends TailscaleOperationException {
+  const TailscaleTcpDialException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('tcp.dial', message);
+}
+
+/// Thrown when `tcp.bind()` fails.
+final class TailscaleTcpBindException extends TailscaleOperationException {
+  const TailscaleTcpBindException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('tcp.bind', message);
+}
+
+/// Thrown when `udp.bind()` fails.
+final class TailscaleUdpBindException extends TailscaleOperationException {
+  const TailscaleUdpBindException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('udp.bind', message);
 }
 
 /// Thrown when `status()` fails to decode or fetch native status.
@@ -211,13 +251,20 @@ final class TailscaleDiagException extends TailscaleOperationException {
 }
 
 /// High-level category for asynchronous runtime errors pushed from Go.
-enum TailscaleRuntimeErrorCode { localClient, watcher, node, unknown }
+enum TailscaleRuntimeErrorCode {
+  localClient,
+  watcher,
+  node,
+  transport,
+  unknown,
+}
 
 TailscaleRuntimeErrorCode _parseRuntimeErrorCode(String? value) =>
     switch (value) {
       'localClient' => TailscaleRuntimeErrorCode.localClient,
       'watcher' => TailscaleRuntimeErrorCode.watcher,
       'node' => TailscaleRuntimeErrorCode.node,
+      'transport' => TailscaleRuntimeErrorCode.transport,
       _ => TailscaleRuntimeErrorCode.unknown,
     };
 

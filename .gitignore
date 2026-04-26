@@ -1,6 +1,8 @@
 .dart_tool/
 build/
 pubspec.lock
+!packages/demo_flutter/pubspec.lock
+.vscode/
 
 # Go build artifacts (the build hook generates these)
 go/libdune_tsnet.*

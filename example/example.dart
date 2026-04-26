@@ -25,20 +25,25 @@ void main() async {
   // Your app is now a node on the tailnet
   final status = await tsnet.status();
   print('Local IP: ${status.ipv4}');
-  final peers = await tsnet.peers();
-  print('Known peers: ${peers.length}');
+  final nodes = await tsnet.nodes();
+  print('Known nodes: ${nodes.length}');
 
-  // 3. Make requests to peers using the built-in HTTP client.
+  // 3. Make requests to nodes using the built-in HTTP client.
   //    It transparently routes through the Tailscale tunnel.
-  final peer = peers.firstWhere((peer) => peer.online);
+  final node = nodes.firstWhere((node) => node.online);
   final response = await tsnet.http.client.get(
-    Uri.parse('http://${peer.ipv4}/api/data'),
+    Uri.parse('http://${node.ipv4}/api/data'),
   );
   print('Response: ${response.body}');
 
-  // Expose a local HTTP server to the tailnet
-  await tsnet.http.expose(8080);
+  // Accept incoming tailnet HTTP requests directly.
+  final server = await tsnet.http.bind(port: 80);
+  server.requests.listen((request) async {
+    await request.respond(body: 'hello from ${status.ipv4}');
+  });
+  print('HTTP bound on ${server.tailnet.address}:${server.tailnet.port}');
 
   // Clean shutdown
+  await server.close();
   await tsnet.down();
 }

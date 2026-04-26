@@ -3,10 +3,12 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:isolate';
+import 'dart:io' as io;
 
 import 'package:ffi/ffi.dart';
 
 import '../api/diag.dart';
+import '../api/connection.dart';
 import '../api/identity.dart';
 import '../errors.dart';
 import '../ffi_bindings.dart' as native;
@@ -15,19 +17,78 @@ import '../status.dart';
 part 'messages.dart';
 part 'entrypoint.dart';
 
+Future<String> _loadHostNetworkSnapshot() async {
+  if (!io.Platform.isAndroid) {
+    return '{}';
+  }
+
+  try {
+    final interfaces = await io.NetworkInterface.list(
+      includeLinkLocal: true,
+      includeLoopback: true,
+      type: io.InternetAddressType.any,
+    );
+    final defaultRoute = _chooseDefaultRouteInterface(interfaces);
+    return jsonEncode({
+      'defaultRouteInterface': defaultRoute ?? '',
+      'interfaces': [
+        for (final iface in interfaces)
+          {
+            'name': iface.name,
+            'index': iface.index,
+            // dart:io doesn't expose MTU. Go will substitute a sane default.
+            'mtu': 0,
+            'addresses': [for (final addr in iface.addresses) addr.address],
+          },
+      ],
+    });
+  } catch (_) {
+    // Go has an Android-only fallback that infers one outbound address. Passing
+    // an empty snapshot still installs Tailscale's alternate netmon getter.
+    return '{"interfaces":[]}';
+  }
+}
+
+String? _chooseDefaultRouteInterface(List<io.NetworkInterface> interfaces) {
+  String? ipv6Candidate;
+  for (final iface in interfaces) {
+    for (final addr in iface.addresses) {
+      if (!_isUsableHostAddress(addr)) continue;
+      if (addr.type == io.InternetAddressType.IPv4) {
+        return iface.name;
+      }
+      ipv6Candidate ??= iface.name;
+    }
+  }
+  return ipv6Candidate;
+}
+
+bool _isUsableHostAddress(io.InternetAddress address) {
+  if (address.isLoopback) return false;
+  final bytes = address.rawAddress;
+  if (address.type == io.InternetAddressType.IPv4) {
+    return bytes.length == 4 && !(bytes[0] == 169 && bytes[1] == 254);
+  }
+  if (address.type == io.InternetAddressType.IPv6) {
+    return bytes.length == 16 &&
+        !(bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80);
+  }
+  return false;
+}
+
 /// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
 final class Worker {
   Worker({
     required this.publishState,
     required this.publishRuntimeError,
-    required this.publishPeers,
+    required this.publishNodes,
   }) {
     _start();
   }
 
   final void Function(NodeState state) publishState;
   final void Function(TailscaleRuntimeError error) publishRuntimeError;
-  final void Function(List<PeerStatus> peers) publishPeers;
+  final void Function(List<TailscaleNode> nodes) publishNodes;
 
   // Requests are processed synchronously on the worker isolate and each
   // command produces exactly one response in request order, so a FIFO queue is
@@ -62,17 +123,19 @@ final class Worker {
       case _WorkerReadyMessage(:final sendPort):
         _sendPortCompleter.complete(sendPort);
       case _WorkerBootstrapFailureMessage(:final message):
-        publishRuntimeError(TailscaleRuntimeError(
-          message: message,
-          code: TailscaleRuntimeErrorCode.node,
-        ));
+        publishRuntimeError(
+          TailscaleRuntimeError(
+            message: message,
+            code: TailscaleRuntimeErrorCode.node,
+          ),
+        );
         _dispose();
       case _WorkerRuntimeErrorEvent(:final error):
         publishRuntimeError(error);
       case _WorkerStateEvent(:final state):
         publishState(state);
       case _WorkerPeersEvent(:final peers):
-        publishPeers(peers);
+        publishNodes(peers);
       case _WorkerResponse():
         _pendingRequests.removeFirst().complete(message);
     }
@@ -84,8 +147,10 @@ final class Worker {
     native.duneStop();
     _receivePort.close();
 
-    final error =
-        const TailscaleOperationException('worker', 'Worker terminated.');
+    final error = const TailscaleOperationException(
+      'worker',
+      'Worker terminated.',
+    );
 
     if (!_sendPortCompleter.isCompleted) {
       _sendPortCompleter.completeError(error);
@@ -115,68 +180,113 @@ final class Worker {
     }
   }
 
-  Future<({int proxyPort, String proxyAuthToken})> start({
+  Future<void> start({
     required String hostname,
     required String authKey,
     required String controlUrl,
     required String stateDir,
   }) async {
-    final _WorkerStartResponse(:proxyPort, :proxyAuthToken) =
-        await _request<_WorkerStartResponse>(
+    final hostNetworkSnapshot = await _loadHostNetworkSnapshot();
+    await _request<_WorkerStartResponse>(
       _WorkerStartCommand(
         hostname: hostname,
         authKey: authKey,
         controlUrl: controlUrl,
         stateDir: stateDir,
+        hostNetworkSnapshot: hostNetworkSnapshot,
       ),
     );
-    return (proxyPort: proxyPort, proxyAuthToken: proxyAuthToken);
   }
 
-  Future<int> listen({required int localPort, required int tailnetPort}) async {
-    final response = await _request<_WorkerListenResponse>(
-      _WorkerListenCommand(localPort: localPort, tailnetPort: tailnetPort),
+  Future<({int bindingId, TailscaleEndpoint tailnet})> httpBind({
+    required int tailnetPort,
+  }) async {
+    final response = await _request<_WorkerHttpBindResponse>(
+      _WorkerHttpBindCommand(tailnetPort: tailnetPort),
     );
-    return response.listenPort;
+    return (
+      bindingId: response.bindingId,
+      tailnet: TailscaleEndpoint(
+        address: response.tailnetAddress,
+        port: response.tailnetPort,
+      ),
+    );
   }
 
-  Future<({int loopbackPort, String token})> tcpDial({
+  Future<void> httpCloseBinding({required int bindingId}) async {
+    await _request<_WorkerAckResponse>(
+      _WorkerHttpCloseBindingCommand(bindingId: bindingId),
+    );
+  }
+
+  Future<({int fd, TailscaleEndpoint local, TailscaleEndpoint remote})>
+  tcpDialConnection({
     required String host,
     required int port,
     Duration? timeout,
   }) async {
-    final response = await _request<_WorkerTcpDialResponse>(
-      _WorkerTcpDialCommand(
+    final response = await _request<_WorkerTcpDialFdResponse>(
+      _WorkerTcpDialFdCommand(
         host: host,
         port: port,
         timeoutMillis: timeout?.inMilliseconds ?? 0,
       ),
     );
-    return (loopbackPort: response.loopbackPort, token: response.token);
-  }
-
-  Future<int> tcpBind({
-    required int tailnetPort,
-    required String tailnetHost,
-    required int loopbackPort,
-  }) async {
-    final response = await _request<_WorkerTcpBindResponse>(
-      _WorkerTcpBindCommand(
-        tailnetPort: tailnetPort,
-        tailnetHost: tailnetHost,
-        loopbackPort: loopbackPort,
+    return (
+      fd: response.fd,
+      local: TailscaleEndpoint(
+        address: response.localAddress,
+        port: response.localPort,
+      ),
+      remote: TailscaleEndpoint(
+        address: response.remoteAddress,
+        port: response.remotePort,
       ),
     );
-    return response.tailnetPort;
   }
 
-  Future<void> tcpUnbind({required int loopbackPort}) async {
-    await _request<_WorkerAckResponse>(
-      _WorkerTcpUnbindCommand(loopbackPort: loopbackPort),
+  Future<({int listenerId, TailscaleEndpoint local})> tcpListenFd({
+    required int tailnetPort,
+    required String tailnetHost,
+  }) async {
+    final response = await _request<_WorkerTcpListenFdResponse>(
+      _WorkerTcpListenFdCommand(
+        tailnetPort: tailnetPort,
+        tailnetHost: tailnetHost,
+      ),
+    );
+    return (
+      listenerId: response.listenerId,
+      local: TailscaleEndpoint(
+        address: response.localAddress,
+        port: response.localPort,
+      ),
     );
   }
 
-  Future<PeerIdentity?> whois(String ip) async {
+  Future<void> tcpCloseFdListener({required int listenerId}) async {
+    await _request<_WorkerAckResponse>(
+      _WorkerTcpCloseFdListenerCommand(listenerId: listenerId),
+    );
+  }
+
+  Future<({int fd, TailscaleEndpoint local})> udpBindFd({
+    required String host,
+    required int port,
+  }) async {
+    final response = await _request<_WorkerUdpBindFdResponse>(
+      _WorkerUdpBindFdCommand(host: host, port: port),
+    );
+    return (
+      fd: response.fd,
+      local: TailscaleEndpoint(
+        address: response.localAddress,
+        port: response.localPort,
+      ),
+    );
+  }
+
+  Future<TailscaleNodeIdentity?> whois(String ip) async {
     final response = await _request<_WorkerWhoIsResponse>(
       _WorkerWhoIsCommand(ip: ip),
     );
@@ -233,7 +343,7 @@ final class Worker {
     return response.status;
   }
 
-  Future<List<PeerStatus>> peers() async {
+  Future<List<TailscaleNode>> nodes() async {
     final response = await _request<_WorkerPeersResponse>(
       const _WorkerPeersCommand(),
     );
@@ -249,5 +359,4 @@ final class Worker {
       _WorkerLogoutCommand(stateDir: stateDir),
     );
   }
-
 }

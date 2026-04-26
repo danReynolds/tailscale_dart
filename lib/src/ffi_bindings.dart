@@ -9,17 +9,18 @@ import 'dart:ffi' as ffi;
 
 import 'package:ffi/ffi.dart';
 
-/// Starts the Tailscale node and outgoing HTTP proxy.
+/// Starts the Tailscale node.
 /// Returns JSON:
-///   {"proxyPort": N, "proxyAuthToken": "..."} on success
+///   {"ok": true} on success
 ///   {"error": "..."} on failure.
 @ffi.Native<
-    ffi.Pointer<Utf8> Function(
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-    )>(symbol: 'DuneStart')
+  ffi.Pointer<Utf8> Function(
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+  )
+>(symbol: 'DuneStart')
 external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> hostname,
   ffi.Pointer<Utf8> authKey,
@@ -27,68 +28,114 @@ external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> stateDir,
 );
 
-/// Starts the reverse proxy (tailnet:tailnetPort → localhost:localPort).
-/// If localPort is 0, allocates an ephemeral port.
-/// Returns JSON: {"listenPort": N} on success, {"error": "..."} on failure.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Int32)>(
-  symbol: 'DuneListen',
-)
-external ffi.Pointer<Utf8> duneListen(int localPort, int tailnetPort);
-
-/// Opens an outbound TCP connection to a tailnet peer and sets up a
-/// one-shot loopback bridge for the Dart side.
+/// Starts one outgoing tailnet HTTP request.
 ///
 /// Returns JSON:
-///   {"loopbackPort": N, "token": "..."} on success.
+///   {"requestBodyFd": N|-1, "responseBodyFd": N} on success
+///   {"error": "..."} on failure.
+@ffi.Native<
+  ffi.Pointer<Utf8> Function(
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Int64,
+    ffi.Int32,
+    ffi.Int32,
+  )
+>(symbol: 'DuneHttpStart')
+external ffi.Pointer<Utf8> duneHttpStart(
+  ffi.Pointer<Utf8> method,
+  ffi.Pointer<Utf8> url,
+  ffi.Pointer<Utf8> headersJson,
+  int contentLength,
+  int followRedirects,
+  int maxRedirects,
+);
+
+/// Provides a host network-interface snapshot to the native runtime.
+///
+/// This is currently used on Android before startup because Go's standard
+/// netlink-based interface discovery can be denied by the app sandbox.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
+  symbol: 'DuneSetNetworkInterfaces',
+)
+external ffi.Pointer<Utf8> duneSetNetworkInterfaces(ffi.Pointer<Utf8> snapshot);
+
+/// Starts an fd-backed inbound HTTP binding.
+/// Returns JSON:
+///   {"bindingId": N, "tailnetAddress": "...", "tailnetPort": N} on success
+///   {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32)>(symbol: 'DuneHttpBind')
+external ffi.Pointer<Utf8> duneHttpBind(int tailnetPort);
+
+/// Blocks until an inbound HTTP binding accepts one request or closes.
+///
+/// Returns JSON:
+///   {"requestBodyFd": N, "responseBodyFd": N, ...metadata} on success
+///   {"closed": true} when the binding is closed
+///   {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int64)>(symbol: 'DuneHttpAccept')
+external ffi.Pointer<Utf8> duneHttpAccept(int bindingId);
+
+/// Closes an HTTP binding.
+@ffi.Native<ffi.Void Function(ffi.Int64)>(symbol: 'DuneHttpCloseBinding')
+external void duneHttpCloseBinding(int bindingId);
+
+/// Opens an outbound TCP connection and returns a POSIX fd for the Dart side.
+///
+/// Returns JSON:
+///   {"fd": N, "localAddress": "...", "localPort": N,
+///    "remoteAddress": "...", "remotePort": N} on success.
 ///   {"error": "..."} on failure.
 ///
-/// Dart connects to `127.0.0.1:loopbackPort` and writes `token` as
-/// the first bytes on the wire. After that the socket is a
-/// transparent pipe to the peer.
-///
-/// `timeoutMillis` is the total `tcp.dial` bridge budget; 0 means no
-/// timeout.
+/// POSIX-only backend primitive. Unsupported platforms fail explicitly.
 @ffi.Native<
-    ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int64)>(
-  symbol: 'DuneTcpDial',
-)
-external ffi.Pointer<Utf8> duneTcpDial(
+  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int64)
+>(symbol: 'DuneTcpDialFd')
+external ffi.Pointer<Utf8> duneTcpDialFd(
   ffi.Pointer<Utf8> host,
   int port,
   int timeoutMillis,
 );
 
-/// Starts an inbound TCP bridge: this node's tsnet.Server listens on
-/// `tailnetPort` (optionally pinned to `tailnetHost`), and every
-/// accepted tailnet conn is forwarded to the Dart-owned loopback
-/// listener on `127.0.0.1:loopbackPort`.
-///
-/// Pass `tailnetPort = 0` to request an ephemeral tailnet port; the
-/// assigned port comes back in the response JSON.
+/// Starts a POSIX fd-backed TCP listener.
 ///
 /// Returns JSON:
-///   {"tailnetPort": N} on success (`N` is the actual bound port —
-///   useful when `0` was passed).
+///   {"listenerId": N, "localAddress": "...", "localPort": N} on success.
 ///   {"error": "..."} on failure.
-///
-/// Pass empty string for `tailnetHost` to accept on all of this
-/// node's tailnet IPs.
-@ffi.Native<
-    ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Pointer<Utf8>, ffi.Int32)>(
-  symbol: 'DuneTcpBind',
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Pointer<Utf8>)>(
+  symbol: 'DuneTcpListenFd',
 )
-external ffi.Pointer<Utf8> duneTcpBind(
+external ffi.Pointer<Utf8> duneTcpListenFd(
   int tailnetPort,
   ffi.Pointer<Utf8> tailnetHost,
-  int loopbackPort,
 );
 
-/// Tears down the inbound TCP bridge registered against
-/// `loopbackPort`. Idempotent — unknown ports are a no-op.
-@ffi.Native<ffi.Void Function(ffi.Int32)>(symbol: 'DuneTcpUnbind')
-external void duneTcpUnbind(int loopbackPort);
+/// Blocks until a fd-backed listener accepts one connection or closes.
+///
+/// Returns JSON:
+///   {"fd": N, "localAddress": "...", "localPort": N,
+///    "remoteAddress": "...", "remotePort": N} on accepted connection.
+///   {"closed": true} when the listener is closed.
+///   {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int64)>(symbol: 'DuneTcpAcceptFd')
+external ffi.Pointer<Utf8> duneTcpAcceptFd(int listenerId);
 
-/// Resolves a tailnet IP to its peer identity via LocalAPI.
+/// Closes a POSIX fd-backed TCP listener.
+@ffi.Native<ffi.Void Function(ffi.Int64)>(symbol: 'DuneTcpCloseFdListener')
+external void duneTcpCloseFdListener(int listenerId);
+
+/// Starts a POSIX fd-backed UDP datagram binding.
+///
+/// Returns JSON:
+///   {"fd": N, "localAddress": "...", "localPort": N} on success.
+///   {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32)>(
+  symbol: 'DuneUdpBindFd',
+)
+external ffi.Pointer<Utf8> duneUdpBindFd(ffi.Pointer<Utf8> host, int port);
+
+/// Resolves a tailnet IP to its node identity via LocalAPI.
 ///
 /// Returns JSON:
 ///   {"found": true, "nodeId": "...", "hostName": "...",
@@ -107,7 +154,7 @@ external ffi.Pointer<Utf8> duneWhoIs(ffi.Pointer<Utf8> ip);
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneTlsDomains')
 external ffi.Pointer<Utf8> duneTlsDomains();
 
-/// Tailscale-level ping to a tailnet peer.
+/// Tailscale-level ping to a tailnet node.
 ///
 /// `timeoutMillis <= 0` means no timeout. `pingType` is one of
 /// "disco" (default), "tsmp", "icmp".
@@ -118,13 +165,8 @@ external ffi.Pointer<Utf8> duneTlsDomains();
 ///     on success.
 ///   {"error": "..."} on failure.
 @ffi.Native<
-    ffi.Pointer<Utf8> Function(
-      ffi.Pointer<Utf8>,
-      ffi.Int32,
-      ffi.Pointer<Utf8>,
-    )>(
-  symbol: 'DuneDiagPing',
-)
+  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Pointer<Utf8>)
+>(symbol: 'DuneDiagPing')
 external ffi.Pointer<Utf8> duneDiagPing(
   ffi.Pointer<Utf8> ip,
   int timeoutMillis,
@@ -166,7 +208,7 @@ external void duneStop();
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneStatus')
 external ffi.Pointer<Utf8> duneStatus();
 
-/// Returns the current peer list as JSON.
+/// Returns the current node list as JSON.
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DunePeers')
 external ffi.Pointer<Utf8> dunePeers();
 

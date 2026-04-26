@@ -33,6 +33,8 @@ void main() {
         TailscaleHttpException('_'),
         TailscaleStatusException('_'),
         TailscaleLogoutException('_'),
+        TailscaleTcpException('_'),
+        TailscaleUdpException('_'),
         TailscaleTaildropException('_'),
         TailscaleServeException('_'),
         TailscalePrefsException('_'),

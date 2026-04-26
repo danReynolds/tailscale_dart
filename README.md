@@ -5,9 +5,9 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Dart 3.10+](https://img.shields.io/badge/Dart-3.10+-0175C2?logo=dart&logoColor=white)](https://dart.dev)
-[![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android%20%7C%20macOS%20%7C%20Linux%20%7C%20Windows-brightgreen.svg)]()
+[![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)]()
 
-Bring a Flutter or plain Dart app onto your tailnet as its own node — talk to peers, expose local services, and add private connectivity without a system-wide VPN.
+Bring a Flutter or plain Dart app onto your tailnet as its own node — talk to other nodes, expose local services, and add private connectivity without a system-wide VPN.
 
 Works with [Tailscale](https://tailscale.com) and self-hosted [Headscale](https://github.com/juanfont/headscale).
 
@@ -18,15 +18,18 @@ final tailscale = Tailscale.instance;
 
 await tailscale.up(authKey: 'tskey-auth-...');
 
-// Discover peers
-final peers = await tailscale.peers(); // List<PeerStatus>
-final peer = peers.firstWhere((peer) => peer.online);
+// Discover nodes
+final nodes = await tailscale.nodes(); // List<TailscaleNode>
+final node = nodes.firstWhere((node) => node.online);
 
 // Make requests — standard http.Client, routed through the tunnel
-await tailscale.http.client.get(Uri.parse('http://${peer.ipv4}/api/data'));
+await tailscale.http.client.get(Uri.parse('http://${node.ipv4}/api/data'));
 
-// Expose a local HTTP server to receive traffic from the tailnet
-await tailscale.http.expose(8080);
+// Accept inbound HTTP requests on tailnet:80
+final server = await tailscale.http.bind(port: 80);
+server.requests.listen((request) async {
+  await request.respond(body: 'hello from tailnet');
+});
 ```
 
 ### Install
@@ -42,8 +45,8 @@ The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](ho
 
 - **App-scoped networking** — your app joins the tailnet itself instead of depending on a separate VPN
 - **Familiar HTTP client** — standard [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) routed through [WireGuard](https://www.wireguard.com/)
-- **Inbound HTTP publishing** — expose a local server to tailnet peers with `http.expose()`
-- **Typed runtime state** — observe node status, peers, and errors through Dart models
+- **Inbound HTTP publishing** — accept tailnet HTTP requests directly with `http.bind()`
+- **Typed runtime state** — observe node status, node inventory, and errors through Dart models
 - **Persistent identity** — reconnect across launches without re-authenticating
 - **Automatic cross-platform builds** — Go layer compiles for the target via Dart [build hooks](https://dart.dev/tools/build-hooks)
 - **Headscale compatible** — point the control plane at Tailscale or your own deployment
@@ -70,16 +73,19 @@ await tailscale.up(authKey: 'tskey-auth-...');
 //    Subsequent launches reconnect from stored state
 await tailscale.up();
 
-// 3. Make requests to peers
-final peers = await tailscale.peers();
-final peer = peers.firstWhere((p) => p.online);
+// 3. Make requests to nodes
+final nodes = await tailscale.nodes();
+final node = nodes.firstWhere((p) => p.online);
 
 final response = await tailscale.http.client.get(
-  Uri.parse('http://${peer.ipv4}/api/data'),
+  Uri.parse('http://${node.ipv4}/api/data'),
 );
 
-// 4. Accept incoming HTTP requests from peers
-await tailscale.http.expose(8080); // tailnet:80 -> localhost:8080
+// 4. Accept incoming HTTP requests from nodes
+final server = await tailscale.http.bind(port: 80);
+server.requests.listen((request) async {
+  await request.respond(body: 'hello from tailnet');
+});
 
 // 5. Disconnect (keeps identity)
 await tailscale.down();
@@ -92,11 +98,11 @@ await tailscale.logout();
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| iOS | Full support | No VPN entitlement needed |
-| Android | Full support | Userspace mode, no root required |
-| macOS | Full support | |
-| Linux | Full support | |
-| Windows | Full support | |
+| iOS | Supported | Manual demo validation passed for HTTP, TCP, and UDP. No VPN entitlement needed. |
+| Android | Supported | Manual demo validation passed for HTTP, TCP, and UDP. Userspace mode, no root required. |
+| macOS | Supported | Manual demo validation passed for HTTP, TCP, and UDP. |
+| Linux | Supported | POSIX fd backend is implemented; real-tailnet validation is still recommended before broad release claims. |
+| Windows | Unsupported | Not supported in v1. |
 
 ## API
 
@@ -104,22 +110,47 @@ await tailscale.logout();
 |--------|------|-------------|
 | `init({stateDir, logLevel})` | `static void` | Configure once at startup. Stores state in `stateDir/tailscale/`. |
 | `instance` | `static Tailscale` | Singleton accessor |
-| `up({hostname, authKey, controlUrl})` | `Future<void>` | Start the node. Subscribe to `onStateChange` to observe when it reaches Running. |
+| `up({hostname, authKey, controlUrl, timeout})` | `Future<TailscaleStatus>` | Start the node and resolve on the first stable state. |
 | `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health). Before `up()`, returns `stopped` or `noState` based on whether persisted credentials exist. |
-| `peers()` | `Future<List<PeerStatus>>` | Current peer snapshot |
+| `nodes()` | `Future<List<TailscaleNode>>` | Current node snapshot |
+| `nodeByIp(ip)` | `Future<TailscaleNode?>` | Lookup a known node by Tailscale IP |
 | `onStateChange` | `Stream<NodeState>` | Pushed lifecycle state changes |
 | `onError` | `Stream<TailscaleRuntimeError>` | Pushed asynchronous runtime errors |
 | `down()` | `Future<void>` | Disconnect (preserves state for reconnection) |
 | `logout()` | `Future<void>` | Disconnect and clear persisted state |
 | `http.client` | [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) | HTTP client routed through the WireGuard tunnel |
-| `http.expose(localPort, {tailnetPort})` | `Future<int>` | Expose a local HTTP server to tailnet peers |
+| `http.bind({port})` | `Future<TailscaleHttpServer>` | Accept tailnet HTTP requests as package-native request/response objects |
+| `tcp.dial(host, port, {timeout})` | `Future<TailscaleConnection>` | Open a raw TCP byte stream to a tailnet node |
+| `tcp.bind({port, address})` | `Future<TailscaleListener>` | Accept raw TCP connections from tailnet nodes |
+| `udp.bind({port, address})` | `Future<TailscaleDatagramBinding>` | Send and receive UDP datagrams on a tailnet IP |
 
-The `tcp`, `tls`, `udp`, `funnel`, `taildrop`, `serve`, `exitNode`, `profiles`, `prefs`, and `diag` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
+The `tls`, `funnel`, `taildrop`, `serve`, `exitNode`, `profiles`, and `prefs` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
+
+## Transport Lifecycle
+
+TCP connections expose separate read and write halves. `connection.input` is a
+single-subscription byte stream. `connection.output.close()` half-closes the
+write side and lets the app keep reading; `connection.close()` means the app is
+done with the whole connection. `connection.abort()` is immediate teardown.
+
+HTTP request bodies are also single-subscription streams. Consume
+`request.body` once, or buffer explicitly in application code if multiple
+layers need to inspect it. HTTP response headers can be set with
+`response.setHeader(...)` or appended with `response.addHeader(...)` for
+multi-value headers such as `set-cookie`.
+
+## Validation Demo
+
+The repo includes a reusable demo harness in
+[`packages/demo_core`](packages/demo_core) and a Flutter validation app in
+[`packages/demo_flutter`](packages/demo_flutter). The Flutter app can bring up a
+node, expose HTTP/TCP/UDP echo services, list nodes, and probe another node from
+macOS, iOS, or Android.
 
 <details>
 <summary><strong>TailscaleStatus</strong></summary>
 
-A snapshot of the local node's current state. Returned by `status()`. Peer inventory is separate — call `peers()` when you need it.
+A snapshot of the local node's current state. Returned by `status()`. Node inventory is separate — call `nodes()` when you need it.
 
 | Member | Type | Description |
 |--------|------|-------------|
@@ -150,13 +181,13 @@ The node's position in the connection lifecycle. Matches Go's [`ipn.State`](http
 </details>
 
 <details>
-<summary><strong>PeerStatus</strong></summary>
+<summary><strong>TailscaleNode</strong></summary>
 
-A peer on the tailnet. Matches Go's [`ipnstate.PeerStatus`](https://pkg.go.dev/tailscale.com/ipnstate#PeerStatus).
+A node on the tailnet. Parsed from Go's [`ipnstate.PeerStatus`](https://pkg.go.dev/tailscale.com/ipnstate#PeerStatus).
 
 | Member | Type | Description |
 |--------|------|-------------|
-| `publicKey` | `String` | Peer's public key |
+| `publicKey` | `String` | Node's public key |
 | `hostName` / `dnsName` | `String` | Hostname and MagicDNS name |
 | `os` | `String` | Operating system |
 | `tailscaleIPs` | `List<String>` | Assigned IPs |
@@ -192,7 +223,7 @@ A peer on the tailnet. Matches Go's [`ipnstate.PeerStatus`](https://pkg.go.dev/t
 
 ```
 ┌─────────────┐       FFI       ┌──────────────┐      Tailscale       ┌─────────────┐
-│  Dart app   │ <─────────────> │  Go (tsnet)  │ <─── WireGuard ────> │  Peers      │
+│  Dart app   │ <─────────────> │  Go (tsnet)  │ <─── WireGuard ────> │  Nodes      │
 │             │  Isolate.run()  │  C exports   │      tunnel          │             │
 │             │  NativePort     │  WatchIPNBus │                      │             │
 └─────────────┘                 └──────────────┘                      └─────────────┘
@@ -207,13 +238,15 @@ The Go layer wraps [`tailscale.com/tsnet`](https://pkg.go.dev/tailscale.com/tsne
 ## Testing
 
 ```bash
-dart test test/tailscale_test.dart              # Unit tests
-cd go && go test -v ./...                       # Go tests
-dart test test/ffi_integration_test.dart         # FFI integration tests
-test/e2e/run_e2e.sh                             # E2E against Headscale in Docker
+dart analyze                                     # Static analysis
+dart test                                        # Root unit and integration-style tests
+cd go && go test -count=1 ./...                  # Go tests
+test/e2e/run_e2e.sh                              # E2E against Headscale in Docker
+cd packages/demo_core && dart test --enable-experiment=native-assets
+cd packages/demo_flutter && flutter test
 ```
 
-The E2E suite starts a [Headscale](https://github.com/juanfont/headscale) server in Docker, creates an ephemeral auth key, connects a real embedded node, verifies IP assignment and peer discovery, then cleans up. No Tailscale account needed.
+The E2E suite starts a [Headscale](https://github.com/juanfont/headscale) server in Docker, creates an ephemeral auth key, connects a real embedded node, verifies IP assignment and node discovery, then cleans up. No Tailscale account needed.
 
 ## License
 

@@ -4,6 +4,7 @@ go 1.25.5
 
 require (
 	golang.org/x/mobile v0.0.0-20251209145715-2553ed8ce294
+	golang.org/x/sys v0.39.0
 	modernc.org/sqlite v1.40.1
 	tailscale.com v1.92.2
 )
@@ -52,7 +53,6 @@ require (
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.11.0 // indirect

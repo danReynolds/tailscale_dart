@@ -1,7 +1,7 @@
 /// Coverage for the `http` namespace on [Tailscale].
 ///
 /// Focuses on the lifecycle contract around [Http.client] and
-/// [Http.expose] — when they throw, when they become available.
+/// [Http.bind] — when they throw, when the client becomes available.
 /// End-to-end exercise (HTTP actually flowing over the tailnet) lives
 /// under `test/e2e/`.
 @TestOn('mac-os || linux')
@@ -43,9 +43,9 @@ void main() {
       );
     });
 
-    test('http.expose() throws TailscaleHttpException', () async {
+    test('http.bind() throws TailscaleHttpException', () async {
       await expectLater(
-        Tailscale.instance.http.expose(8080),
+        Tailscale.instance.http.bind(port: 80),
         throwsA(isA<TailscaleHttpException>()),
       );
     });

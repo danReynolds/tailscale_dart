@@ -13,7 +13,7 @@ library;
 /// [LocalAPI](https://pkg.go.dev/tailscale.com/client/local) surface
 /// exposes (e.g. `IsAccessDeniedError`, `IsPreconditionsFailedError`).
 enum TailscaleErrorCode {
-  /// Target does not exist (unknown peer, waiting file, profile, route…).
+  /// Target does not exist (unknown node, waiting file, profile, route...).
   notFound,
 
   /// Authenticated but the tailnet's
@@ -107,7 +107,7 @@ final class TailscaleUpException extends TailscaleOperationException {
   }) : super('up', message);
 }
 
-/// Thrown when an `http.*` call fails — notably `http.expose()` failing
+/// Thrown when an `http.*` call fails — notably `http.bind()` failing
 /// to forward tailnet traffic, or `http.client` accessed before `up()`.
 final class TailscaleHttpException extends TailscaleOperationException {
   const TailscaleHttpException(
@@ -119,7 +119,7 @@ final class TailscaleHttpException extends TailscaleOperationException {
 }
 
 /// Thrown when a `tcp.*` call fails — tailnet dial refused, no route
-/// to peer, loopback bridge setup failure, etc.
+/// to node, fd handoff failure, etc.
 final class TailscaleTcpException extends TailscaleOperationException {
   const TailscaleTcpException(
     String message, {
@@ -127,6 +127,17 @@ final class TailscaleTcpException extends TailscaleOperationException {
     super.statusCode,
     super.cause,
   }) : super('tcp', message);
+}
+
+/// Thrown when a `udp.*` call fails — tailnet bind failure, invalid endpoint,
+/// oversize datagram, fd handoff failure, etc.
+final class TailscaleUdpException extends TailscaleOperationException {
+  const TailscaleUdpException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('udp', message);
 }
 
 /// Thrown when `status()` fails to decode or fetch native status.

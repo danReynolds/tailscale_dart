@@ -50,12 +50,6 @@ Future<void> main() async {
   final parsedControlUrl = Uri.parse(controlUrl);
   final tsnet = Tailscale.instance;
   final stateDir = Directory.systemTemp.createTempSync('tailscale_bench_').path;
-  final backend = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-  backend.listen((request) async {
-    request.response.statusCode = HttpStatus.ok;
-    request.response.write('ok');
-    await request.response.close();
-  });
 
   print('');
   print('=== tailscale Main Isolate Jank Benchmark ===');
@@ -91,9 +85,12 @@ Future<void> main() async {
     await Future.delayed(const Duration(seconds: 1));
 
     results.add(await _bench('status()', () => tsnet.status()));
-    results.add(await _bench('peers()', () => tsnet.peers()));
+    results.add(await _bench('nodes()', () => tsnet.nodes()));
     results.add(
-      await _bench('http.expose()', () => tsnet.http.expose(backend.port)),
+      await _benchOnce('http.bind()', () async {
+        final binding = await tsnet.http.bind(port: 80);
+        await binding.close();
+      }),
     );
     results.add(
       _benchSync('http.client getter', () {
@@ -111,9 +108,6 @@ Future<void> main() async {
   } catch (_) {}
   try {
     await tsnet.down();
-  } catch (_) {}
-  try {
-    await backend.close(force: true);
   } catch (_) {}
   try {
     Directory(stateDir).deleteSync(recursive: true);
@@ -151,14 +145,9 @@ Future<_BenchResult> _benchOnce(
   Future<dynamic> Function() fn,
 ) async {
   final m = await _measureMainIsolateTime(fn);
-  return _BenchResult(
-      label,
-      [m.wallUs],
-      [m.mainUs],
-      [
-        m.isolateUs,
-      ],
-      singleShot: true);
+  return _BenchResult(label, [m.wallUs], [m.mainUs], [
+    m.isolateUs,
+  ], singleShot: true);
 }
 
 _BenchResult _benchSync(String label, void Function() fn) {
@@ -327,10 +316,10 @@ void _printResults(List<_BenchResult> results) {
     final jank = r.mainMed < 1.0
         ? 'None'
         : r.mainMed < 4.0
-            ? 'Low'
-            : r.mainMed < 16.0
-                ? 'Med'
-                : 'HIGH';
+        ? 'Low'
+        : r.mainMed < 16.0
+        ? 'Med'
+        : 'HIGH';
     print(
       '${r.label.padRight(lw)}'
       '${_fmtMs(r.mainMed)} ms'
@@ -360,10 +349,10 @@ void _printResults(List<_BenchResult> results) {
     final jank = r.mainMed < 1.0
         ? 'None'
         : r.mainMed < 4.0
-            ? 'Low'
-            : r.mainMed < 16.0
-                ? 'Med'
-                : 'HIGH';
+        ? 'Low'
+        : r.mainMed < 16.0
+        ? 'Med'
+        : 'HIGH';
     print(
       '| ${r.label} '
       '| ${r.mainMed.toStringAsFixed(2)} '

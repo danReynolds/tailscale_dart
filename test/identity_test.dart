@@ -1,4 +1,4 @@
-/// Coverage for the `whois` top-level call and the [PeerIdentity]
+/// Coverage for the `whois` top-level call and the [TailscaleNodeIdentity]
 /// value type it returns.
 @TestOn('mac-os || linux')
 library;
@@ -10,23 +10,23 @@ import 'package:tailscale/tailscale.dart';
 import 'package:tailscale/src/ffi_bindings.dart' as native;
 
 void main() {
-  group('PeerIdentity value type', () {
+  group('TailscaleNodeIdentity value type', () {
     test('==', () {
-      const a = PeerIdentity(
+      const a = TailscaleNodeIdentity(
         nodeId: 'n1',
         hostName: 'h',
         userLoginName: 'alice@example.com',
         tags: ['tag:server'],
         tailscaleIPs: ['100.64.0.2'],
       );
-      const b = PeerIdentity(
+      const b = TailscaleNodeIdentity(
         nodeId: 'n1',
         hostName: 'h',
         userLoginName: 'alice@example.com',
         tags: ['tag:server'],
         tailscaleIPs: ['100.64.0.2'],
       );
-      const different = PeerIdentity(
+      const different = TailscaleNodeIdentity(
         nodeId: 'n2',
         hostName: 'h',
         userLoginName: 'alice@example.com',
@@ -40,7 +40,7 @@ void main() {
     });
 
     test('toString summarizes identity fields', () {
-      const identity = PeerIdentity(
+      const identity = TailscaleNodeIdentity(
         nodeId: 'n1',
         hostName: 'h',
         userLoginName: 'alice@example.com',

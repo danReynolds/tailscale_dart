@@ -16,7 +16,7 @@ Tailscale capabilities Dart consumers are most likely to use first
 API-hygiene issues surfaced in design review.
 
 The roadmap is intentionally **consumer-first, not parity-first with
-every Tailscale feature**. Private HTTP/TCP access, lifecycle, peer
+every Tailscale feature**. Private HTTP/TCP access, lifecycle, node
 identity, and diagnostics are on the core path. More niche or
 operator-heavy surfaces such as Taildrop, Profiles, rich Serve
 builders, and extra Funnel ergonomics are explicitly demand-driven.
@@ -38,8 +38,8 @@ feature gaps against `tsnet.Server` + `local.Client` we need 50+ new
 methods. Putting all of those flat on `Tailscale` sprawls the class
 past what IDE autocomplete handles sensibly. Namespacing bounds the
 surface per topic and matches both Tailscale's Go structure
-(`tsnet.Server`, `local.Client`) and Dart conventions (`dart:io`
-`ServerSocket.bind`, `package:http` `Client`).
+(`tsnet.Server`, `local.Client`) and Dart conventions where they fit
+(`package:http` `Client`, `Stream`-based input).
 
 Separately, design review surfaced API-hygiene issues that will bite
 users at runtime (non-nullable lookups, stringly-typed exit-node
@@ -70,17 +70,17 @@ Explicitly out of scope for this RFC:
 These rules apply across every phase. Deviations are called out in doc
 comments.
 
-1. **Return standard `dart:io` types** for network primitives
-   (`Socket`, `ServerSocket`, `RawDatagramSocket`, `SecureServerSocket`).
-   No `Tailscale*Socket` wrappers; no API-level divergence from
-   `dart:io`.
+1. **Use package-native transport types for raw data-plane primitives.**
+   Do not expose fake `dart:io` sockets when the runtime cannot actually
+   provide native Dart sockets. TCP uses `TailscaleConnection` /
+   `TailscaleListener`; UDP should use a message-preserving datagram binding.
 2. **One namespace per topic.** A topic earns a namespace at ≥2
    related methods, or 1 method with a cohesive noun (e.g. `udp`).
    Single-method cross-cutting utilities stay flat on `Tailscale`
    (`whois`).
 3. **Verb conventions.**
    - `dial` for outbound — mirrors Go (`tsnet.Server.Dial`).
-   - `bind` for inbound — mirrors Dart (`ServerSocket.bind`). Avoids
+   - `bind` for inbound — mirrors Dart's naming convention. Avoids
      the collision `.listen(...)` has with `Stream.listen`.
 4. **Value types are immutable** with `==`, `hashCode`, `toString`.
 5. **Nullable returns** for operations that can legitimately not find
@@ -88,11 +88,11 @@ comments.
 6. **Per-namespace error classes.** `TailscaleTaildropException`, etc.
    Callers pattern-match on type, not string.
 7. **Identity by stable ID, not key material.** Public keys rotate on
-   reinstall; `StableNodeID` / `PeerStatus` references don't.
+   reinstall; `StableNodeID` / `TailscaleNode` references don't.
 8. **Earn first-class API surface with real Dart use cases.** The core
    path prioritizes embedded/private-app jobs: connect a node, call a
    private HTTP/TCP service, expose a local HTTP/TCP service, inspect
-   peers, and diagnose connectivity. Features that mainly serve
+   nodes, and diagnose connectivity. Features that mainly serve
    full-client, consumer-device, or ops-heavy workflows stay thin,
    optional, or escape-hatch-only until users pull them in.
 
@@ -104,10 +104,10 @@ These are the features that make the package useful even if nothing
 else lands:
 
 - Lifecycle/auth/status (`init`, `up`, `down`, `logout`, `status`,
-  `peers`, change streams).
-- Private HTTP and TCP (`http.client`, `http.expose`, `tcp.dial`,
+  `nodes`, change streams).
+- Private HTTP and TCP (`http.client`, `http.bind`, `tcp.dial`,
   `tcp.bind`).
-- Identity/discovery and diagnostics (`whois`, `onPeersChange`,
+- Identity/discovery and diagnostics (`whois`, `onNodeChanges`,
   `diag.ping`, `diag.metrics`, `diag.derpMap`, `diag.checkUpdate`).
 - The LocalAPI escape hatch (`localApi.request(...)`) so advanced users
   can reach untyped endpoints without waiting on another release.
@@ -168,7 +168,7 @@ Phase 1 (parity)
    ▼
 Phase 2 (hygiene) ────┬─── Phase 6 (prefs + exitNode) ───────────────┐
    │                   │                                              │
-   ├── Phase 3 (bridge + tcp) ──┬── Phase 5 (tls / udp / funnel) ────┤
+   ├── Phase 3 (fd-backed tcp) ─┬── Phase 5 (tls / udp / funnel) ────┤
    │                            └── Phase 8 (taildrop, optional)      │
    │                                                                   │
    ├── Phase 4 (LocalAPI one-shots) ───────────────────────────────────┤
@@ -190,21 +190,21 @@ zero functional regression. No new capabilities exposed.
 
 | # | API                                      | Purpose                                                                  | Done |
 | - | ---------------------------------------- | ------------------------------------------------------------------------ | ---- |
-| 1 | `Tailscale.init({stateDir, logLevel})`    | One-time lib configuration at app startup                                | [ ]  |
-| 2 | `Tailscale.up({hostname, authKey, controlUrl})` | Start engine; connect to control plane                             | [ ]  |
-| 3 | `Tailscale.down()`                        | Stop engine; keep persisted credentials                                  | [ ]  |
-| 4 | `Tailscale.logout()`                      | Stop engine; wipe persisted credentials                                  | [ ]  |
-| 5 | `Tailscale.status()`                      | Snapshot of node state + IPs + health                                    | [ ]  |
-| 6 | `Tailscale.peers()`                       | Current peer inventory                                                   | [ ]  |
-| 7 | `Tailscale.onStateChange`                 | Stream of NodeState transitions (distinct-filtered)                      | [ ]  |
-| 8 | `Tailscale.onError`                       | Stream of background runtime errors                                      | [ ]  |
-| 9 | `Tailscale.http.client` *(was `.http`)*   | Pre-configured `http.Client` that routes via tailnet                     | [ ]  |
-| 10| `Tailscale.http.expose(local, tailnet)` *(was `.listen`)* | Reverse-proxy helper for existing local HTTP servers | [ ]  |
-| 11| Migration: `example/example.dart`          | Update to new API surface                                                | [ ]  |
-| 12| Migration: `test/e2e/peer_main.dart`       | Update to new API surface                                                | [ ]  |
-| 13| Migration: `test/e2e/e2e_test.dart`        | Update to new API surface                                                | [ ]  |
-| 14| Migration: `test/ffi_integration_test.dart`| Update to new API surface                                                | [ ]  |
-| 15| Migration: `CHANGELOG.md`                  | Document breaking renames                                                | [ ]  |
+| 1 | `Tailscale.init({stateDir, logLevel})`    | One-time lib configuration at app startup                                | [x]  |
+| 2 | `Tailscale.up({hostname, authKey, controlUrl, timeout})` | Start engine; connect to control plane                     | [x]  |
+| 3 | `Tailscale.down()`                        | Stop engine; keep persisted credentials                                  | [x]  |
+| 4 | `Tailscale.logout()`                      | Stop engine; wipe persisted credentials                                  | [x]  |
+| 5 | `Tailscale.status()`                      | Snapshot of node state + IPs + health                                    | [x]  |
+| 6 | `Tailscale.nodes()`                       | Current node inventory                                                   | [x]  |
+| 7 | `Tailscale.onStateChange`                 | Stream of NodeState transitions (distinct-filtered)                      | [x]  |
+| 8 | `Tailscale.onError`                       | Stream of background runtime errors                                      | [x]  |
+| 9 | `Tailscale.http.client` *(was `.http`)*   | Pre-configured `http.Client` that routes via tailnet                     | [x]  |
+| 10| `Tailscale.http.bind(port: ...)` *(was `.expose` / `.listen`)* | Package-native inbound HTTP server backed by fd streams | [x]  |
+| 11| Migration: `example/example.dart`          | Update to new API surface                                                | [x]  |
+| 12| Migration: `test/e2e/peer_main.dart`       | Update to new API surface                                                | [x]  |
+| 13| Migration: `test/e2e/e2e_test.dart`        | Update to new API surface                                                | [x]  |
+| 14| Migration: `test/ffi_integration_test.dart`| Retired with the old session/loopback transport tests                    | [x]  |
+| 15| Migration: `CHANGELOG.md`                  | Document breaking renames                                                | [x]  |
 
 **Exit criteria:**
 
@@ -224,24 +224,24 @@ one sweep, so later phases don't re-open the same debates.
 
 | # | Item                                                    | Purpose                                                                             | Done |
 | - | ------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---- |
-| 1 | `==` / `hashCode` / `toString` on value types           | Hand-rolled equality + debuggability. Covers TailscaleStatus, PeerStatus, PeerIdentity, WaitingFile, FileTarget, LoginProfile, PingResult, DERPMap/Region/Node, ClientVersion, TailscalePrefs, PrefsUpdate, FunnelMetadata | [ ]  |
-| 2 | Add `stableNodeId` to `PeerStatus`                       | Upstream `ipnstate.PeerStatus` has `ID tailcfg.StableNodeID`; we dropped it. Required for type-safe `exitNode.use(peer)` | [ ]  |
-| 3 | `Tailscale.whois(ip)` returns `Future<PeerIdentity?>`   | Unknown IP returns null instead of forcing try/catch                                | [ ]  |
-| 4 | `profiles.current()` returns `Future<LoginProfile?>`    | Fresh install has no current profile — express it in the type                        | [ ]  |
-| 5 | `Tailscale.up()` returns `Future<TailscaleStatus>`, resolving on **first stable state only** | Resolves on `running`, `needsLogin`, or `needsMachineAuth`. Caller inspects `status.state` + `authUrl` to route next (interactive login, admin approval, or proceed). **Diverges from Go's `tsnet.Server.Up` which waits only on Running** — intentional; a Dart app can't hang until a human clicks a browser link. If startup fails or the implementation gives up waiting before a stable state is reached, throw `TailscaleUpException`; never return a transitional state such as `starting`. | [ ]  |
-| 6 | Prefs setter naming: all `set*` prefix                  | `setAdvertisedRoutes`, `setAcceptRoutes`, `setShieldsUp`, `setAutoUpdate`           | [ ]  |
-| 7 | `taildrop.get` → `taildrop.openRead` + `Stream<Uint8List>` | Matches `File.openRead`; efficient byte streaming                                | [ ]  |
-| 8 | `exitNode.use(PeerStatus peer)`                         | Type-safe exit-node selection                                                       | [ ]  |
-| 9 | `exitNode.useById(String stableNodeId)`                 | Escape hatch when only the stable ID is available                                   | [ ]  |
-| 10| Rename `MaskedPrefs` → `PrefsUpdate`                    | Less jargony than the Go term                                                       | [ ]  |
-| 11| Structured error fields on all `TailscaleOperationException` subclasses | Add `code: TailscaleErrorCode` (notFound / forbidden / conflict / preconditionFailed / featureDisabled / unknown), `int? statusCode`, `Object? cause`. Go-side translates `IsAccessDeniedError`, `IsPreconditionsFailedError`, HTTP status codes. | [ ]  |
-| 12| `TailscaleTaildropException`                            | Per-namespace error type                                                            | [ ]  |
-| 13| `TailscaleServeException`                               | Per-namespace error type                                                            | [ ]  |
-| 14| `TailscalePrefsException`                               | Per-namespace error type                                                            | [ ]  |
-| 15| `TailscaleProfilesException`                            | Per-namespace error type                                                            | [ ]  |
-| 16| `TailscaleExitNodeException`                            | Per-namespace error type                                                            | [ ]  |
-| 17| `TailscaleDiagException`                                | Per-namespace error type                                                            | [ ]  |
-| 18| Namespace constructors private                          | `Tcp._(worker)` etc., so users can't create unbound instances                       | [ ]  |
+| 1 | `==` / `hashCode` / `toString` on value types           | Hand-rolled equality + debuggability. Covers TailscaleStatus, TailscaleNode, TailscaleNodeIdentity, WaitingFile, FileTarget, LoginProfile, PingResult, DERPMap/Region/Node, ClientVersion, TailscalePrefs, PrefsUpdate, FunnelMetadata | [x]  |
+| 2 | Add `stableNodeId` to `TailscaleNode`                       | Upstream `ipnstate.PeerStatus` has `ID tailcfg.StableNodeID`; we dropped it. Required for type-safe `exitNode.use(node)` | [x]  |
+| 3 | `Tailscale.whois(ip)` returns `Future<TailscaleNodeIdentity?>`   | Unknown IP returns null instead of forcing try/catch                                | [x]  |
+| 4 | `profiles.current()` returns `Future<LoginProfile?>`    | Fresh install has no current profile — express it in the type                        | [x]  |
+| 5 | `Tailscale.up()` returns `Future<TailscaleStatus>`, resolving on **first stable state only** | Resolves on `running`, `needsLogin`, or `needsMachineAuth`. Caller inspects `status.state` + `authUrl` to route next (interactive login, admin approval, or proceed). **Diverges from Go's `tsnet.Server.Up` which waits only on Running** — intentional; a Dart app can't hang until a human clicks a browser link. If startup fails or the implementation gives up waiting before a stable state is reached, throw `TailscaleUpException`; never return a transitional state such as `starting`. | [x]  |
+| 6 | Prefs setter naming: all `set*` prefix                  | `setAdvertisedRoutes`, `setAcceptRoutes`, `setShieldsUp`, `setAutoUpdate`           | [x]  |
+| 7 | `taildrop.get` → `taildrop.openRead` + `Stream<Uint8List>` | Matches `File.openRead`; efficient byte streaming                                | [x]  |
+| 8 | `exitNode.use(TailscaleNode node)`                         | Type-safe exit-node selection                                                       | [x]  |
+| 9 | `exitNode.useById(String stableNodeId)`                 | Escape hatch when only the stable ID is available                                   | [x]  |
+| 10| Rename `MaskedPrefs` → `PrefsUpdate`                    | Less jargony than the Go term                                                       | [x]  |
+| 11| Structured error fields on all `TailscaleOperationException` subclasses | Add `code: TailscaleErrorCode` (notFound / forbidden / conflict / preconditionFailed / featureDisabled / unknown), `int? statusCode`, `Object? cause`. Go-side translates `IsAccessDeniedError`, `IsPreconditionsFailedError`, HTTP status codes. | [x]  |
+| 12| `TailscaleTaildropException`                            | Per-namespace error type                                                            | [x]  |
+| 13| `TailscaleServeException`                               | Per-namespace error type                                                            | [x]  |
+| 14| `TailscalePrefsException`                               | Per-namespace error type                                                            | [x]  |
+| 15| `TailscaleProfilesException`                            | Per-namespace error type                                                            | [x]  |
+| 16| `TailscaleExitNodeException`                            | Per-namespace error type                                                            | [x]  |
+| 17| `TailscaleDiagException`                                | Per-namespace error type                                                            | [x]  |
+| 18| Namespace constructors private                          | `Tcp._(worker)` etc., so users can't create unbound instances                       | [x]  |
 
 **Exit criteria:**
 
@@ -251,37 +251,37 @@ one sweep, so later phases don't re-open the same debates.
 
 ---
 
-### Phase 3 — Loopback bridge + `tcp` primitives
+### Phase 3 — POSIX fd-backed `tcp` primitives
 
-**Goal:** enable non-HTTP peer communication. Establishes the Go-side
-foundation every socket-shaped API depends on, without weakening the
-`dart:io` socket contract the Dart surface promises.
+**Goal:** enable non-HTTP node communication with package-native transport
+types. TCP is not exposed as fake `dart:io` sockets; callers use
+`TailscaleConnection` and `TailscaleListener`.
 
 **Dependencies:** Phase 2 (data-type shapes must be settled for error
 returns).
 
 | # | API                                                     | Purpose                                                                              | Done |
 | - | ------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---- |
-| 1 | Go: `bridgeTCPToLoopback(net.Conn) → (port, token)`     | One-shot loopback bridge helper; reusable across TLS/Funnel/Taildrop                 | [ ]  |
-| 2 | Go FFI: `DuneTcpDial(host, port) → {port, token}`       | Outbound dial entry point                                                            | [ ]  |
-| 3 | Go FFI: `DuneTcpBind(port, host) → {acceptPort, token}` | Inbound bind entry point                                                             | [ ]  |
-| 4 | `tcp.dial(host, port, {timeout})` → `Future<Socket>`    | Open TCP connection to a tailnet peer; wraps `tsnet.Server.Dial`                     | [ ]  |
-| 5 | `tcp.bind(port, {host})` → `Future<ServerSocket>`       | Accept TCP connections on the tailnet; wraps `tsnet.Server.Listen("tcp", ...)`       | [ ]  |
-| 6 | Per-dial auth token                                     | Loopback port is auth-gated so co-resident processes can't hijack                    | [ ]  |
-| 7 | Bridge preserves TCP half-close semantics               | One side reaching EOF closes only that write direction; the opposite direction remains readable/writable until it closes too. Use `CloseWrite` / `CloseRead` (or the closest available platform equivalent) instead of unconditional full-close on first `io.Copy` completion. | [ ]  |
-| 8 | Listener is truly single-use                            | The loopback listener closes immediately after the first successful `Accept`, regardless of how long the proxied session lives, so later local connects cannot race a dead bridge. | [ ]  |
-| 9 | Timeout contract is explicit and tested                 | `tcp.dial(timeout: X)` must document and enforce one timeout model. Preferred contract: one end-to-end budget spanning tailnet dial, loopback connect, and token handshake, rather than reusing `X` independently at each stage. | [ ]  |
-| 10| **Platform verification: iOS + Android**                | Confirm the loopback-bridge helper works under the existing native-assets hook on both mobile platforms. If loopback binding is kernel-gated on iOS in a way that blocks this pattern, that needs to surface here — not in Phase 5 when three transports are downstream. | [ ]  |
-| 11| E2E byte-echo test                                      | Two nodes exchange arbitrary bytes via `tcp.dial` + `tcp.bind`                       | [ ]  |
-| 12| Go regression tests for bridge invariants               | Cover token rejection, accept-timeout cleanup, half-close propagation, and single-use listener behavior under second-connector contention. | [ ]  |
-| 13| Example: raw-TCP echo server/client                     | `/example/tcp_echo.dart`                                                             | [ ]  |
+| 1 | Go: POSIX socketpair handoff                            | Go bridges `tsnet` TCP connections to a private fd capability handed to Dart          | [x]  |
+| 2 | Go FFI: `DuneTcpDialFd(host, port)`                     | Outbound fd-backed dial entry point                                                  | [x]  |
+| 3 | Go FFI: `DuneTcpListenFd` / `DuneTcpAcceptFd`           | Inbound fd-backed listen/accept entry points                                         | [x]  |
+| 4 | `tcp.dial(host, port, {timeout})` → `Future<TailscaleConnection>` | Open TCP connection to a tailnet node; wraps `tsnet.Server.Dial`          | [x]  |
+| 5 | `tcp.bind({port, address})` → `Future<TailscaleListener>`  | Accept TCP connections on the tailnet; wraps `tsnet.Server.Listen("tcp", ...)`       | [x]  |
+| 6 | Explicit output half-close                              | `conn.output.close()` half-closes writes without discarding input                     | [x]  |
+| 7 | Package-native endpoint metadata                        | `TailscaleConnection.local/remote` and `TailscaleListener.local` expose tailnet endpoints | [x] |
+| 8 | Listener close tears down native listener               | Closing `TailscaleListener` closes the Go-side tailnet listener                       | [x]  |
+| 9 | Timeout contract is explicit and tested                 | `tcp.dial(timeout: X)` bounds the native tailnet dial                                 | [x]  |
+| 10| **Platform verification: iOS + Android**                | Confirm fd handoff + background-isolate fd I/O works under the existing native-assets hook on both mobile platforms. If mobile sandboxing blocks this pattern, that needs to surface here — not in Phase 5 when three transports are downstream. | [x]  |
+| 11| E2E byte-echo test                                      | Two nodes exchange arbitrary bytes via `tcp.dial` + `tcp.bind`                       | [x]  |
+| 12| Go regression tests for fd handoff helpers              | Cover socketpair behavior and listener address parsing                               | [x]  |
+| 13| Example: raw-TCP echo server/client                     | `/example/tcp_echo.dart`                                                             | [x]  |
 
 **Exit criteria:**
 
 - `dart test test/e2e/e2e_test.dart` passes a new `tcp lifecycle`
   group with byte-level assertions.
-- Go tests cover token rejection, accept-timeout cleanup,
-  half-close propagation, and listener single-use behavior.
+- Go tests cover socketpair fd adoption, accept/close behavior,
+  half-close propagation, and listener lifecycle behavior.
 - The timeout contract is documented in Dart doc comments and matched
   by tests; `tcp.dial(timeout: X)` must not silently take ~2x `X`
   unless the docs explicitly define timeout as per-stage rather than
@@ -292,7 +292,7 @@ returns).
 ### Phase 4 — LocalAPI one-shots
 
 **Goal:** expose the read-only and simple-write LocalAPI calls that
-don't require the loopback bridge. These are thin, typed wrappers over
+don't require data-plane fd handoff. These are thin, typed wrappers over
 `local.Client`. Proceeds in parallel with Phase 3.
 
 **Dependencies:** Phase 2.
@@ -304,13 +304,13 @@ No separate work item.
 
 | # | API                                            | Purpose                                                                         | Done |
 | - | ---------------------------------------------- | ------------------------------------------------------------------------------- | ---- |
-| 1 | `Tailscale.whois(ip)` → `PeerIdentity?`        | Identify a tailnet IP's owner / hostname / tags                                  | [ ]  |
-| 2 | `Tailscale.onPeersChange` → `Stream<List<PeerStatus>>` | React to peer inventory changes without polling                          | [ ]  |
-| 3 | `diag.ping(ip, {timeout, type})` → `PingResult`| Round-trip + route diagnostic (`direct` / `derp` / `unknown`); accepts MagicDNS names | [ ]  |
-| 4 | `diag.metrics()` → `String`                    | Prometheus-format metrics snapshot from the embedded runtime                     | [ ]  |
-| 5 | `diag.derpMap()` → `DERPMap`                   | Current relay region + node map                                                  | [ ]  |
-| 6 | `diag.checkUpdate()` → `ClientVersion?`        | Latest tsnet version if newer than embedded, else null                           | [ ]  |
-| 7 | `tls.domains()` → `List<String>`               | Cert SANs; preflight for `tls.bind`                                              | [ ]  |
+| 1 | `Tailscale.whois(ip)` → `TailscaleNodeIdentity?`        | Identify a tailnet IP's owner / hostname / tags                                  | [x]  |
+| 2 | `Tailscale.onNodeChanges` → `Stream<List<TailscaleNode>>` | React to node inventory changes without polling                          | [x]  |
+| 3 | `diag.ping(ip, {timeout, type})` → `PingResult`| Round-trip + route diagnostic (`direct` / `derp` / `unknown`); accepts MagicDNS names | [x]  |
+| 4 | `diag.metrics()` → `String`                    | Prometheus-format metrics snapshot from the embedded runtime                     | [x]  |
+| 5 | `diag.derpMap()` → `DERPMap`                   | Current relay region + node map                                                  | [x]  |
+| 6 | `diag.checkUpdate()` → `ClientVersion?`        | Latest tsnet version if newer than embedded, else null                           | [x]  |
+| 7 | `tls.domains()` → `List<String>`               | Cert SANs; preflight for `tls.bind`                                              | [x]  |
 
 **Exit criteria:** each method has a unit test; e2e covers the happy
 path for each diagnostic.
@@ -319,20 +319,19 @@ path for each diagnostic.
 
 ### Phase 5 — Remaining transports
 
-**Goal:** apply the Phase 3 bridge pattern to the remaining
-transports. `tls.bind` is the clearest next transport win for Dart
-servers; `udp.bind` is plausible but more niche; Funnel remains
-explicitly advanced and demand-driven.
+**Goal:** extend the package-native transport model to remaining
+transports. UDP should preserve datagram boundaries; TLS/Funnel need a
+fresh surface decision rather than inheriting the old fake-socket model.
 
 **Dependencies:** Phase 3.
 
 | # | API                                                          | Purpose                                                                   | Done |
 | - | ------------------------------------------------------------ | ------------------------------------------------------------------------- | ---- |
-| 1 | `tls.bind(port)` → `Future<SecureServerSocket>`              | TLS-terminated listener with auto-provisioned cert                        | [ ]  |
-| 2 | UDP datagram bridge variant                                  | Frame `[peerIP, peerPort, payload]` envelopes over loopback               | [ ]  |
-| 3 | `udp.bind(host, port)` → `Future<RawDatagramSocket>`         | UDP datagram listener on a specific tailnet IP                             | [ ]  |
-| 4 | `funnel.bind(port, {funnelOnly})` → `Future<SecureServerSocket>` | Public-internet HTTPS via Funnel. **Advanced / optional:** keep the surface thin and close to upstream; do not block v1 on additional ergonomics. Returns a standard `SecureServerSocket`; Funnel-specific metadata is accessible via extension (see next row). | [ ]  |
-| 5 | `FunnelMetadata` + `Socket.funnel` extension                 | Expose original public-client source IP + SNI target without breaking the "standard `dart:io` types" principle. Internal `Expando<FunnelMetadata>` keyed by `Socket`; extension getter resolves it. Non-Funnel sockets return null. | [ ]  |
+| 1 | `tls.bind(port)` surface decision                             | Decide package-native TLS listener shape vs. a higher-level HTTP/TLS helper | [ ]  |
+| 2 | UDP datagram binding backend                                 | Preserve `[peerIP, peerPort, payload]` message boundaries without stream-shaped semantics | [x]  |
+| 3 | `udp.bind({port, address})` → `Future<TailscaleDatagramBinding>`  | UDP datagram listener on a tailnet IP                             | [x]  |
+| 4 | `funnel.bind(port, {funnelOnly})` surface decision            | Public-internet HTTPS via Funnel. **Advanced / optional:** keep the surface thin and close to upstream; do not block v1 on additional ergonomics. | [ ]  |
+| 5 | Funnel request metadata                                      | Expose original public-client source IP + SNI target on whichever listener/request type Phase 5 settles. | [ ]  |
 | 6 | Example: all-transports demo                                 | `/example/transports.dart` exercising TCP + TLS + UDP + Funnel            | [ ]  |
 
 **Exit criteria:** demo runs against a live tailnet; CI e2e covers
@@ -358,13 +357,13 @@ exit-node APIs, not by `tsnet.Server`.
 | 5 | `prefs.setAutoUpdate(bool)`                                | Opt in/out of automatic tsnet updates                                   | [ ]  |
 | 6 | `prefs.setAdvertisedTags(tags)`                            | Replace advertised ACL tags                                             | [ ]  |
 | 7 | `prefs.updateMasked(PrefsUpdate)`                          | Atomic multi-field prefs edit                                            | [ ]  |
-| 8 | `exitNode.current()` → `PeerStatus?`                       | Peer currently being used as exit, or null                              | [ ]  |
-| 9 | `exitNode.suggest()` → `PeerStatus?`                       | Control-plane-recommended exit node (latency-based)                     | [ ]  |
-| 10| `exitNode.use(PeerStatus)`                                 | Route all outbound traffic through this peer                            | [ ]  |
+| 8 | `exitNode.current()` → `TailscaleNode?`                       | Node currently being used as exit, or null                              | [ ]  |
+| 9 | `exitNode.suggest()` → `TailscaleNode?`                       | Control-plane-recommended exit node (latency-based)                     | [ ]  |
+| 10| `exitNode.use(TailscaleNode)`                                 | Route all outbound traffic through this node                            | [ ]  |
 | 11| `exitNode.useById(String stableNodeId)`                    | Same as `use`, but for the case where only the stable ID is known       | [ ]  |
 | 12| `exitNode.useAuto()`                                       | Set `AutoExitNode` / `auto:any` mode — let the control plane pick. Upstream prefs support this; future-proofs the API against requiring a user-facing "auto" button to land as a breaking redesign. | [ ]  |
 | 13| `exitNode.clear()`                                         | Stop routing through an exit node                                        | [ ]  |
-| 14| `exitNode.onCurrentChange` → `Stream<PeerStatus?>`         | React to exit-node changes (including external)                          | [ ]  |
+| 14| `exitNode.onCurrentChange` → `Stream<TailscaleNode?>`         | React to exit-node changes (including external)                          | [ ]  |
 
 **Exit criteria:** e2e covers advertising a route, using/clearing an
 exit node (manual + auto), and shields-up behavior.
@@ -399,7 +398,7 @@ deletes one.
 
 ### Phase 8 — Optional: Taildrop
 
-**Goal:** peer-to-peer file transfer.
+**Goal:** node-to-node file transfer.
 
 **Dependencies:** Phase 3 or an equivalent LocalAPI-backed
 byte-stream path.
@@ -417,8 +416,8 @@ management on top of it.
 
 | # | API                                                                      | Purpose                                                                                     | Done |
 | - | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- | ---- |
-| 1 | `taildrop.targets()` → `List<FileTarget>`                                | Peers you can send files to right now                                                       | [ ]  |
-| 2 | `taildrop.push({target, name, data, size?})`                             | Stream a file to a peer                                                                      | [ ]  |
+| 1 | `taildrop.targets()` → `List<FileTarget>`                                | Nodes you can send files to right now                                                       | [ ]  |
+| 2 | `taildrop.push({target, name, data, size?})`                             | Stream a file to a node                                                                      | [ ]  |
 | 3 | `taildrop.waitingFiles()` → `List<WaitingFile>`                          | Files received and not yet picked up                                                         | [ ]  |
 | 4 | `taildrop.awaitWaitingFiles({timeout})` → `List<WaitingFile>`            | Block until at least one file is available, or timeout                                      | [ ]  |
 | 5 | `taildrop.openRead(name)` → `Stream<Uint8List>`                          | Stream a received file's bytes (caller owns persistence)                                     | [ ]  |
@@ -444,8 +443,8 @@ versions). Bump + audit the diff before modelling `ServeConfig`.
 
 **Demand gate:** not on the core v1 path. The goal here is raw
 `ServeConfig` access, not a broad Dart DSL for every Serve/Funnel
-handler combination. `http.expose()` already covers the common Dart
-"publish my existing local HTTP server privately" case.
+handler combination. `http.bind()` already covers the common Dart
+"handle private HTTP traffic in-process" case.
 
 | # | API                                        | Purpose                                                                    | Done |
 | - | ------------------------------------------ | -------------------------------------------------------------------------- | ---- |
@@ -484,9 +483,9 @@ land before or after v1.0 without changing the core ship criteria.
 | # | Item                                                     | Purpose                                                                     | Done |
 | - | -------------------------------------------------------- | --------------------------------------------------------------------------- | ---- |
 | 1 | `Tailscale.localApi.request(method, path, {body})`       | Generic LocalAPI RPC. Go-side wraps `local.Client.DoLocalRequest`; Dart exposes a minimal `{statusCode, bytes}`-returning shape. **Not** a raw loopback HTTP server (upstream advises against exposing `Loopback()` when `LocalClient` will do). Covers endpoints we haven't typed yet (drive shares, arbitrary DNS queries, debug actions). | [ ]  |
-| 2 | `/example/tcp_echo.dart`                                 | Raw-TCP demo                                                                | [ ]  |
+| 2 | `/example/tcp_echo.dart`                                 | Raw-TCP demo                                                                | [x]  |
 | 3 | `/example/exit_node.dart`                                | Exit-node selection demo                                                    | [ ]  |
-| 4 | README namespace-by-namespace tour                       | Top-level doc update                                                        | [ ]  |
+| 4 | README namespace-by-namespace tour                       | Top-level doc update                                                        | [x]  |
 | 5 | Full dartdoc regeneration                                | Publish `dartdoc`                                                           | [ ]  |
 | 6 | Lock public API for v1.0                                 | Post-v1.0 breaking changes require deprecation cycle                        | [ ]  |
 | 7 | Optional examples (`taildrop`, `serve`)                  | Only if the corresponding optional phase lands before v1.0                  | [ ]  |
@@ -516,7 +515,7 @@ exercise Headscale-unsupported features need a separate path.
 | `up` / `down` / `logout`          | ✅                | ✅                                 |
 | `tcp.dial` / `tcp.bind`           | ✅                | ✅                                 |
 | `udp.bind`                        | ✅                | ✅                                 |
-| `http.client` / `http.expose`     | ✅                | ✅                                 |
+| `http.client` / `http.bind`       | ✅                | ✅                                 |
 | `whois`, `diag.ping`, `diag.metrics`, `diag.derpMap` | ✅                | ✅                                 |
 | `prefs.*` (subnet routes, shields)| ✅                | ✅                                 |
 | `exitNode.*`                      | ✅                | ✅                                 |
@@ -545,8 +544,8 @@ Flagged for resolution in each phase's PR rather than pre-decided.
 1. ~~**Value-type equality implementation.**~~ ✅ **Closed:** hand-rolled, no dependency. Zero runtime cost, no codegen, fine for ~13 small value types.
 2. **DERP vs Relay naming.** `DERPMap` / `DERPRegion` match upstream exactly but are jargony; `RelayMap` / `RelayRegion` are self-describing but diverge. *Leaning toward keeping DERP to match upstream.* *Decide in Phase 4.*
 3. **Namespace constructor visibility pattern.** Private `_(worker)` constructor, `@internal` annotation, `part of`, or explicit doc-only convention? *Decide in Phase 2; apply uniformly.*
-4. **`http.expose` ephemeral port.** Today's `listen()` supports `localPort: 0` → ephemeral allocation, returns the port. Keep or require non-zero? *Decide in Phase 1.*
-5. **Funnel metadata registry lifecycle.** `Expando<FunnelMetadata>` keyed by `Socket` — when does the entry get cleared? On socket close (via listener), or garbage-collected with the socket? If the former, need a `Socket.done` hook or similar. *Decide in Phase 5.*
+4. ~~**`http.bind` local port shape.**~~ ✅ **Closed:** v1 does not expose a `localPort`; inbound HTTP is package-native and accepts tailnet requests directly via `TailscaleHttpServer.requests`.
+5. **Funnel metadata lifecycle.** Once Phase 5 chooses the Funnel listener/request surface, decide where public source/SNI metadata lives and when it is cleared.
 
 ---
 
@@ -579,7 +578,7 @@ Not acting on these in this RFC, but worth tracking:
 
 - **Breaking changes concentrated in Phase 1.** Two renames:
   `Tailscale.http` → `Tailscale.http.client`, `Tailscale.listen` →
-  `Tailscale.http.expose`. Documented in `CHANGELOG.md`. No
+  `Tailscale.http.bind`. Documented in `CHANGELOG.md`. No
   deprecation shims — the package is pre-1.0 and the user has
   indicated breaking changes are acceptable here.
 - **Phase 2 renames are additive** except for `MaskedPrefs` →

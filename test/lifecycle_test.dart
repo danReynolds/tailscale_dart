@@ -1,6 +1,6 @@
 /// Coverage for the top-level lifecycle namespace on [Tailscale]:
-/// init, up/down/logout, status/peers, the state/error streams, and
-/// parsing of the [TailscaleStatus] / [PeerStatus] value types the
+/// init, up/down/logout, status/nodes, the state/error streams, and
+/// parsing of the [TailscaleStatus] / [TailscaleNode] value types the
 /// lifecycle returns.
 ///
 /// The FFI-backed integration tests (up/down against the real Go
@@ -26,6 +26,7 @@ void main() {
         'BackendState': 'Running',
         'AuthURL': '',
         'Self': {
+          'ID': 'nSelf1234',
           'TailscaleIPs': ['100.64.0.1', 'fd7a:115c:a1e0::1'],
           'HostName': 'my-node',
         },
@@ -53,6 +54,7 @@ void main() {
       expect(status.isRunning, isTrue);
       expect(status.needsLogin, isFalse);
       expect(status.isHealthy, isTrue);
+      expect(status.stableNodeId, 'nSelf1234');
       expect(status.tailscaleIPs, ['100.64.0.1', 'fd7a:115c:a1e0::1']);
       expect(status.ipv4, '100.64.0.1');
       expect(status.magicDNSSuffix, 'tailnet.ts.net');
@@ -62,6 +64,7 @@ void main() {
       final status = TailscaleStatus.fromJson({});
       expect(status.state, NodeState.noState);
       expect(status.isRunning, isFalse);
+      expect(status.stableNodeId, isNull);
       expect(status.tailscaleIPs, isEmpty);
       expect(status.health, isEmpty);
       expect(status.isHealthy, isTrue);
@@ -85,11 +88,15 @@ void main() {
       expect(status.authUrl, isNull);
     });
 
-    test('ignores peer inventory', () {
+    test('ignores node inventory', () {
       final status = TailscaleStatus.fromJson({
         'BackendState': 'Running',
-        'Self': {'TailscaleIPs': ['100.64.0.1']},
-        'Peer': {'key1': {'PublicKey': 'abc123', 'HostName': 'peer-1'}},
+        'Self': {
+          'TailscaleIPs': ['100.64.0.1'],
+        },
+        'Peer': {
+          'key1': {'PublicKey': 'abc123', 'HostName': 'peer-1'},
+        },
       });
       expect(status.isRunning, isTrue);
       expect(status.ipv4, '100.64.0.1');
@@ -112,16 +119,19 @@ void main() {
     test('TailscaleStatus ==', () {
       const a = TailscaleStatus(
         state: NodeState.running,
+        stableNodeId: 'n1',
         tailscaleIPs: ['100.64.0.1'],
         health: [],
       );
       const b = TailscaleStatus(
         state: NodeState.running,
+        stableNodeId: 'n1',
         tailscaleIPs: ['100.64.0.1'],
         health: [],
       );
       const c = TailscaleStatus(
         state: NodeState.stopped,
+        stableNodeId: 'n2',
         tailscaleIPs: ['100.64.0.1'],
         health: [],
       );
@@ -154,9 +164,9 @@ void main() {
     });
   });
 
-  group('PeerStatus.fromJson', () {
+  group('TailscaleNode.fromJson', () {
     test('parses all documented fields', () {
-      final peer = PeerStatus.fromJson({
+      final node = TailscaleNode.fromJson({
         'PublicKey': 'abc123',
         'ID': 'nAbCd1234',
         'HostName': 'peer-1',
@@ -172,26 +182,26 @@ void main() {
         'CurAddr': '1.2.3.4:41641',
       });
 
-      expect(peer.publicKey, 'abc123');
-      expect(peer.stableNodeId, 'nAbCd1234');
-      expect(peer.hostName, 'peer-1');
-      expect(peer.os, 'linux');
-      expect(peer.online, isTrue);
-      expect(peer.ipv4, '100.64.0.2');
-      expect(peer.rxBytes, 1024);
-      expect(peer.txBytes, 2048);
-      expect(peer.lastSeen, isNotNull);
-      expect(peer.relay, 'nyc');
-      expect(peer.curAddr, '1.2.3.4:41641');
+      expect(node.publicKey, 'abc123');
+      expect(node.stableNodeId, 'nAbCd1234');
+      expect(node.hostName, 'peer-1');
+      expect(node.os, 'linux');
+      expect(node.online, isTrue);
+      expect(node.ipv4, '100.64.0.2');
+      expect(node.rxBytes, 1024);
+      expect(node.txBytes, 2048);
+      expect(node.lastSeen, isNotNull);
+      expect(node.relay, 'nyc');
+      expect(node.curAddr, '1.2.3.4:41641');
     });
 
     test('stableNodeId falls back to empty string when absent', () {
-      final peer = PeerStatus.fromJson({'PublicKey': 'abc123'});
-      expect(peer.stableNodeId, '');
+      final node = TailscaleNode.fromJson({'PublicKey': 'abc123'});
+      expect(node.stableNodeId, '');
     });
 
-    test('listFromJson parses multiple peers', () {
-      final peers = PeerStatus.listFromJson([
+    test('listFromJson parses multiple nodes', () {
+      final nodes = TailscaleNode.listFromJson([
         {
           'PublicKey': 'abc',
           'ID': 'n1',
@@ -218,13 +228,13 @@ void main() {
         },
       ]);
 
-      expect(peers, hasLength(2));
-      expect(peers.first.hostName, 'peer-1');
-      expect(peers.first.stableNodeId, 'n1');
-      expect(peers.last.online, isFalse);
+      expect(nodes, hasLength(2));
+      expect(nodes.first.hostName, 'peer-1');
+      expect(nodes.first.stableNodeId, 'n1');
+      expect(nodes.last.online, isFalse);
     });
 
-    test('PeerStatus == includes stableNodeId', () {
+    test('TailscaleNode == includes stableNodeId', () {
       final base = {
         'PublicKey': 'abc',
         'ID': 'n1',
@@ -237,9 +247,9 @@ void main() {
         'RxBytes': 0,
         'TxBytes': 0,
       };
-      final a = PeerStatus.fromJson({...base});
-      final b = PeerStatus.fromJson({...base});
-      final c = PeerStatus.fromJson({...base, 'ID': 'n2'});
+      final a = TailscaleNode.fromJson({...base});
+      final b = TailscaleNode.fromJson({...base});
+      final c = TailscaleNode.fromJson({...base, 'ID': 'n2'});
       expect(a, equals(b));
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(equals(c)));
@@ -287,6 +297,16 @@ void main() {
         throwsA(isA<TailscaleUsageException>()),
       );
     });
+
+    test('up rejects non-positive timeout', () async {
+      await expectLater(
+        Tailscale.instance.up(
+          authKey: 'tskey-fake-key',
+          timeout: Duration.zero,
+        ),
+        throwsA(isA<TailscaleUsageException>()),
+      );
+    });
   });
 
   group('streams', () {
@@ -298,8 +318,8 @@ void main() {
       expect(Tailscale.instance.onError.isBroadcast, isTrue);
     });
 
-    test('onPeersChange is a broadcast stream', () {
-      expect(Tailscale.instance.onPeersChange.isBroadcast, isTrue);
+    test('onNodeChanges is a broadcast stream', () {
+      expect(Tailscale.instance.onNodeChanges.isBroadcast, isTrue);
     });
   });
 
@@ -316,9 +336,9 @@ void main() {
       expect(status.state, NodeState.noState);
     });
 
-    test('peers() returns empty list before up()', () async {
-      final peers = await Tailscale.instance.peers();
-      expect(peers, isEmpty);
+    test('nodes() returns empty list before up()', () async {
+      final nodes = await Tailscale.instance.nodes();
+      expect(nodes, isEmpty);
     });
 
     test('down() is a no-op before up()', () async {
@@ -376,9 +396,9 @@ void main() {
       expect(status.tailscaleIPs, isEmpty);
     });
 
-    test('peers() after down() returns empty', () async {
-      final peers = await Tailscale.instance.peers();
-      expect(peers, isEmpty);
+    test('nodes() after down() returns empty', () async {
+      final nodes = await Tailscale.instance.nodes();
+      expect(nodes, isEmpty);
     });
 
     test('down() twice is a no-op', () async {

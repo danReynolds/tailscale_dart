@@ -15,16 +15,16 @@ enum PingType {
   disco,
 
   /// TSMP — Tailscale's reliable-message protocol. Crosses the tunnel
-  /// and exercises the full peer stack.
+  /// and exercises the full node stack.
   tsmp,
 
   /// ICMP (platform-dependent; typically requires privileges).
   icmp,
 }
 
-/// How confidently [Diag.ping] could classify the route to the peer.
+/// How confidently [Diag.ping] could classify the route to the node.
 enum PingPath {
-  /// The ping result positively identified a direct peer-to-peer path.
+  /// The ping result positively identified a direct node-to-node path.
   direct,
 
   /// The ping result positively identified a DERP-relayed path.
@@ -44,10 +44,10 @@ class PingResult {
     this.derpRegion,
   });
 
-  /// Round-trip time to the peer.
+  /// Round-trip time to the node.
   final Duration latency;
 
-  /// Best-effort classification of the route to the peer.
+  /// Best-effort classification of the route to the node.
   final PingPath path;
 
   /// Convenience getter for callers that only care about the positive case.
@@ -78,7 +78,7 @@ class PingResult {
 }
 
 /// Current DERP relay map — the set of regions and nodes Tailscale
-/// will route through when a direct peer-to-peer path isn't available.
+/// will route through when a direct node-to-node path isn't available.
 /// Mirrors `tailcfg.DERPMap`. See
 /// <https://tailscale.com/kb/1232/derp-servers>.
 @immutable
@@ -101,13 +101,15 @@ class DERPMap {
 
   @override
   int get hashCode => Object.hash(
-        Object.hashAllUnordered(
-            regions.entries.map((e) => Object.hash(e.key, e.value))),
-        omitDefaultRegions,
-      );
+    Object.hashAllUnordered(
+      regions.entries.map((e) => Object.hash(e.key, e.value)),
+    ),
+    omitDefaultRegions,
+  );
 
   @override
-  String toString() => 'DERPMap(regions: ${regions.length}, '
+  String toString() =>
+      'DERPMap(regions: ${regions.length}, '
       'omitDefaultRegions: $omitDefaultRegions)';
 }
 
@@ -144,7 +146,7 @@ class DERPRegion {
   final bool avoid;
 
   /// When true, this region should not be measured or selected
-  /// as the node's home; it's only used if a peer declares it as
+  /// as the node's home; it's only used if another node declares it as
   /// their home.
   final bool noMeasureNoHome;
 
@@ -166,15 +168,15 @@ class DERPRegion {
 
   @override
   int get hashCode => Object.hash(
-        regionId,
-        regionCode,
-        regionName,
-        latitude,
-        longitude,
-        avoid,
-        noMeasureNoHome,
-        Object.hashAll(nodes),
-      );
+    regionId,
+    regionCode,
+    regionName,
+    latitude,
+    longitude,
+    avoid,
+    noMeasureNoHome,
+    Object.hashAll(nodes),
+  );
 
   @override
   String toString() =>
@@ -230,15 +232,8 @@ class DERPNode {
           canPort80 == other.canPort80;
 
   @override
-  int get hashCode => Object.hash(
-        name,
-        hostName,
-        ipv4,
-        ipv6,
-        derpPort,
-        stunPort,
-        canPort80,
-      );
+  int get hashCode =>
+      Object.hash(name, hostName, ipv4, ipv6, derpPort, stunPort, canPort80);
 
   @override
   String toString() => 'DERPNode(name: $name, hostName: $hostName)';
@@ -280,15 +275,13 @@ class ClientVersion {
       Object.hash(latestVersion, urgentSecurityUpdate, notifyText);
 
   @override
-  String toString() => 'ClientVersion(latest: $latestVersion, '
+  String toString() =>
+      'ClientVersion(latest: $latestVersion, '
       'urgentSecurityUpdate: $urgentSecurityUpdate)';
 }
 
-typedef DiagPingFn = Future<PingResult> Function(
-  String ip,
-  Duration? timeout,
-  PingType type,
-);
+typedef DiagPingFn =
+    Future<PingResult> Function(String ip, Duration? timeout, PingType type);
 typedef DiagMetricsFn = Future<String> Function();
 typedef DiagDERPMapFn = Future<DERPMap> Function();
 typedef DiagCheckUpdateFn = Future<ClientVersion?> Function();
@@ -300,7 +293,7 @@ typedef DiagCheckUpdateFn = Future<ClientVersion?> Function();
 abstract class Diag {
   /// Tailscale-level ping to a tailnet IP or MagicDNS name.
   ///
-  /// Reports round-trip time and whether the path is direct peer-to-peer,
+  /// Reports round-trip time and whether the path is direct node-to-node,
   /// DERP-relayed, or not classifiable for the chosen ping type.
   Future<PingResult> ping(
     String ip, {
@@ -309,7 +302,7 @@ abstract class Diag {
   });
 
   /// Prometheus-format metrics snapshot from the embedded runtime —
-  /// peer counts, DERP activity, byte totals, handshake stats, etc.
+  /// node counts, DERP activity, byte totals, handshake stats, etc.
   Future<String> metrics();
 
   /// Current [DERP](https://tailscale.com/kb/1232/derp-servers) relay
@@ -328,8 +321,7 @@ Diag createDiag({
   required DiagMetricsFn metricsFn,
   required DiagDERPMapFn derpMapFn,
   required DiagCheckUpdateFn checkUpdateFn,
-}) =>
-    _Diag(pingFn, metricsFn, derpMapFn, checkUpdateFn);
+}) => _Diag(pingFn, metricsFn, derpMapFn, checkUpdateFn);
 
 final class _Diag implements Diag {
   _Diag(this._ping, this._metrics, this._derpMap, this._checkUpdate);
@@ -344,8 +336,7 @@ final class _Diag implements Diag {
     String ip, {
     Duration? timeout,
     PingType type = PingType.disco,
-  }) =>
-      _ping(ip, timeout, type);
+  }) => _ping(ip, timeout, type);
 
   @override
   Future<String> metrics() => _metrics();

@@ -1,14 +1,12 @@
-/// Coverage for the `tcp` namespace — both the outbound `dial` and
-/// inbound `bind` loopback bridges.
+/// Coverage for the public `tcp` namespace.
 @TestOn('mac-os || linux')
 library;
 
 import 'dart:io';
 
 import 'package:test/test.dart';
-import 'package:tailscale/tailscale.dart';
-import 'package:tailscale/src/api/tcp.dart' show createTcp;
 import 'package:tailscale/src/ffi_bindings.dart' as native;
+import 'package:tailscale/tailscale.dart';
 
 void main() {
   late Directory configuredStateBaseDir;
@@ -43,35 +41,8 @@ void main() {
   group('tcp.bind before up()', () {
     test('throws TailscaleTcpException', () async {
       await expectLater(
-        Tailscale.instance.tcp.bind(12345),
+        Tailscale.instance.tcp.bind(port: 12345),
         throwsA(isA<TailscaleTcpException>()),
-      );
-    });
-  });
-
-  group('tcp.dial timeout budget', () {
-    test('counts time spent before the loopback connect stage', () async {
-      final loopback = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-      addTearDown(loopback.close);
-
-      final tcp = createTcp(
-        dialFn: (_, __, ___) async {
-          await Future<void>.delayed(const Duration(milliseconds: 40));
-          return (loopbackPort: loopback.port, token: 'token');
-        },
-        bindFn: (_, __, ___) async => throw UnimplementedError(),
-        unbindFn: (_) async {},
-      );
-
-      await expectLater(
-        tcp.dial('peer', 443, timeout: const Duration(milliseconds: 10)),
-        throwsA(
-          isA<TailscaleTcpException>().having(
-            (e) => e.message,
-            'message',
-            contains('timeout budget'),
-          ),
-        ),
       );
     });
   });

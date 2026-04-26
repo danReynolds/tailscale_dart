@@ -12,6 +12,7 @@
 ///   dart run example/tcp_echo.dart client 100.64.0.5
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -22,7 +23,9 @@ const _tailnetPort = 7000;
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty || (args[0] != 'server' && args[0] != 'client')) {
-    stderr.writeln('Usage: dart run example/tcp_echo.dart <server|client> [peerIp]');
+    stderr.writeln(
+      'Usage: dart run example/tcp_echo.dart <server|client> [nodeIp]',
+    );
     exit(64);
   }
 
@@ -61,7 +64,7 @@ Future<void> main(List<String> args) async {
 }
 
 Future<void> _runServer(Tailscale tsnet) async {
-  final server = await tsnet.tcp.bind(_tailnetPort);
+  final server = await tsnet.tcp.bind(port: _tailnetPort);
   stderr.writeln('Listening on tailnet:$_tailnetPort');
 
   // Ctrl-C cleanly closes the bind (so Go tears down the tailnet listener).
@@ -72,33 +75,32 @@ Future<void> _runServer(Tailscale tsnet) async {
     exit(0);
   });
 
-  server.listen((socket) {
-    stderr.writeln('Accepted ${socket.remoteAddress.address}');
-    socket.listen(
-      socket.add,
-      onDone: () => socket.close(),
-      onError: (_) => socket.close(),
-      cancelOnError: true,
+  server.connections.listen((conn) {
+    stderr.writeln('Accepted ${conn.remote}');
+    unawaited(
+      conn.output
+          .writeAll(conn.input, close: true)
+          .catchError((_) => conn.abort()),
     );
   });
 }
 
-Future<void> _runClient(Tailscale tsnet, String peerIp) async {
-  final socket = await tsnet.tcp.dial(peerIp, _tailnetPort);
+Future<void> _runClient(Tailscale tsnet, String nodeIp) async {
+  final conn = await tsnet.tcp.dial(nodeIp, _tailnetPort);
   try {
     final payload = Uint8List.fromList(utf8.encode('hello over tcp!'));
-    socket.add(payload);
-    await socket.flush();
+    await conn.output.write(payload);
+    await conn.output.close();
     stderr.writeln('Sent ${payload.length} bytes');
 
     var received = 0;
-    await for (final chunk in socket) {
+    await for (final chunk in conn.input) {
       stdout.write(utf8.decode(chunk, allowMalformed: true));
       received += chunk.length;
       if (received >= payload.length) break;
     }
     stdout.writeln();
   } finally {
-    await socket.close();
+    await conn.close();
   }
 }

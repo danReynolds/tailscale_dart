@@ -342,15 +342,102 @@ enum _ShutdownHow {
 }
 
 const int _eintr = 4;
+const int _afUnix = 1;
+const int _sockStream = 1;
+
+bool _posixFdTransportProbeComplete = false;
 
 final _fdFinalizer = Finalizer<int>((fd) {
   closePosixFdForCleanup(fd);
 });
 
+/// Verifies that the current process exposes the POSIX syscalls needed by the
+/// fd transport backend.
+///
+/// The probe is intentionally small and synchronous. It catches platform or
+/// dynamic-linking mismatches at startup instead of surfacing them later from
+/// the first TCP/UDP/HTTP transport operation.
+void ensurePosixFdTransportAvailable() {
+  if (Platform.isWindows || _posixFdTransportProbeComplete) return;
+
+  try {
+    final bindings = _PosixBindings.instance;
+    if (!bindings.hasErrno) {
+      throw StateError('errno symbol could not be resolved');
+    }
+    _probeSocketPair(bindings);
+    _posixFdTransportProbeComplete = true;
+  } catch (error) {
+    throw StateError('POSIX fd transport probe failed: $error');
+  }
+}
+
 void closePosixFdForCleanup(int fd) {
   if (fd < 0 || Platform.isWindows) return;
   _PosixBindings.instance.shutdown(fd, _ShutdownHow.readWrite.value);
   _PosixBindings.instance.close(fd);
+}
+
+void _probeSocketPair(_PosixBindings bindings) {
+  final fds = calloc<Int32>(2);
+  final writeBuffer = calloc<Uint8>(1);
+  final readBuffer = calloc<Uint8>(1);
+  var left = -1;
+  var right = -1;
+  try {
+    final result = bindings.socketpair(_afUnix, _sockStream, 0, fds);
+    if (result != 0) {
+      throw StateError('socketpair failed errno=${bindings.errno}');
+    }
+    left = fds[0];
+    right = fds[1];
+
+    writeBuffer[0] = 0x7a;
+    _probeWriteOne(bindings, left, writeBuffer);
+    _probeReadOne(bindings, right, readBuffer);
+    if (readBuffer[0] != 0x7a) {
+      throw StateError('socketpair read/write returned corrupted data');
+    }
+
+    final shutdownResult = bindings.shutdown(
+      left,
+      _ShutdownHow.readWrite.value,
+    );
+    if (shutdownResult != 0) {
+      throw StateError('shutdown failed errno=${bindings.errno}');
+    }
+  } finally {
+    if (left >= 0) {
+      bindings.close(left);
+    }
+    if (right >= 0) {
+      bindings.shutdown(right, _ShutdownHow.readWrite.value);
+      bindings.close(right);
+    }
+    calloc.free(fds);
+    calloc.free(writeBuffer);
+    calloc.free(readBuffer);
+  }
+}
+
+void _probeWriteOne(_PosixBindings bindings, int fd, Pointer<Uint8> buffer) {
+  while (true) {
+    final n = bindings.write(fd, buffer, 1);
+    if (n == 1) return;
+    final errno = bindings.errno;
+    if (n < 0 && errno == _eintr) continue;
+    throw StateError('write probe failed n=$n errno=$errno');
+  }
+}
+
+void _probeReadOne(_PosixBindings bindings, int fd, Pointer<Uint8> buffer) {
+  while (true) {
+    final n = bindings.read(fd, buffer, 1);
+    if (n == 1) return;
+    final errno = bindings.errno;
+    if (n < 0 && errno == _eintr) continue;
+    throw StateError('read probe failed n=$n errno=$errno');
+  }
 }
 
 void _fdReadWorker(List<Object> args) {
@@ -478,6 +565,8 @@ String? _writeAll(int fd, Uint8List data) {
 final class _PosixBindings {
   _PosixBindings._()
     : _library = DynamicLibrary.process(),
+      _socketpair = DynamicLibrary.process()
+          .lookupFunction<_SocketPairNative, _SocketPairDart>('socketpair'),
       _read = DynamicLibrary.process().lookupFunction<_ReadNative, _ReadDart>(
         'read',
       ),
@@ -493,11 +582,15 @@ final class _PosixBindings {
   static final instance = _PosixBindings._();
 
   final DynamicLibrary _library;
+  final _SocketPairDart _socketpair;
   final _ReadDart _read;
   final _WriteDart _write;
   final _CloseDart _close;
   final _ShutdownDart _shutdown;
   late final _ErrnoLocationDart? _errnoLocation;
+
+  int socketpair(int domain, int type, int protocol, Pointer<Int32> fds) =>
+      _socketpair(domain, type, protocol, fds);
 
   int read(int fd, Pointer<Uint8> buffer, int count) =>
       _read(fd, buffer, count);
@@ -517,6 +610,8 @@ final class _PosixBindings {
     return pointer.value;
   }
 
+  bool get hasErrno => _errnoLocation != null;
+
   static _ErrnoLocationDart? _lookupErrnoLocation(DynamicLibrary library) {
     for (final symbol in const ['__errno_location', '__errno', '__error']) {
       try {
@@ -530,6 +625,9 @@ final class _PosixBindings {
     return null;
   }
 }
+
+typedef _SocketPairNative = Int32 Function(Int32, Int32, Int32, Pointer<Int32>);
+typedef _SocketPairDart = int Function(int, int, int, Pointer<Int32>);
 
 typedef _ReadNative = IntPtr Function(Int32, Pointer<Uint8>, IntPtr);
 typedef _ReadDart = int Function(int, Pointer<Uint8>, int);

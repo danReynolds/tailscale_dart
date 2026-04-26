@@ -15,6 +15,7 @@ import 'src/api/tcp.dart';
 import 'src/api/tls.dart';
 import 'src/api/udp.dart';
 import 'src/errors.dart';
+import 'src/fd_transport.dart' show ensurePosixFdTransportAvailable;
 import 'src/ffi_bindings.dart' as native;
 import 'src/http_fd_client.dart';
 import 'src/status.dart';
@@ -340,6 +341,15 @@ class Tailscale implements TailscaleClient {
       throw const TailscaleUsageException('stateDir must not be empty.');
     }
     final normalizedStateDir = p.normalize(p.absolute(stateDir));
+
+    try {
+      ensurePosixFdTransportAvailable();
+    } catch (error) {
+      throw TailscaleUsageException(
+        'POSIX fd transport is not available on this platform.',
+        cause: error,
+      );
+    }
 
     _stateBaseDir = normalizedStateDir;
     native.duneSetLogLevel(logLevel.nativeValue);

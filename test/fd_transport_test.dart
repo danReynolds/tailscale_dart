@@ -12,6 +12,11 @@ void main() {
     'PosixFdTransport',
     skip: Platform.isWindows ? 'POSIX only' : false,
     () {
+      test('startup probe validates required POSIX syscall surface', () {
+        expect(ensurePosixFdTransportAvailable, returnsNormally);
+        expect(ensurePosixFdTransportAvailable, returnsNormally);
+      });
+
       test('moves bytes bidirectionally over an adopted socketpair', () async {
         final (:left, :right) = await _connectedPair();
         addTearDown(() => _closeBoth(left, right));

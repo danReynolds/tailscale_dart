@@ -106,8 +106,6 @@ These are worth doing after the current review fixes and before declaring the
 core API production-ready. TLS and Funnel are intentionally omitted here because
 they have not been redesigned for the fd-backed architecture yet.
 
-- Add a startup/platform probe for POSIX fd syscall bindings so unsupported or
-  partially-supported platforms fail early.
 - Consider a separate worker/control lane for potentially slow setup calls
   (`tcp.dial`, `udp.bind`, `http.bind`) so routine status/node calls are not
   delayed behind them.
@@ -131,6 +129,8 @@ Recently addressed from this feedback:
 - UDP envelope decode avoids extra `sublist` copies where safe.
 - `TailscaleEndpoint.address` docs distinguish broad dial/bind inputs from
   observed runtime endpoints.
+- `Tailscale.init()` now probes the POSIX fd syscall surface once on startup so
+  unsupported or partially-supported platforms fail before first transport use.
 
 ## Known Non-Blockers
 

@@ -64,7 +64,7 @@ returning a transitional state such as `starting`.
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
 | `Tailscale.init({stateDir, logLevel})` | ✅ | One-time library configuration at app startup. | `Tailscale.init(stateDir: '/app/state');` |
-| `up({hostname, authKey, controlUrl})` → `TailscaleStatus` | ✅ | Start engine; resolves on the first stable state only. Throws `TailscaleUpException` if startup fails before that. | `final s = await tsnet.up(authKey: 'tskey-...');` |
+| `up({hostname, authKey, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; resolves on the first stable state only. Throws `TailscaleUpException` if startup fails before that. | `final s = await tsnet.up(authKey: 'tskey-...');` |
 | `down()` | ✅ | Stop engine, keep persisted credentials. | `await tsnet.down();` |
 | `logout()` | ✅ | Stop + wipe persisted credentials. | `await tsnet.logout();` |
 | `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. | `final s = await tsnet.status();` |

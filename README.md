@@ -110,7 +110,7 @@ await tailscale.logout();
 |--------|------|-------------|
 | `init({stateDir, logLevel})` | `static void` | Configure once at startup. Stores state in `stateDir/tailscale/`. |
 | `instance` | `static Tailscale` | Singleton accessor |
-| `up({hostname, authKey, controlUrl})` | `Future<TailscaleStatus>` | Start the node and resolve on the first stable state. |
+| `up({hostname, authKey, controlUrl, timeout})` | `Future<TailscaleStatus>` | Start the node and resolve on the first stable state. |
 | `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health). Before `up()`, returns `stopped` or `noState` based on whether persisted credentials exist. |
 | `nodes()` | `Future<List<TailscaleNode>>` | Current node snapshot |
 | `nodeByIp(ip)` | `Future<TailscaleNode?>` | Lookup a known node by Tailscale IP |

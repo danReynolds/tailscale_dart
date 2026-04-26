@@ -292,14 +292,14 @@ TailscaleDatagram _decodeDatagramEnvelope(Uint8List envelope) {
   final String address;
   try {
     address = utf8.decode(
-      envelope.sublist(_udpEnvelopeHeaderBytes, payloadOffset),
+      Uint8List.sublistView(envelope, _udpEnvelopeHeaderBytes, payloadOffset),
     );
   } on FormatException catch (error) {
     throw TailscaleUdpException('malformed UDP envelope address', cause: error);
   }
   return TailscaleDatagram(
     remote: TailscaleEndpoint(address: address, port: port),
-    payload: envelope.sublist(payloadOffset),
+    payload: Uint8List.sublistView(envelope, payloadOffset),
   );
 }
 

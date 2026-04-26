@@ -12,6 +12,7 @@ import 'package:meta/meta.dart';
 import '../errors.dart';
 import '../fd_transport.dart';
 import '../ffi_bindings.dart' as native;
+import '../http_fd_protocol.dart';
 import 'connection.dart';
 
 const int _maxPendingHttpAccepts = 128;
@@ -74,6 +75,9 @@ abstract class Http {
 
   /// Binds a tailnet HTTP port and exposes inbound requests as fd-backed Dart
   /// request objects.
+  ///
+  /// The native accept backlog is bounded. If the Dart side falls behind far
+  /// enough for the Go-side backlog to fill, new wire clients receive HTTP 503.
   Future<TailscaleHttpServer> bind({required int port});
 }
 
@@ -140,7 +144,7 @@ abstract interface class TailscaleHttpResponse {
 
   Future<void> write(List<int> bytes);
   Future<void> writeString(String text, {Encoding encoding = utf8});
-  Future<void> writeAll(Stream<List<int>> chunks);
+  Future<void> writeAll(Stream<List<int>> chunks, {bool close = false});
   Future<void> close();
   Future<void> get done;
 }
@@ -579,10 +583,11 @@ final class _TailscaleHttpResponse implements TailscaleHttpResponse {
       write(encoding.encode(text));
 
   @override
-  Future<void> writeAll(Stream<List<int>> chunks) async {
+  Future<void> writeAll(Stream<List<int>> chunks, {bool close = false}) async {
     await for (final chunk in chunks) {
       await write(chunk);
     }
+    if (close) await this.close();
   }
 
   @override
@@ -610,7 +615,7 @@ final class _TailscaleHttpResponse implements TailscaleHttpResponse {
     final payload = utf8.encode(
       jsonEncode({'statusCode': _statusCode, 'headers': _headerSnapshot()}),
     );
-    if (payload.length > 16 * 1024 * 1024) {
+    if (payload.length > tailscaleMaxHttpHeadBytes) {
       throw StateError('HTTP response headers are too large.');
     }
     final bytes = Uint8List(4 + payload.length);
@@ -676,9 +681,16 @@ void _putResponseHeaderIfAbsent(
   String name,
   int value,
 ) {
-  if (!response.headers.containsKey(name)) {
+  if (!_hasHeader(response.headers, name)) {
     response.setHeader(name, '$value');
   }
+}
+
+bool _hasHeader(Map<String, String> headers, String name) {
+  for (final key in headers.keys) {
+    if (key.toLowerCase() == name.toLowerCase()) return true;
+  }
+  return false;
 }
 
 void _httpAcceptLoop(List<Object> args) {

@@ -98,6 +98,7 @@ abstract interface class TailscaleClient {
     String hostname = '',
     String? authKey,
     Uri? controlUrl,
+    Duration timeout = const Duration(seconds: 30),
   });
 
   Future<TailscaleStatus> status();
@@ -387,16 +388,24 @@ class Tailscale implements TailscaleClient {
   ///
   /// No-op if already running (without a new authKey).
   ///
+  /// [timeout] bounds how long [up] waits for the node to reach a stable state
+  /// after the native runtime starts. Increase it for slow mobile networks or
+  /// self-hosted control planes.
+  ///
   /// Throws [TailscaleUpException] if no [authKey] is provided and no
   /// persisted session state exists, or if the node fails to reach a
-  /// stable state within 30 seconds (e.g. control plane unreachable).
+  /// stable state before [timeout] (e.g. control plane unreachable).
   @override
   Future<TailscaleStatus> up({
     String hostname = '',
     String? authKey,
     Uri? controlUrl,
+    Duration timeout = const Duration(seconds: 30),
   }) async {
     _requireInitialized();
+    if (timeout <= Duration.zero) {
+      throw const TailscaleUsageException('up timeout must be positive.');
+    }
     final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
 
     // Only count stable states that arrive AFTER start() returns. If up()
@@ -431,11 +440,11 @@ class Tailscale implements TailscaleClient {
       }
 
       try {
-        await stable.future.timeout(const Duration(seconds: 30));
+        await stable.future.timeout(timeout);
       } on TimeoutException {
         final last = await status();
         throw TailscaleUpException(
-          'Node did not reach a stable state within 30 seconds '
+          'Node did not reach a stable state within $timeout '
           '(last observed: ${last.state.name}). The control plane may '
           'be unreachable or the tailnet is experiencing issues.',
         );

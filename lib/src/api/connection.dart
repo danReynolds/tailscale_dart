@@ -15,13 +15,19 @@ import '../runtime_connection.dart';
 import 'identity.dart';
 
 const int _maxPendingAcceptedConnections = 128;
+const int _maxConsecutiveAcceptErrors = 20;
 
 /// A tailnet endpoint attached to a transport object.
 @immutable
 final class TailscaleEndpoint {
   const TailscaleEndpoint({required this.address, required this.port});
 
-  /// Tailnet IP, hostname, or empty string when bound on all local tailnet IPs.
+  /// Endpoint address.
+  ///
+  /// Dial/bind APIs may accept IPs, MagicDNS names, or an empty bind address
+  /// depending on context. Observed connection endpoints returned by the
+  /// runtime are literal tailnet addresses whenever the backend can resolve
+  /// them.
   final String address;
 
   /// TCP or UDP port.
@@ -50,6 +56,10 @@ abstract interface class TailscaleConnection {
   TailscaleEndpoint get remote;
 
   /// Remote node identity, when the backend attached one.
+  ///
+  /// POSIX fd-backed TCP does not currently attach this for accepted
+  /// connections. Use `Tailscale.instance.whois(remote.address)` when an
+  /// authorization decision requires identity.
   TailscaleNodeIdentity? get identity;
 
   /// Single-subscription byte stream received from the remote node.
@@ -66,11 +76,15 @@ abstract interface class TailscaleConnection {
 
   /// Application-level close: the caller is done with the whole connection.
   ///
-  /// This closes the local read and write sides. To only signal EOF to the
-  /// remote while continuing to read, call [output.close] instead.
+  /// This closes the local read and write sides. It may discard unread input
+  /// and fail pending writes. To only signal EOF to the remote while continuing
+  /// to read, call [output.close] instead.
   Future<void> close();
 
-  /// Immediate teardown/reset.
+  /// Immediate local teardown/reset.
+  ///
+  /// The fd backend currently maps this to the same local descriptor shutdown
+  /// as [close].
   Future<void> abort();
 }
 
@@ -105,6 +119,9 @@ abstract interface class TailscaleListener {
 
   /// Stops accepting connections.
   Future<void> close();
+
+  /// Completes when [close] has completed.
+  Future<void> get done;
 }
 
 @internal
@@ -194,6 +211,7 @@ final class _FdTailscaleListener implements TailscaleListener {
 
   final int listenerId;
   final Future<void> Function(int listenerId) _closeFn;
+  final _done = Completer<void>();
   late final StreamController<TailscaleConnection> _connections;
   final _pendingAccepts = Queue<_PendingTcpAccept>();
   ReceivePort? _acceptEvents;
@@ -207,14 +225,24 @@ final class _FdTailscaleListener implements TailscaleListener {
   Stream<TailscaleConnection> get connections => _connections.stream;
 
   @override
+  Future<void> get done => _done.future;
+
+  @override
   Future<void> close() async {
-    if (_closed) return;
+    if (_closed) return done;
     _closed = true;
-    await _closeFn(listenerId);
-    _acceptIsolate?.kill(priority: Isolate.immediate);
-    _acceptEvents?.close();
-    _closePendingAccepts();
-    if (!_connections.isClosed) unawaited(_connections.close());
+    try {
+      await _closeFn(listenerId);
+      _acceptIsolate?.kill(priority: Isolate.immediate);
+      _acceptEvents?.close();
+      _closePendingAccepts();
+      if (!_connections.isClosed) unawaited(_connections.close());
+      if (!_done.isCompleted) _done.complete();
+    } catch (error, stackTrace) {
+      if (!_done.isCompleted) _done.completeError(error, stackTrace);
+      rethrow;
+    }
+    return done;
   }
 
   void _startAcceptLoop() {
@@ -343,6 +371,7 @@ final class _PendingTcpAccept {
 void _tcpAcceptLoop(List<Object> args) {
   final listenerId = args[0] as int;
   final sendPort = args[1] as SendPort;
+  var consecutiveErrors = 0;
 
   while (true) {
     final resultPtr = native.duneTcpAcceptFd(listenerId);
@@ -356,10 +385,19 @@ void _tcpAcceptLoop(List<Object> args) {
     }
     final error = result['error'] as String?;
     if (error != null) {
+      consecutiveErrors++;
+      if (consecutiveErrors >= _maxConsecutiveAcceptErrors) {
+        sendPort.send(<Object>[
+          'fatal',
+          'tailnet accept failed $consecutiveErrors consecutive times: $error',
+        ]);
+        return;
+      }
       sendPort.send(<Object>['error', error]);
-      sleep(const Duration(milliseconds: 50));
+      sleep(Duration(milliseconds: 50 * consecutiveErrors));
       continue;
     }
+    consecutiveErrors = 0;
 
     final fd = result['fd'] as int?;
     if (fd == null || fd < 0) {

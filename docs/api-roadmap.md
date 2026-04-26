@@ -191,7 +191,7 @@ zero functional regression. No new capabilities exposed.
 | # | API                                      | Purpose                                                                  | Done |
 | - | ---------------------------------------- | ------------------------------------------------------------------------ | ---- |
 | 1 | `Tailscale.init({stateDir, logLevel})`    | One-time lib configuration at app startup                                | [x]  |
-| 2 | `Tailscale.up({hostname, authKey, controlUrl})` | Start engine; connect to control plane                             | [x]  |
+| 2 | `Tailscale.up({hostname, authKey, controlUrl, timeout})` | Start engine; connect to control plane                     | [x]  |
 | 3 | `Tailscale.down()`                        | Stop engine; keep persisted credentials                                  | [x]  |
 | 4 | `Tailscale.logout()`                      | Stop engine; wipe persisted credentials                                  | [x]  |
 | 5 | `Tailscale.status()`                      | Snapshot of node state + IPs + health                                    | [x]  |

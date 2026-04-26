@@ -71,7 +71,11 @@ final class RuntimeConnection {
     _completeOutputDone();
   }
 
-  /// Closes the whole connection because the application is done with it.
+  /// Closes the local read and write sides because the application is done.
+  ///
+  /// This is not a graceful remote protocol close. To signal EOF while
+  /// continuing to receive already-in-flight bytes, call
+  /// [closeOutputGracefully] instead.
   Future<void> close() async {
     _completeOutputDone();
     await _transport.close();

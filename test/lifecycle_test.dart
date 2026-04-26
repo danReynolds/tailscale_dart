@@ -297,6 +297,16 @@ void main() {
         throwsA(isA<TailscaleUsageException>()),
       );
     });
+
+    test('up rejects non-positive timeout', () async {
+      await expectLater(
+        Tailscale.instance.up(
+          authKey: 'tskey-fake-key',
+          timeout: Duration.zero,
+        ),
+        throwsA(isA<TailscaleUsageException>()),
+      );
+    });
   });
 
   group('streams', () {

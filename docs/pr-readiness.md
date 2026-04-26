@@ -106,32 +106,31 @@ These are worth doing after the current review fixes and before declaring the
 core API production-ready. TLS and Funnel are intentionally omitted here because
 they have not been redesigned for the fd-backed architecture yet.
 
-- Populate inbound TCP `TailscaleConnection.identity` from Go-side peer
-  metadata or soften/remove the public promise until the field is real.
-- Align lifecycle APIs: add `TailscaleListener.done`, and consider adding
-  `close: true` to `TailscaleHttpResponse.writeAll` to mirror TCP output.
-- Clarify `TailscaleConnection.close()` versus `abort()`. If the fd backend
-  cannot distinguish graceful full-close from immediate teardown, the public
-  contract should say that plainly or the methods should be reshaped before
-  1.0.
-- Make `up()` startup timeout configurable. The current 30 second default is
-  reasonable but too rigid for slow mobile/control-plane environments.
-- Tighten HTTP response/request head limits from 16 MiB to a normal HTTP header
-  envelope bound, likely 64-256 KiB.
-- Fix case-insensitive `Content-Length` detection in HTTP response helpers.
-- Bound TCP accept-loop transient errors with backoff/escalation instead of
-  emitting an unbounded 20 Hz error stream forever.
-- Document and potentially tune HTTP accept backlog behavior. Go currently
-  returns wire-side 503 on overflow; Dart should document that and may expose a
-  backlog option later.
 - Add a startup/platform probe for POSIX fd syscall bindings so unsupported or
   partially-supported platforms fail early.
 - Consider a separate worker/control lane for potentially slow setup calls
   (`tcp.dial`, `udp.bind`, `http.bind`) so routine status/node calls are not
   delayed behind them.
-- Reduce UDP receive-copy overhead with `Uint8List.sublistView` where safe.
-- Clarify `TailscaleEndpoint.address` docs so dial/bind inputs can be broad,
-  but observed connection endpoints are literal tailnet addresses.
+- Decide whether HTTP accept backlog should become configurable. The current
+  wire-side overflow behavior is documented as HTTP 503.
+
+Recently addressed from this feedback:
+
+- `TailscaleConnection.identity` now documents that POSIX fd-backed accepted
+  TCP does not attach identity yet; callers should use `whois(remote.address)`
+  for authorization.
+- `TailscaleListener.done` was added, and `TailscaleHttpResponse.writeAll`
+  gained `close: true`.
+- `TailscaleConnection.close()` / `abort()` docs now state the fd backend's
+  local shutdown semantics plainly.
+- `up(timeout: ...)` is configurable.
+- HTTP fd head envelopes are capped at 256 KiB instead of 16 MiB.
+- Response helpers detect `Content-Length` case-insensitively.
+- TCP accept-loop transient errors now back off and escalate after repeated
+  failures.
+- UDP envelope decode avoids extra `sublist` copies where safe.
+- `TailscaleEndpoint.address` docs distinguish broad dial/bind inputs from
+  observed runtime endpoints.
 
 ## Known Non-Blockers
 

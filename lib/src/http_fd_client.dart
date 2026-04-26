@@ -10,6 +10,7 @@ import 'package:meta/meta.dart';
 import 'errors.dart';
 import 'fd_transport.dart';
 import 'ffi_bindings.dart' as native;
+import 'http_fd_protocol.dart';
 
 const int _responseHeadPrefixBytes = 4;
 
@@ -182,7 +183,7 @@ final class _HttpResponseParser {
     if (_headLength == null && bytes.length >= _responseHeadPrefixBytes) {
       _headLength =
           (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
-      if (_headLength! <= 0 || _headLength! > 16 * 1024 * 1024) {
+      if (_headLength! <= 0 || _headLength! > tailscaleMaxHttpHeadBytes) {
         _fail(TailscaleHttpException('Invalid HTTP response head length.'));
         return;
       }

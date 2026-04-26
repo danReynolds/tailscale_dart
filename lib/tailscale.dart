@@ -31,7 +31,7 @@ export 'src/api/connection.dart'
     hide createFdTailscaleConnection, createFdTailscaleListener;
 export 'src/api/exit_node.dart';
 export 'src/api/funnel.dart' hide attachFunnelMetadata;
-export 'src/api/http.dart' hide createHttp;
+export 'src/api/http.dart' hide createHttp, createHttpRequestForTesting;
 export 'src/api/identity.dart';
 export 'src/api/prefs.dart';
 export 'src/api/profiles.dart';
@@ -154,7 +154,21 @@ class Tailscale implements TailscaleClient {
       StreamController<List<TailscaleNode>>.broadcast();
 
   static String get _stateDir =>
-      p.join(_stateBaseDir!, _ownedStateSubdirectory);
+      p.join(_requireStateBaseDir(), _ownedStateSubdirectory);
+
+  static String _requireStateBaseDir() {
+    final stateBaseDir = _stateBaseDir;
+    if (stateBaseDir == null) {
+      throw const TailscaleUsageException(
+        'Call Tailscale.init(stateDir: ...) before using Tailscale.instance.',
+      );
+    }
+    return stateBaseDir;
+  }
+
+  static void _requireInitialized() {
+    _requireStateBaseDir();
+  }
 
   void _reset() {
     _http?.close();
@@ -382,6 +396,7 @@ class Tailscale implements TailscaleClient {
     String? authKey,
     Uri? controlUrl,
   }) async {
+    _requireInitialized();
     final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
 
     // Only count stable states that arrive AFTER start() returns. If up()
@@ -445,7 +460,10 @@ class Tailscale implements TailscaleClient {
   /// persisted credentials exist (ready to reconnect) and
   /// [NodeState.noState] when they don't.
   @override
-  Future<TailscaleStatus> status() async => _worker.status(stateDir: _stateDir);
+  Future<TailscaleStatus> status() async {
+    _requireInitialized();
+    return _worker.status(stateDir: _stateDir);
+  }
 
   /// Returns the current node inventory — every node on the tailnet
   /// this node is aware of, whether online right now or not.
@@ -454,7 +472,10 @@ class Tailscale implements TailscaleClient {
   /// without re-pulling the full node list on every refresh. For
   /// push-style updates, see [onNodeChanges].
   @override
-  Future<List<TailscaleNode>> nodes() => _snapshotNodes();
+  Future<List<TailscaleNode>> nodes() {
+    _requireInitialized();
+    return _snapshotNodes();
+  }
 
   /// Returns the first known node with [ip] in its Tailscale IP list.
   ///
@@ -462,6 +483,7 @@ class Tailscale implements TailscaleClient {
   /// the IP is unknown or the node has not appeared in the current netmap.
   @override
   Future<TailscaleNode?> nodeByIp(String ip) async {
+    _requireInitialized();
     final target = ip.trim();
     if (target.isEmpty) return null;
     for (final node in await nodes()) {
@@ -480,11 +502,15 @@ class Tailscale implements TailscaleClient {
   /// [TailscaleNodeIdentity.tags] before handling. See
   /// <https://tailscale.com/kb/1068/tags> for the tag model.
   @override
-  Future<TailscaleNodeIdentity?> whois(String ip) => _worker.whois(ip);
+  Future<TailscaleNodeIdentity?> whois(String ip) {
+    _requireInitialized();
+    return _worker.whois(ip);
+  }
 
   /// Brings the embedded node down while preserving persisted credentials.
   @override
   Future<void> down() async {
+    _requireInitialized();
     _reset();
     await _worker.down();
   }
@@ -492,6 +518,7 @@ class Tailscale implements TailscaleClient {
   /// Logs out and clears persisted credentials.
   @override
   Future<void> logout() async {
+    _requireInitialized();
     _reset();
     await _worker.logout(_stateDir);
   }

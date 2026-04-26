@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:isolate';
 import 'dart:io' show sleep;
@@ -8,9 +9,12 @@ import 'package:ffi/ffi.dart';
 import 'package:meta/meta.dart';
 
 import '../errors.dart';
+import '../fd_transport.dart' show closePosixFdForCleanup;
 import '../ffi_bindings.dart' as native;
 import '../runtime_connection.dart';
 import 'identity.dart';
+
+const int _maxPendingAcceptedConnections = 128;
 
 /// A tailnet endpoint attached to a transport object.
 @immutable
@@ -183,6 +187,7 @@ final class _FdTailscaleListener implements TailscaleListener {
   }) : _closeFn = closeFn {
     _connections = StreamController<TailscaleConnection>(
       onListen: _startAcceptLoop,
+      onResume: _drainPendingAccepts,
       onCancel: close,
     );
   }
@@ -190,6 +195,7 @@ final class _FdTailscaleListener implements TailscaleListener {
   final int listenerId;
   final Future<void> Function(int listenerId) _closeFn;
   late final StreamController<TailscaleConnection> _connections;
+  final _pendingAccepts = Queue<_PendingTcpAccept>();
   ReceivePort? _acceptEvents;
   Isolate? _acceptIsolate;
   bool _closed = false;
@@ -207,6 +213,7 @@ final class _FdTailscaleListener implements TailscaleListener {
     await _closeFn(listenerId);
     _acceptIsolate?.kill(priority: Isolate.immediate);
     _acceptEvents?.close();
+    _closePendingAccepts();
     if (!_connections.isClosed) unawaited(_connections.close());
   }
 
@@ -260,13 +267,41 @@ final class _FdTailscaleListener implements TailscaleListener {
       port: message[5] as int,
     );
     final identity = message[6] as TailscaleNodeIdentity?;
+    final accept = _PendingTcpAccept(
+      fd: fd,
+      local: local,
+      remote: remote,
+      identity: identity,
+    );
+    if (_connections.isPaused || _pendingAccepts.isNotEmpty) {
+      _enqueueAccepted(accept);
+      return;
+    }
+    _deliverAccepted(accept);
+  }
+
+  void _enqueueAccepted(_PendingTcpAccept accept) {
+    if (_pendingAccepts.length >= _maxPendingAcceptedConnections) {
+      accept.close();
+      return;
+    }
+    _pendingAccepts.addLast(accept);
+  }
+
+  void _drainPendingAccepts() {
+    while (!_closed && !_connections.isPaused && _pendingAccepts.isNotEmpty) {
+      _deliverAccepted(_pendingAccepts.removeFirst());
+    }
+  }
+
+  void _deliverAccepted(_PendingTcpAccept accept) {
     unawaited(() async {
       try {
         final connection = await createFdTailscaleConnection(
-          fd: fd,
-          local: local,
-          remote: remote,
-          identity: identity,
+          fd: accept.fd,
+          local: accept.local,
+          remote: accept.remote,
+          identity: accept.identity,
         );
         if (_closed || _connections.isClosed) {
           await connection.close();
@@ -277,6 +312,31 @@ final class _FdTailscaleListener implements TailscaleListener {
         _connections.addError(error, stackTrace);
       }
     }());
+  }
+
+  void _closePendingAccepts() {
+    for (final accept in _pendingAccepts) {
+      accept.close();
+    }
+    _pendingAccepts.clear();
+  }
+}
+
+final class _PendingTcpAccept {
+  const _PendingTcpAccept({
+    required this.fd,
+    required this.local,
+    required this.remote,
+    required this.identity,
+  });
+
+  final int fd;
+  final TailscaleEndpoint local;
+  final TailscaleEndpoint remote;
+  final TailscaleNodeIdentity? identity;
+
+  void close() {
+    closePosixFdForCleanup(fd);
   }
 }
 

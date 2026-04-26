@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:isolate';
@@ -13,6 +14,8 @@ import '../fd_transport.dart';
 import '../ffi_bindings.dart' as native;
 import 'connection.dart';
 
+const int _maxPendingHttpAccepts = 128;
+
 typedef HttpBindFn =
     Future<({int bindingId, TailscaleEndpoint tailnet})> Function(int port);
 typedef HttpCloseBindingFn = Future<void> Function(int bindingId);
@@ -26,6 +29,37 @@ Http createHttp({
   clientGetter: clientGetter,
   bindFn: bindFn,
   closeBindingFn: closeBindingFn,
+);
+
+@visibleForTesting
+TailscaleHttpRequest createHttpRequestForTesting({
+  String method = 'GET',
+  String requestUri = '/',
+  String host = '',
+  String protocolVersion = 'HTTP/1.1',
+  Map<String, List<String>> headersAll = const {},
+  int? contentLength,
+  TailscaleEndpoint remote = const TailscaleEndpoint(
+    address: '100.64.0.2',
+    port: 1,
+  ),
+  TailscaleEndpoint local = const TailscaleEndpoint(
+    address: '100.64.0.1',
+    port: 80,
+  ),
+  required PosixFdTransport requestTransport,
+  required PosixFdTransport responseTransport,
+}) => _TailscaleHttpRequest(
+  method: method,
+  requestUri: requestUri,
+  host: host,
+  protocolVersion: protocolVersion,
+  headersAll: headersAll,
+  contentLength: contentLength,
+  remote: remote,
+  local: local,
+  requestTransport: requestTransport,
+  responseTransport: responseTransport,
 );
 
 /// HTTP-specific conveniences routed through the embedded tailnet node.
@@ -168,6 +202,7 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
   }) : _closeFn = closeFn {
     _requests = StreamController<TailscaleHttpRequest>(
       onListen: _startAcceptLoop,
+      onResume: _drainPendingAccepts,
       onCancel: close,
     );
   }
@@ -176,6 +211,7 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
   final Future<void> Function(int bindingId) _closeFn;
   final _done = Completer<void>();
   late final StreamController<TailscaleHttpRequest> _requests;
+  final _pendingAccepts = Queue<_PendingHttpAccept>();
   ReceivePort? _acceptEvents;
   Isolate? _acceptIsolate;
   bool _closed = false;
@@ -197,6 +233,7 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
       await _closeFn(bindingId);
       _acceptIsolate?.kill(priority: Isolate.immediate);
       _acceptEvents?.close();
+      _closePendingAccepts();
       if (!_requests.isClosed) unawaited(_requests.close());
       if (!_done.isCompleted) _done.complete();
     } catch (error, stackTrace) {
@@ -242,27 +279,63 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
       return;
     }
 
+    final requestBodyFd = message[1] as int;
+    final responseBodyFd = message[2] as int;
+    final accept = _PendingHttpAccept(
+      requestBodyFd: requestBodyFd,
+      responseBodyFd: responseBodyFd,
+      method: message[3] as String,
+      requestUri: message[4] as String,
+      host: message[5] as String,
+      protocolVersion: message[6] as String,
+      headersAll: _copyHeadersAll(message[7]),
+      contentLength: _parseNullableContentLength(message[8]),
+      remote: TailscaleEndpoint(
+        address: message[9] as String,
+        port: message[10] as int,
+      ),
+      local: TailscaleEndpoint(
+        address: message[11] as String,
+        port: message[12] as int,
+      ),
+    );
+    if (_requests.isPaused || _pendingAccepts.isNotEmpty) {
+      _enqueueAccepted(accept);
+      return;
+    }
+    _deliverAccepted(accept);
+  }
+
+  void _enqueueAccepted(_PendingHttpAccept accept) {
+    if (_pendingAccepts.length >= _maxPendingHttpAccepts) {
+      accept.close();
+      return;
+    }
+    _pendingAccepts.addLast(accept);
+  }
+
+  void _drainPendingAccepts() {
+    while (!_closed && !_requests.isPaused && _pendingAccepts.isNotEmpty) {
+      _deliverAccepted(_pendingAccepts.removeFirst());
+    }
+  }
+
+  void _deliverAccepted(_PendingHttpAccept accept) {
     unawaited(() async {
       PosixFdTransport? requestTransport;
       PosixFdTransport? responseTransport;
       try {
-        requestTransport = await PosixFdTransport.adopt(message[1] as int);
-        responseTransport = await PosixFdTransport.adopt(message[2] as int);
+        requestTransport = await PosixFdTransport.adopt(accept.requestBodyFd);
+        responseTransport = await PosixFdTransport.adopt(accept.responseBodyFd);
         final request = _TailscaleHttpRequest(
-          method: message[3] as String,
-          requestUri: message[4] as String,
-          host: message[5] as String,
-          protocolVersion: message[6] as String,
-          headersAll: _copyHeadersAll(message[7]),
-          contentLength: _parseNullableContentLength(message[8]),
-          remote: TailscaleEndpoint(
-            address: message[9] as String,
-            port: message[10] as int,
-          ),
-          local: TailscaleEndpoint(
-            address: message[11] as String,
-            port: message[12] as int,
-          ),
+          method: accept.method,
+          requestUri: accept.requestUri,
+          host: accept.host,
+          protocolVersion: accept.protocolVersion,
+          headersAll: accept.headersAll,
+          contentLength: accept.contentLength,
+          remote: accept.remote,
+          local: accept.local,
           requestTransport: requestTransport,
           responseTransport: responseTransport,
         );
@@ -277,6 +350,13 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
         if (!_requests.isClosed) _requests.addError(error, stackTrace);
       }
     }());
+  }
+
+  void _closePendingAccepts() {
+    for (final accept in _pendingAccepts) {
+      accept.close();
+    }
+    _pendingAccepts.clear();
   }
 }
 
@@ -298,15 +378,21 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
            if (entry.value.isNotEmpty) entry.key: entry.value.join(', '),
        }),
        uri = Uri.parse(requestUri.isEmpty ? '/' : requestUri),
-       response = _TailscaleHttpResponse(responseTransport) {
+       _requestTransport = requestTransport {
+    response = _TailscaleHttpResponse(
+      responseTransport,
+      onClose: _closeRequestBody,
+    );
     _body = StreamController<Uint8List>(
       onListen: () {
-        _bodySub = requestTransport.input.listen(
+        _bodySub = _requestTransport.input.listen(
           _body.add,
-          onError: _body.addError,
+          onError: (Object error, StackTrace stackTrace) {
+            _body.addError(error, stackTrace);
+            unawaited(_closeRequestBody());
+          },
           onDone: () async {
-            await requestTransport.close();
-            await _body.close();
+            await _finishRequestBody();
           },
           cancelOnError: true,
         );
@@ -314,14 +400,17 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
       onPause: () => _bodySub?.pause(),
       onResume: () => _bodySub?.resume(),
       onCancel: () async {
-        await _bodySub?.cancel();
-        await requestTransport.close();
+        await _closeRequestBody();
       },
     );
   }
 
+  final PosixFdTransport _requestTransport;
   late final StreamController<Uint8List> _body;
+  @override
+  late final TailscaleHttpResponse response;
   StreamSubscription<Uint8List>? _bodySub;
+  Future<void>? _requestBodyClosed;
 
   @override
   final String method;
@@ -355,9 +444,6 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
 
   @override
   Stream<Uint8List> get body => _body.stream;
-
-  @override
-  final TailscaleHttpResponse response;
 
   @override
   Future<void> respond({
@@ -395,16 +481,39 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
   }
 
   Future<void> close() async {
-    await _bodySub?.cancel();
-    await response.close();
-    if (!_body.isClosed) await _body.close();
+    await Future.wait(<Future<void>>[response.close(), _closeRequestBody()]);
+  }
+
+  Future<void> _closeRequestBody() {
+    final existing = _requestBodyClosed;
+    if (existing != null) return existing;
+    return _requestBodyClosed = () async {
+      await _bodySub?.cancel();
+      await _requestTransport.close();
+      _closeBodyController();
+    }();
+  }
+
+  Future<void> _finishRequestBody() {
+    final existing = _requestBodyClosed;
+    if (existing != null) return existing;
+    return _requestBodyClosed = () async {
+      await _requestTransport.close();
+      _closeBodyController();
+    }();
+  }
+
+  void _closeBodyController() {
+    if (!_body.isClosed) unawaited(_body.close());
   }
 }
 
 final class _TailscaleHttpResponse implements TailscaleHttpResponse {
-  _TailscaleHttpResponse(this._transport);
+  _TailscaleHttpResponse(this._transport, {Future<void> Function()? onClose})
+    : _onClose = onClose;
 
   final PosixFdTransport _transport;
+  final Future<void> Function()? _onClose;
   final _headers = <String, String>{};
   final _extraHeaderValues = <String, List<String>>{};
   final _done = Completer<void>();
@@ -484,9 +593,11 @@ final class _TailscaleHttpResponse implements TailscaleHttpResponse {
       await _sendHead();
       await _transport.closeWrite();
       await _transport.close();
+      await _onClose?.call();
       if (!_done.isCompleted) _done.complete();
     } catch (error, stackTrace) {
       await _transport.close();
+      await _onClose?.call();
       if (!_done.isCompleted) _done.completeError(error, stackTrace);
       rethrow;
     }
@@ -526,6 +637,37 @@ final class _TailscaleHttpResponse implements TailscaleHttpResponse {
       for (final entry in snapshot.entries)
         entry.key: List<String>.unmodifiable(entry.value),
     };
+  }
+}
+
+final class _PendingHttpAccept {
+  const _PendingHttpAccept({
+    required this.requestBodyFd,
+    required this.responseBodyFd,
+    required this.method,
+    required this.requestUri,
+    required this.host,
+    required this.protocolVersion,
+    required this.headersAll,
+    required this.contentLength,
+    required this.remote,
+    required this.local,
+  });
+
+  final int requestBodyFd;
+  final int responseBodyFd;
+  final String method;
+  final String requestUri;
+  final String host;
+  final String protocolVersion;
+  final Map<String, List<String>> headersAll;
+  final int? contentLength;
+  final TailscaleEndpoint remote;
+  final TailscaleEndpoint local;
+
+  void close() {
+    closePosixFdForCleanup(requestBodyFd);
+    closePosixFdForCleanup(responseBodyFd);
   }
 }
 

@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
 
-/// A peer eligible to receive files via Taildrop.
+/// A node eligible to receive files via Taildrop.
 @immutable
 class FileTarget {
   const FileTarget({
@@ -27,7 +27,8 @@ class FileTarget {
   int get hashCode => Object.hash(nodeId, hostName, userLoginName);
 
   @override
-  String toString() => 'FileTarget(nodeId: $nodeId, hostName: $hostName, '
+  String toString() =>
+      'FileTarget(nodeId: $nodeId, hostName: $hostName, '
       'userLoginName: $userLoginName)';
 }
 
@@ -54,7 +55,7 @@ class WaitingFile {
   String toString() => 'WaitingFile(name: $name, size: $size)';
 }
 
-/// Peer-to-peer file transfer ("Taildrop") over the tailnet. Sends
+/// Node-to-node file transfer ("Taildrop") over the tailnet. Sends
 /// travel directly between nodes with no third-party service in the
 /// middle — good fit for mobile-to-desktop sync, collab tools, and
 /// anywhere you'd otherwise set up a file server.
@@ -73,7 +74,7 @@ class Taildrop {
 
   const Taildrop._();
 
-  /// Peers you can send files to right now (owned-by-you + online +
+  /// Nodes you can send files to right now (owned-by-you + online +
   /// allowed by ACLs).
   Future<List<FileTarget>> targets() =>
       throw UnimplementedError('taildrop.targets not yet implemented');
@@ -85,8 +86,7 @@ class Taildrop {
     required String name,
     required Stream<Uint8List> data,
     int? size,
-  }) =>
-      throw UnimplementedError('taildrop.push not yet implemented');
+  }) => throw UnimplementedError('taildrop.push not yet implemented');
 
   /// Files received on this node and not yet picked up.
   Future<List<WaitingFile>> waitingFiles() =>
@@ -96,7 +96,8 @@ class Taildrop {
   /// expires. Returns the same shape as [waitingFiles].
   Future<List<WaitingFile>> awaitWaitingFiles({Duration? timeout}) =>
       throw UnimplementedError(
-          'taildrop.awaitWaitingFiles not yet implemented');
+        'taildrop.awaitWaitingFiles not yet implemented',
+      );
 
   /// Opens a byte stream over a received file. The caller decides where
   /// to persist the contents. Does not delete — call [delete] (or use

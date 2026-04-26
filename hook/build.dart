@@ -75,8 +75,11 @@ void main(List<String> args) async {
       // Ensure CGO can find system headers (stdlib.h, etc.) via the SDK path.
       // Without this, builds fail on setups where Xcode CLT is installed but
       // the default include search path doesn't include the SDK sysroot.
-      final sdkRoot = Platform.environment['SDKROOT'] ??
-          (await Process.run('xcrun', ['--show-sdk-path'])).stdout.toString().trim();
+      final sdkRoot =
+          Platform.environment['SDKROOT'] ??
+          (await Process.run('xcrun', [
+            '--show-sdk-path',
+          ])).stdout.toString().trim();
       if (sdkRoot.isNotEmpty) {
         env['SDKROOT'] = sdkRoot;
         env['CGO_CFLAGS'] = '-isysroot $sdkRoot';
@@ -304,6 +307,10 @@ void _configureAndroid(
 ) {
   // Omit raw disco on Android to avoid socket permission issues.
   buildTags.add('ts_omit_listenrawdisco');
+  // Android apps cannot rely on Linux route-table probes. Port mapping is not
+  // required for the embedded userspace node and can trigger denied netlink or
+  // /proc route reads on modern Android.
+  buildTags.add('ts_omit_portmapper');
 
   final ndkHome = _findAndroidNDK();
   if (ndkHome == null) {

@@ -171,6 +171,9 @@ func TestIsNotFound_StringFallback(t *testing.T) {
 	if !isNotFound(errors.New("whois returned 404")) {
 		t.Error("expected fallback string match for '404'")
 	}
+	if !isNotFound(errors.New("peer not found")) {
+		t.Error("expected fallback string match for 'not found'")
+	}
 	if isNotFound(errors.New("unrelated error")) {
 		t.Error("non-404 error should not match")
 	}

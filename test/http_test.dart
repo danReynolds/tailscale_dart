@@ -1,6 +1,9 @@
-/// Coverage for the top-level `http` client on [Tailscale].
+/// Coverage for the `http` namespace on [Tailscale].
 ///
-/// Focuses on the lifecycle contract around the Go-backed HTTP lane.
+/// Focuses on the lifecycle contract around [Http.client] and
+/// [Http.bind] — when they throw, when the client becomes available.
+/// End-to-end exercise (HTTP actually flowing over the tailnet) lives
+/// under `test/e2e/`.
 @TestOn('mac-os || linux')
 library;
 
@@ -33,17 +36,17 @@ void main() {
   });
 
   group('before up()', () {
-    test('http getter throws TailscaleUsageException', () {
+    test('http.client throws TailscaleUsageException', () {
       expect(
-        () => Tailscale.instance.http,
+        () => Tailscale.instance.http.client,
         throwsA(isA<TailscaleUsageException>()),
       );
     });
 
-    test('listen() throws TailscaleListenException', () async {
+    test('http.bind() throws TailscaleHttpException', () async {
       await expectLater(
-        Tailscale.instance.listen(8080),
-        throwsA(isA<TailscaleListenException>()),
+        Tailscale.instance.http.bind(port: 80),
+        throwsA(isA<TailscaleHttpException>()),
       );
     });
   });
@@ -63,8 +66,8 @@ void main() {
       } catch (_) {}
     });
 
-    test('http returns an http.Client', () {
-      expect(Tailscale.instance.http, isA<http.Client>());
+    test('http.client returns an http.Client', () {
+      expect(Tailscale.instance.http.client, isA<http.Client>());
     });
   });
 }

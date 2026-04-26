@@ -13,7 +13,7 @@ library;
 /// [LocalAPI](https://pkg.go.dev/tailscale.com/client/local) surface
 /// exposes (e.g. `IsAccessDeniedError`, `IsPreconditionsFailedError`).
 enum TailscaleErrorCode {
-  /// Target does not exist (unknown peer, waiting file, profile, route…).
+  /// Target does not exist (unknown node, waiting file, profile, route...).
   notFound,
 
   /// Authenticated but the tailnet's
@@ -107,7 +107,7 @@ final class TailscaleUpException extends TailscaleOperationException {
   }) : super('up', message);
 }
 
-/// Thrown when an `http.*` call fails — notably `http.expose()` failing
+/// Thrown when an `http.*` call fails — notably `http.bind()` failing
 /// to forward tailnet traffic, or `http.client` accessed before `up()`.
 final class TailscaleHttpException extends TailscaleOperationException {
   const TailscaleHttpException(
@@ -118,18 +118,8 @@ final class TailscaleHttpException extends TailscaleOperationException {
   }) : super('http', message);
 }
 
-/// Thrown when `listen()` fails to expose a local HTTP server.
-final class TailscaleListenException extends TailscaleOperationException {
-  const TailscaleListenException(
-    String message, {
-    super.code,
-    super.statusCode,
-    super.cause,
-  }) : super('listen', message);
-}
-
 /// Thrown when a `tcp.*` call fails — tailnet dial refused, no route
-/// to peer, loopback bridge setup failure, etc.
+/// to node, fd handoff failure, etc.
 final class TailscaleTcpException extends TailscaleOperationException {
   const TailscaleTcpException(
     String message, {
@@ -139,34 +129,15 @@ final class TailscaleTcpException extends TailscaleOperationException {
   }) : super('tcp', message);
 }
 
-/// Thrown when `tcp.dial()` fails.
-final class TailscaleTcpDialException extends TailscaleOperationException {
-  const TailscaleTcpDialException(
+/// Thrown when a `udp.*` call fails — tailnet bind failure, invalid endpoint,
+/// oversize datagram, fd handoff failure, etc.
+final class TailscaleUdpException extends TailscaleOperationException {
+  const TailscaleUdpException(
     String message, {
     super.code,
     super.statusCode,
     super.cause,
-  }) : super('tcp.dial', message);
-}
-
-/// Thrown when `tcp.bind()` fails.
-final class TailscaleTcpBindException extends TailscaleOperationException {
-  const TailscaleTcpBindException(
-    String message, {
-    super.code,
-    super.statusCode,
-    super.cause,
-  }) : super('tcp.bind', message);
-}
-
-/// Thrown when `udp.bind()` fails.
-final class TailscaleUdpBindException extends TailscaleOperationException {
-  const TailscaleUdpBindException(
-    String message, {
-    super.code,
-    super.statusCode,
-    super.cause,
-  }) : super('udp.bind', message);
+  }) : super('udp', message);
 }
 
 /// Thrown when `status()` fails to decode or fetch native status.
@@ -251,20 +222,13 @@ final class TailscaleDiagException extends TailscaleOperationException {
 }
 
 /// High-level category for asynchronous runtime errors pushed from Go.
-enum TailscaleRuntimeErrorCode {
-  localClient,
-  watcher,
-  node,
-  transport,
-  unknown,
-}
+enum TailscaleRuntimeErrorCode { localClient, watcher, node, unknown }
 
 TailscaleRuntimeErrorCode _parseRuntimeErrorCode(String? value) =>
     switch (value) {
       'localClient' => TailscaleRuntimeErrorCode.localClient,
       'watcher' => TailscaleRuntimeErrorCode.watcher,
       'node' => TailscaleRuntimeErrorCode.node,
-      'transport' => TailscaleRuntimeErrorCode.transport,
       _ => TailscaleRuntimeErrorCode.unknown,
     };
 

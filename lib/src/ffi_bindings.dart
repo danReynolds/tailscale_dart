@@ -10,6 +10,9 @@ import 'dart:ffi' as ffi;
 import 'package:ffi/ffi.dart';
 
 /// Starts the Tailscale node.
+/// Returns JSON:
+///   {"ok": true} on success
+///   {"error": "..."} on failure.
 @ffi.Native<
   ffi.Pointer<Utf8> Function(
     ffi.Pointer<Utf8>,
@@ -25,15 +28,114 @@ external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> stateDir,
 );
 
-/// Starts the reverse proxy (tailnet:tailnetPort → localhost:localPort).
-/// If localPort is 0, allocates an ephemeral port.
-/// Returns JSON: {"listenPort": N} on success, {"error": "..."} on failure.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Int32)>(
-  symbol: 'DuneListen',
-)
-external ffi.Pointer<Utf8> duneListen(int localPort, int tailnetPort);
+/// Starts one outgoing tailnet HTTP request.
+///
+/// Returns JSON:
+///   {"requestBodyFd": N|-1, "responseBodyFd": N} on success
+///   {"error": "..."} on failure.
+@ffi.Native<
+  ffi.Pointer<Utf8> Function(
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Int64,
+    ffi.Int32,
+    ffi.Int32,
+  )
+>(symbol: 'DuneHttpStart')
+external ffi.Pointer<Utf8> duneHttpStart(
+  ffi.Pointer<Utf8> method,
+  ffi.Pointer<Utf8> url,
+  ffi.Pointer<Utf8> headersJson,
+  int contentLength,
+  int followRedirects,
+  int maxRedirects,
+);
 
-/// Resolves a tailnet IP to its peer identity via LocalAPI.
+/// Provides a host network-interface snapshot to the native runtime.
+///
+/// This is currently used on Android before startup because Go's standard
+/// netlink-based interface discovery can be denied by the app sandbox.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
+  symbol: 'DuneSetNetworkInterfaces',
+)
+external ffi.Pointer<Utf8> duneSetNetworkInterfaces(ffi.Pointer<Utf8> snapshot);
+
+/// Starts an fd-backed inbound HTTP binding.
+/// Returns JSON:
+///   {"bindingId": N, "tailnetAddress": "...", "tailnetPort": N} on success
+///   {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32)>(symbol: 'DuneHttpBind')
+external ffi.Pointer<Utf8> duneHttpBind(int tailnetPort);
+
+/// Blocks until an inbound HTTP binding accepts one request or closes.
+///
+/// Returns JSON:
+///   {"requestBodyFd": N, "responseBodyFd": N, ...metadata} on success
+///   {"closed": true} when the binding is closed
+///   {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int64)>(symbol: 'DuneHttpAccept')
+external ffi.Pointer<Utf8> duneHttpAccept(int bindingId);
+
+/// Closes an HTTP binding.
+@ffi.Native<ffi.Void Function(ffi.Int64)>(symbol: 'DuneHttpCloseBinding')
+external void duneHttpCloseBinding(int bindingId);
+
+/// Opens an outbound TCP connection and returns a POSIX fd for the Dart side.
+///
+/// Returns JSON:
+///   {"fd": N, "localAddress": "...", "localPort": N,
+///    "remoteAddress": "...", "remotePort": N} on success.
+///   {"error": "..."} on failure.
+///
+/// POSIX-only backend primitive. Unsupported platforms fail explicitly.
+@ffi.Native<
+  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int64)
+>(symbol: 'DuneTcpDialFd')
+external ffi.Pointer<Utf8> duneTcpDialFd(
+  ffi.Pointer<Utf8> host,
+  int port,
+  int timeoutMillis,
+);
+
+/// Starts a POSIX fd-backed TCP listener.
+///
+/// Returns JSON:
+///   {"listenerId": N, "localAddress": "...", "localPort": N} on success.
+///   {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Pointer<Utf8>)>(
+  symbol: 'DuneTcpListenFd',
+)
+external ffi.Pointer<Utf8> duneTcpListenFd(
+  int tailnetPort,
+  ffi.Pointer<Utf8> tailnetHost,
+);
+
+/// Blocks until a fd-backed listener accepts one connection or closes.
+///
+/// Returns JSON:
+///   {"fd": N, "localAddress": "...", "localPort": N,
+///    "remoteAddress": "...", "remotePort": N} on accepted connection.
+///   {"closed": true} when the listener is closed.
+///   {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int64)>(symbol: 'DuneTcpAcceptFd')
+external ffi.Pointer<Utf8> duneTcpAcceptFd(int listenerId);
+
+/// Closes a POSIX fd-backed TCP listener.
+@ffi.Native<ffi.Void Function(ffi.Int64)>(symbol: 'DuneTcpCloseFdListener')
+external void duneTcpCloseFdListener(int listenerId);
+
+/// Starts a POSIX fd-backed UDP datagram binding.
+///
+/// Returns JSON:
+///   {"fd": N, "localAddress": "...", "localPort": N} on success.
+///   {"error": "..."} on failure.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32)>(
+  symbol: 'DuneUdpBindFd',
+)
+external ffi.Pointer<Utf8> duneUdpBindFd(ffi.Pointer<Utf8> host, int port);
+
+/// Resolves a tailnet IP to its node identity via LocalAPI.
 ///
 /// Returns JSON:
 ///   {"found": true, "nodeId": "...", "hostName": "...",
@@ -52,7 +154,7 @@ external ffi.Pointer<Utf8> duneWhoIs(ffi.Pointer<Utf8> ip);
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneTlsDomains')
 external ffi.Pointer<Utf8> duneTlsDomains();
 
-/// Tailscale-level ping to a tailnet peer.
+/// Tailscale-level ping to a tailnet node.
 ///
 /// `timeoutMillis <= 0` means no timeout. `pingType` is one of
 /// "disco" (default), "tsmp", "icmp".
@@ -63,13 +165,8 @@ external ffi.Pointer<Utf8> duneTlsDomains();
 ///     on success.
 ///   {"error": "..."} on failure.
 @ffi.Native<
-    ffi.Pointer<Utf8> Function(
-      ffi.Pointer<Utf8>,
-      ffi.Int32,
-      ffi.Pointer<Utf8>,
-    )>(
-  symbol: 'DuneDiagPing',
-)
+  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Pointer<Utf8>)
+>(symbol: 'DuneDiagPing')
 external ffi.Pointer<Utf8> duneDiagPing(
   ffi.Pointer<Utf8> ip,
   int timeoutMillis,
@@ -111,92 +208,9 @@ external void duneStop();
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneStatus')
 external ffi.Pointer<Utf8> duneStatus();
 
-/// Returns the current peer list as JSON.
+/// Returns the current node list as JSON.
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DunePeers')
 external ffi.Pointer<Utf8> dunePeers();
-
-/// Resets the isolated substrate spike runtime.
-@ffi.Native<ffi.Void Function()>(symbol: 'DuneSpikeReset')
-external void duneSpikeReset();
-
-/// Bootstraps the isolated substrate spike runtime.
-/// Returns JSON containing the bootstrap secret and carrier preference.
-@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneSpikeBootstrap')
-external ffi.Pointer<Utf8> duneSpikeBootstrap();
-
-/// Attaches the substrate spike runtime to a caller-provided carrier endpoint.
-/// Accepts JSON and returns JSON.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneSpikeAttach',
-)
-external ffi.Pointer<Utf8> duneSpikeAttach(ffi.Pointer<Utf8> requestJson);
-
-/// Executes a spike control-plane command encoded as JSON and returns JSON.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneSpikeCommand',
-)
-external ffi.Pointer<Utf8> duneSpikeCommand(ffi.Pointer<Utf8> requestJson);
-
-/// Returns a JSON snapshot of the substrate spike runtime state.
-@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneSpikeSnapshot')
-external ffi.Pointer<Utf8> duneSpikeSnapshot();
-
-/// Attaches the canonical internal transport session to a caller-provided
-/// carrier endpoint. Accepts JSON and returns JSON.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneAttachTransport',
-)
-external ffi.Pointer<Utf8> duneAttachTransport(ffi.Pointer<Utf8> requestJson);
-
-/// Starts a raw TCP listener on the tailnet.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32)>(symbol: 'DuneTCPBind')
-external ffi.Pointer<Utf8> duneTcpBind(int port);
-
-/// Stops a raw TCP listener on the tailnet.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32)>(symbol: 'DuneTCPUnbind')
-external ffi.Pointer<Utf8> duneTcpUnbind(int port);
-
-/// Opens a raw TCP connection to a tailnet peer and returns a stream id.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32)>(
-  symbol: 'DuneTCPDial',
-)
-external ffi.Pointer<Utf8> duneTcpDial(ffi.Pointer<Utf8> host, int port);
-
-/// Starts a raw UDP listener on the tailnet and returns a binding id.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32)>(symbol: 'DuneUDPBind')
-external ffi.Pointer<Utf8> duneUdpBind(int port);
-
-/// Starts a streamed Go-backed HTTP request and returns JSON.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneHTTPStartRequest',
-)
-external ffi.Pointer<Utf8> duneHttpStartRequest(
-  ffi.Pointer<Utf8> requestJson,
-);
-
-/// Sends one buffered body chunk for an in-flight Go-backed HTTP request.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneHTTPWriteBodyChunk',
-)
-external ffi.Pointer<Utf8> duneHttpWriteBodyChunk(
-  ffi.Pointer<Utf8> requestJson,
-);
-
-/// Closes the request body stream for an in-flight Go-backed HTTP request.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneHTTPCloseRequestBody',
-)
-external ffi.Pointer<Utf8> duneHttpCloseRequestBody(
-  ffi.Pointer<Utf8> requestJson,
-);
-
-/// Cancels an in-flight Go-backed HTTP request.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneHTTPCancelRequest',
-)
-external ffi.Pointer<Utf8> duneHttpCancelRequest(
-  ffi.Pointer<Utf8> requestJson,
-);
 
 /// Frees a pointer allocated by the Go layer.
 @ffi.Native<ffi.Void Function(ffi.Pointer<Utf8>)>(symbol: 'DuneFree')

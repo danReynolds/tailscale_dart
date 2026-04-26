@@ -1,12 +1,12 @@
-/// Coverage for the raw `tcp` namespace on [Tailscale].
+/// Coverage for the public `tcp` namespace.
 @TestOn('mac-os || linux')
 library;
 
 import 'dart:io';
 
 import 'package:test/test.dart';
-import 'package:tailscale/tailscale.dart';
 import 'package:tailscale/src/ffi_bindings.dart' as native;
+import 'package:tailscale/tailscale.dart';
 
 void main() {
   late Directory configuredStateBaseDir;
@@ -30,19 +30,19 @@ void main() {
   });
 
   group('tcp.dial before up()', () {
-    test('throws TailscaleUsageException', () async {
+    test('throws TailscaleTcpException', () async {
       await expectLater(
         Tailscale.instance.tcp.dial('100.64.0.5', 22),
-        throwsA(isA<TailscaleUsageException>()),
+        throwsA(isA<TailscaleTcpException>()),
       );
     });
   });
 
   group('tcp.bind before up()', () {
-    test('throws TailscaleUsageException', () async {
+    test('throws TailscaleTcpException', () async {
       await expectLater(
-        Tailscale.instance.tcp.bind(12345),
-        throwsA(isA<TailscaleUsageException>()),
+        Tailscale.instance.tcp.bind(port: 12345),
+        throwsA(isA<TailscaleTcpException>()),
       );
     });
   });

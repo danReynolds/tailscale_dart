@@ -1,9 +1,12 @@
 /// Peer node for multi-node E2E tests.
 ///
 /// Spawned as a subprocess by [test/e2e/e2e_test.dart]. Brings up an embedded
-/// Tailscale node, exposes a trivial local HTTP server on the tailnet via
-/// [Tailscale.listen], prints `READY <ipv4>` on stdout once the node is
-/// Running, then shuts down cleanly when stdin closes.
+/// Tailscale node, exposes:
+///   - a trivial tailnet HTTP server on port 80 (via `http.bind`), and
+///   - a raw TCP byte-echo server on tailnet port 7000 (via `tcp.bind`),
+///   - a UDP datagram echo binding on tailnet port 7001 (via `udp.bind`),
+/// prints `READY <ipv4>` on stdout once the node is Running, then shuts down
+/// cleanly when stdin closes.
 ///
 /// Configured via environment variables:
 ///   STATE_DIR       — directory the peer owns for its Tailscale state
@@ -11,7 +14,7 @@
 ///   AUTH_KEY        — reusable preauth key (optional; omit to reconnect with
 ///                     previously persisted credentials in STATE_DIR)
 ///   HOSTNAME        — tailnet-visible hostname (default: dune-e2e-peer)
-///   RESPONSE_BODY   — body returned by the local HTTP server for GET
+///   RESPONSE_BODY   — body returned by the tailnet HTTP server for GET
 ///                     (default: 'hello from peer'). POST requests echo the
 ///                     request body as `echo: <body>`.
 library;
@@ -19,12 +22,8 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:tailscale/tailscale.dart';
-
-const _tcpEchoPort = 7001;
-const _udpEchoPort = 7002;
 
 Future<void> main(List<String> args) async {
   // Warmup mode: triggered by the test's setUpAll to populate the package's
@@ -41,40 +40,6 @@ Future<void> main(List<String> args) async {
   final responseBody =
       Platform.environment['RESPONSE_BODY'] ?? 'hello from peer';
 
-  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-  server.listen((req) async {
-    switch (req.uri.path) {
-      case '/echo':
-        req.response
-          ..statusCode = 200
-          ..headers.contentType = ContentType.text;
-        final body = await utf8.decoder.bind(req).join();
-        req.response.write('echo: $body');
-        break;
-      case '/redirect':
-        req.response
-          ..statusCode = 302
-          ..headers.set('location', '/hello');
-        break;
-      case '/slow-stream':
-        req.response
-          ..statusCode = 200
-          ..headers.contentType = ContentType.text;
-        req.response.write('chunk-1\n');
-        await req.response.flush();
-        await Future<void>.delayed(const Duration(seconds: 2));
-        req.response.write('chunk-2\n');
-        break;
-      default:
-        req.response
-          ..statusCode = 200
-          ..headers.contentType = ContentType.text;
-        req.response.write(responseBody);
-        break;
-    }
-    await req.response.close();
-  });
-
   Tailscale.init(stateDir: stateDir);
   final tsnet = Tailscale.instance;
 
@@ -86,12 +51,21 @@ Future<void> main(List<String> args) async {
     controlUrl: Uri.parse(controlUrl),
   );
   await running.timeout(const Duration(seconds: 60));
-  await tsnet.listen(server.port, tailnetPort: 80);
-  final tcpListener = await tsnet.tcp.bind(_tcpEchoPort);
-  final udpBinding = await tsnet.udp.bind(_udpEchoPort);
-
-  unawaited(_serveTcpEcho(tcpListener));
-  unawaited(_serveUdpEcho(udpBinding));
+  final httpServer = await tsnet.http.bind(port: 80);
+  httpServer.requests.listen((req) async {
+    if (req.method == 'POST') {
+      final body = await utf8.decoder.bind(req.body).join();
+      await req.respond(
+        headers: {'content-type': 'text/plain'},
+        body: 'echo: $body',
+      );
+    } else {
+      await req.respond(
+        headers: {'content-type': 'text/plain'},
+        body: responseBody,
+      );
+    }
+  });
 
   final status = await tsnet.status();
   final ipv4 = status.ipv4;
@@ -100,6 +74,22 @@ Future<void> main(List<String> args) async {
     exitCode = 2;
     return;
   }
+
+  // Raw TCP byte-echo server on tailnet:7000.
+  final echoServer = await tsnet.tcp.bind(port: 7000);
+  echoServer.connections.listen((conn) {
+    unawaited(
+      conn.output
+          .writeAll(conn.input, close: true)
+          .catchError((_) => conn.abort()),
+    );
+  });
+
+  // UDP datagram echo binding on tailnet:7001.
+  final udpEcho = await tsnet.udp.bind(address: ipv4, port: 7001);
+  udpEcho.datagrams.listen((datagram) {
+    unawaited(udpEcho.send(datagram.payload, to: datagram.remote));
+  });
 
   // Leading newline: the Dart build hook writes `Running build hooks...`
   // without a trailing newline, so force a line break before our sentinel.
@@ -110,45 +100,17 @@ Future<void> main(List<String> args) async {
   await stdin.drain<void>();
 
   try {
+    await udpEcho.close();
+  } catch (_) {}
+  try {
+    await echoServer.close();
+  } catch (_) {}
+  try {
+    await httpServer.close();
+  } catch (_) {}
+  try {
     await tsnet.down();
   } catch (_) {}
-  try {
-    await tcpListener.close();
-  } catch (_) {}
-  try {
-    await udpBinding.close();
-  } catch (_) {}
-  await server.close(force: true);
-}
-
-Future<void> _serveTcpEcho(TailscaleListener listener) async {
-  await for (final connection in listener.connections) {
-    unawaited(_handleTcpEchoConnection(connection));
-  }
-}
-
-Future<void> _handleTcpEchoConnection(TailscaleConnection connection) async {
-  try {
-    final requestBody = await utf8.decoder.bind(connection.input).join();
-    await connection.output.write(
-      Uint8List.fromList(utf8.encode('tcp-echo: $requestBody')),
-    );
-    await connection.output.close();
-    await connection.done;
-  } catch (_) {
-    connection.abort();
-  }
-}
-
-Future<void> _serveUdpEcho(TailscaleDatagramPort port) async {
-  await for (final datagram in port.datagrams) {
-    await port.send(
-      Uint8List.fromList(
-        utf8.encode('udp-echo: ${utf8.decode(datagram.bytes)}'),
-      ),
-      remote: datagram.remote,
-    );
-  }
 }
 
 String _requiredEnv(String name) {

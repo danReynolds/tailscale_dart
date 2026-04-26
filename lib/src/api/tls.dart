@@ -5,7 +5,7 @@ import 'package:meta/meta.dart';
 typedef TlsDomainsFn = Future<List<String>> Function();
 
 /// TLS-terminated listener for this node, with a cert auto-provisioned
-/// from Let's Encrypt by the control plane. Peers on the tailnet reach
+/// from Let's Encrypt by the control plane. Nodes on the tailnet reach
 /// the endpoint at `https://<node>.<tailnet>.ts.net` with no manual
 /// cert wrangling.
 ///

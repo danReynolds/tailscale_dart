@@ -31,7 +31,8 @@ class LoginProfile {
   int get hashCode => Object.hash(id, userLoginName, tailnetName);
 
   @override
-  String toString() => 'LoginProfile(id: $id, userLoginName: $userLoginName, '
+  String toString() =>
+      'LoginProfile(id: $id, userLoginName: $userLoginName, '
       'tailnetName: $tailnetName)';
 }
 

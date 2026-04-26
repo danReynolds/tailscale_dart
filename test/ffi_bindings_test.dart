@@ -119,32 +119,77 @@ void main() {
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
       expect(
-        parsed.containsKey('transportBootstrap') || parsed.containsKey('error'),
+        parsed['ok'] == true || parsed.containsKey('error'),
         isTrue,
-        reason:
-            'Expected {"transportBootstrap": {...}} or {"error": "..."}, got: $resultJson',
+        reason: 'Expected {"ok": true} or {"error": "..."}, got: $resultJson',
       );
-      if (parsed.containsKey('transportBootstrap')) {
-        final bootstrap =
-            parsed['transportBootstrap'] as Map<String, dynamic>;
-        expect(bootstrap['masterSecretB64'], isA<String>());
-        expect((bootstrap['masterSecretB64'] as String), isNotEmpty);
-        expect(bootstrap['sessionGenerationIdB64'], isA<String>());
-        expect((bootstrap['sessionGenerationIdB64'] as String), isNotEmpty);
-        expect(bootstrap['preferredCarrierKind'], isA<String>());
-        expect((bootstrap['preferredCarrierKind'] as String), isNotEmpty);
-      }
     });
   });
 
-  group('duneListen validation', () {
+  group('duneHttpBind validation', () {
     test('rejects invalid tailnet port before server startup', () {
-      final resultPtr = native.duneListen(0, 0);
+      final resultPtr = native.duneHttpBind(-1);
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
       expect(parsed['error'], contains('invalid tailnet port'));
+    });
+  });
+
+  group('duneHttpStart validation', () {
+    test('returns JSON error before server startup', () {
+      final method = 'GET'.toNativeUtf8();
+      final url = 'http://100.64.0.1/'.toNativeUtf8();
+      final headers = '{}'.toNativeUtf8();
+      final resultPtr = native.duneHttpStart(method, url, headers, 0, 1, 5);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(method);
+      calloc.free(url);
+      calloc.free(headers);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('HttpStart called before Start'));
+    });
+  });
+
+  group('duneTcpDialFd validation', () {
+    test('returns JSON error before server startup', () {
+      final host = 'peer'.toNativeUtf8();
+      final resultPtr = native.duneTcpDialFd(host, 80, 0);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(host);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('TcpDialFd called before Start'));
+    });
+  });
+
+  group('duneTcpListenFd validation', () {
+    test('returns JSON error before server startup', () {
+      final host = ''.toNativeUtf8();
+      final resultPtr = native.duneTcpListenFd(12345, host);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(host);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('TcpListenFd called before Start'));
+    });
+  });
+
+  group('duneUdpBindFd validation', () {
+    test('returns JSON error before server startup', () {
+      final host = '100.64.0.5'.toNativeUtf8();
+      final resultPtr = native.duneUdpBindFd(host, 12345);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(host);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('UdpBindFd called before Start'));
     });
   });
 }

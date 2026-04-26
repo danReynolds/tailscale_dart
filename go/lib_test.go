@@ -1,12 +1,10 @@
 package tailscale
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,145 +108,39 @@ func TestJsonError_SpecialCharacters(t *testing.T) {
 	}
 }
 
-func TestListen_RejectsInvalidTailnetPort(t *testing.T) {
-	if _, err := Listen(0, 0); err == nil {
-		t.Fatal("Listen with invalid tailnet port succeeded, want error")
+func TestHttpBind_RejectsInvalidTailnetPort(t *testing.T) {
+	if _, err := HttpBind(-1); err == nil {
+		t.Fatal("HttpBind with invalid tailnet port succeeded, want error")
 	}
 }
 
-// --- handleReverseProxy tests ---
-
-func TestReverseProxy_ForwardsToLocal(t *testing.T) {
-	// Start a local test server that the reverse proxy will forward to
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		peerIP := r.Header.Get("X-Dune-Peer-Ip")
-		w.Header().Set("X-Test-Peer", peerIP)
-		w.Header().Set("X-Test-Path", r.URL.Path)
-		w.WriteHeader(200)
-		fmt.Fprint(w, "hello from backend")
-	}))
-	defer backend.Close()
-
-	// Extract the port from the backend address
-	_, portStr, _ := net.SplitHostPort(backend.Listener.Addr().String())
-
-	// Set up targetPort to point to our backend
-	targetPortMu.Lock()
-	// We need to parse the port
-	var backendPort int
-	fmt.Sscanf(portStr, "%d", &backendPort)
-	targetPort = backendPort
-	targetPortMu.Unlock()
-
-	// Create a request that simulates incoming Tailscale traffic
-	req := httptest.NewRequest("GET", "/api/hello?foo=bar", strings.NewReader(""))
-	req.RemoteAddr = "100.64.0.1:12345"
-	rec := httptest.NewRecorder()
-
-	handleReverseProxy(rec, req)
-
-	if rec.Code != 200 {
-		t.Errorf("reverse proxy: got status %d, want 200", rec.Code)
+func TestHTTPResponseHeadRoundTrips(t *testing.T) {
+	var buf bytes.Buffer
+	original := httpResponseHead{
+		StatusCode: 201,
+		Headers: map[string][]string{
+			"Content-Type": {"text/plain"},
+			"X-Test":       {"a", "b"},
+		},
+		ContentLength: 5,
 	}
 
-	body := rec.Body.String()
-	if body != "hello from backend" {
-		t.Errorf("reverse proxy body = %q, want %q", body, "hello from backend")
+	if err := writeHTTPResponseHead(&buf, original); err != nil {
+		t.Fatalf("writeHTTPResponseHead: %v", err)
 	}
 
-	// Check that X-Dune-Peer-Ip header was forwarded
-	if peer := rec.Header().Get("X-Test-Peer"); peer != "100.64.0.1" {
-		t.Errorf("X-Dune-Peer-Ip = %q, want %q", peer, "100.64.0.1")
+	got, err := readHTTPResponseHead(&buf)
+	if err != nil {
+		t.Fatalf("readHTTPResponseHead: %v", err)
 	}
-
-	// Check path was forwarded correctly
-	if path := rec.Header().Get("X-Test-Path"); path != "/api/hello" {
-		t.Errorf("forwarded path = %q, want %q", path, "/api/hello")
+	if got.StatusCode != original.StatusCode {
+		t.Fatalf("StatusCode = %d, want %d", got.StatusCode, original.StatusCode)
 	}
-}
-
-func TestReverseProxy_PostWithBody(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		w.WriteHeader(200)
-		fmt.Fprintf(w, "echo:%s", body)
-	}))
-	defer backend.Close()
-
-	_, portStr, _ := net.SplitHostPort(backend.Listener.Addr().String())
-	var backendPort int
-	fmt.Sscanf(portStr, "%d", &backendPort)
-
-	targetPortMu.Lock()
-	targetPort = backendPort
-	targetPortMu.Unlock()
-
-	req := httptest.NewRequest("POST", "/submit", strings.NewReader(`{"key":"value"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = "100.64.0.2:9999"
-	rec := httptest.NewRecorder()
-
-	handleReverseProxy(rec, req)
-
-	if rec.Code != 200 {
-		t.Errorf("POST proxy: got status %d, want 200", rec.Code)
+	if got.ContentLength != original.ContentLength {
+		t.Fatalf("ContentLength = %d, want %d", got.ContentLength, original.ContentLength)
 	}
-
-	body := rec.Body.String()
-	if body != `echo:{"key":"value"}` {
-		t.Errorf("POST proxy body = %q", body)
-	}
-}
-
-func TestReverseProxy_BackendDown(t *testing.T) {
-	// Point to a port that's definitely not listening
-	targetPortMu.Lock()
-	targetPort = 1 // Port 1 is unlikely to have a server
-	targetPortMu.Unlock()
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "100.64.0.1:1234"
-	rec := httptest.NewRecorder()
-
-	handleReverseProxy(rec, req)
-
-	// Should get a 502 after retries
-	if rec.Code != 502 {
-		t.Errorf("backend down: got status %d, want 502", rec.Code)
-	}
-}
-
-func TestReverseProxy_HeaderForwarding(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Echo back custom headers
-		w.Header().Set("X-Custom-Response", "from-backend")
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(201)
-		fmt.Fprint(w, "ok")
-	}))
-	defer backend.Close()
-
-	_, portStr, _ := net.SplitHostPort(backend.Listener.Addr().String())
-	var backendPort int
-	fmt.Sscanf(portStr, "%d", &backendPort)
-
-	targetPortMu.Lock()
-	targetPort = backendPort
-	targetPortMu.Unlock()
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("X-Custom-Request", "from-client")
-	req.RemoteAddr = "100.64.0.1:5555"
-	rec := httptest.NewRecorder()
-
-	handleReverseProxy(rec, req)
-
-	if rec.Code != 201 {
-		t.Errorf("header forwarding: got status %d, want 201", rec.Code)
-	}
-
-	if v := rec.Header().Get("X-Custom-Response"); v != "from-backend" {
-		t.Errorf("response header X-Custom-Response = %q, want %q", v, "from-backend")
+	if fmt.Sprint(got.Headers) != fmt.Sprint(original.Headers) {
+		t.Fatalf("Headers = %#v, want %#v", got.Headers, original.Headers)
 	}
 }
 
@@ -271,39 +163,44 @@ func TestStart_NoOpWithoutAuthKey(t *testing.T) {
 		mu.Unlock()
 	}()
 
-	// Calling Start without an auth key should be a no-op.
-	err := Start("host", "", "https://control", t.TempDir())
-	if err != nil {
+	if err := Start("host", "", "https://control", t.TempDir()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 }
 
 func TestStart_StopLockedClosesListeners(t *testing.T) {
-	// We can't call srv.Close() on an uninitialised tsnet.Server (it panics),
-	// so we test stopLocked with srv=nil to verify listener cleanup, and
-	// separately verify the full state reset path.
-
-	oldRevLn, err := net.Listen("tcp", "127.0.0.1:0")
+	oldLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	mu.Lock()
 	srv = nil
-	reverseProxyLn = oldRevLn
 	mu.Unlock()
+	httpBindingMu.Lock()
+	httpBindingRegistry[99] = &httpBindingState{
+		binding:  HttpBinding{ID: 99, TailnetPort: 80},
+		ln:       oldLn,
+		requests: make(chan *HttpIncomingRequest, 1),
+		done:     make(chan struct{}),
+	}
+	httpBindingMu.Unlock()
 
 	mu.Lock()
 	stopLocked()
-	revLn := reverseProxyLn
 	mu.Unlock()
 
-	if revLn != nil {
-		t.Error("reverseProxyLn should be nil after stopLocked")
+	httpBindingMu.Lock()
+	_, stillRegistered := httpBindingRegistry[99]
+	httpBindingMu.Unlock()
+	if stillRegistered {
+		t.Error("HTTP binding should be removed after stopLocked")
 	}
 
-	if _, err := oldRevLn.Accept(); err == nil {
-		t.Error("old reverse proxy listener should be closed")
+	// Old listeners should be closed — Accept returns immediately with an
+	// error on a closed listener, so no deadline is needed.
+	if _, err := oldLn.Accept(); err == nil {
+		t.Error("old HTTP binding listener should be closed")
 	}
 }
 

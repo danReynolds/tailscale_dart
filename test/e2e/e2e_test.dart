@@ -125,13 +125,13 @@ void main() {
     expect(s.ipv4, startsWith('100.'));
   });
 
-  test('peers returns a list', () async {
-    final peers = await tsnet.peers();
-    expect(peers, isA<List<PeerStatus>>());
+  test('nodes returns a list', () async {
+    final nodes = await tsnet.nodes();
+    expect(nodes, isA<List<TailscaleNode>>());
   });
 
   test('http client is available', () async {
-    expect(tsnet.http, isA<http.Client>());
+    expect(tsnet.http.client, isA<http.Client>());
   });
 
   // Two-node groups spawn `dart run test/e2e/peer_main.dart` as a subprocess.
@@ -158,11 +158,6 @@ void main() {
         hostname: 'dune-e2e-peer',
         responseBody: peerResponseBody,
       );
-      await _waitForPeerHttpReady(
-        tsnet,
-        Uri.parse('http://${peer.ipv4}/hello'),
-        expectedBody: peerResponseBody,
-      );
     });
 
     tearDownAll(() async {
@@ -172,12 +167,12 @@ void main() {
       } catch (_) {}
     });
 
-    test('peer appears in peers()', () async {
-      PeerStatus? match;
+    test('node appears in nodes()', () async {
+      TailscaleNode? match;
       for (var i = 0; i < 30; i++) {
-        final peers = await tsnet.peers();
+        final nodes = await tsnet.nodes();
         try {
-          match = peers.firstWhere((p) => p.ipv4 == peer.ipv4);
+          match = nodes.firstWhere((p) => p.ipv4 == peer.ipv4);
           break;
         } on StateError {
           await Future<void>.delayed(const Duration(seconds: 1));
@@ -186,13 +181,24 @@ void main() {
       expect(
         match,
         isNotNull,
-        reason: 'peer ${peer.ipv4} never appeared in peers()',
+        reason: 'node ${peer.ipv4} never appeared in nodes()',
       );
       expect(match!.online, isTrue);
     });
 
+    test('nodeByIp resolves the node snapshot by Tailscale IP', () async {
+      TailscaleNode? match;
+      for (var i = 0; i < 30; i++) {
+        match = await tsnet.nodeByIp(peer.ipv4);
+        if (match != null) break;
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+      expect(match, isNotNull);
+      expect(match!.ipv4, peer.ipv4);
+    });
+
     test('http.get reaches peer via tailnet', () async {
-      final resp = await tsnet.http
+      final resp = await tsnet.http.client
           .get(Uri.parse('http://${peer.ipv4}/hello'))
           .timeout(const Duration(seconds: 30));
       expect(resp.statusCode, 200);
@@ -200,7 +206,7 @@ void main() {
     });
 
     test('http.post sends body through the tailnet', () async {
-      final resp = await tsnet.http
+      final resp = await tsnet.http.client
           .post(
             Uri.parse('http://${peer.ipv4}/echo'),
             headers: {'content-type': 'text/plain'},
@@ -211,100 +217,175 @@ void main() {
       expect(resp.body, 'echo: ping-from-node-a');
     });
 
-    test('http.send streams request bodies through the tailnet', () async {
-      final request = http.StreamedRequest(
-        'POST',
-        Uri.parse('http://${peer.ipv4}/echo'),
-      )..headers['content-type'] = 'text/plain';
-      request.sink
-        ..add(utf8.encode('ping-'))
-        ..add(utf8.encode('from-stream'));
-      unawaited(request.sink.close());
+    test(
+      'tcp.dial reaches the peer echo server and round-trips bytes',
+      () async {
+        final conn = await tsnet.tcp
+            .dial(peer.ipv4, 7000, timeout: const Duration(seconds: 30))
+            .timeout(const Duration(seconds: 30));
 
-      final response = await tsnet.http
-          .send(request)
-          .timeout(const Duration(seconds: 30));
-      expect(response.statusCode, 200);
-      expect(
-        await response.stream.bytesToString().timeout(
-          const Duration(seconds: 30),
-        ),
-        'echo: ping-from-stream',
-      );
-    });
-
-    test('http client follows redirects through the tailnet', () async {
-      final response = await tsnet.http
-          .get(Uri.parse('http://${peer.ipv4}/redirect'))
-          .timeout(const Duration(seconds: 30));
-      expect(response.statusCode, 200);
-      expect(response.body, peerResponseBody);
-    });
-
-    test('http client abortTrigger cancels streaming responses', () async {
-      final abort = Completer<void>();
-      final request = http.AbortableRequest(
-        'GET',
-        Uri.parse('http://${peer.ipv4}/slow-stream'),
-        abortTrigger: abort.future,
-      );
-
-      final response = await tsnet.http
-          .send(request)
-          .timeout(const Duration(seconds: 30));
-      final iterator = StreamIterator<List<int>>(response.stream);
-      expect(
-        await iterator.moveNext().timeout(const Duration(seconds: 30)),
-        isTrue,
-      );
-      expect(utf8.decode(iterator.current), contains('chunk-1'));
-
-      abort.complete();
-      await expectLater(
-        iterator.moveNext().timeout(const Duration(seconds: 30)),
-        throwsA(isA<http.RequestAbortedException>()),
-      );
-    });
-
-    test('tcp.dial reaches peer via tailnet', () async {
-      final connection = await tsnet.tcp.dial(peer.ipv4, 7001);
-      addTearDown(() async {
         try {
-          await connection.close();
-        } catch (_) {}
-      });
+          final payload = utf8.encode(
+            'tcp-echo-${DateTime.now().microsecondsSinceEpoch}',
+          );
+          await conn.output.write(payload);
+          await conn.output.close();
 
-      await connection.output.write(
-        Uint8List.fromList(utf8.encode('ping-from-node-a')),
-      );
-      await connection.output.close();
+          final received = BytesBuilder();
+          await for (final chunk in conn.input.timeout(
+            const Duration(seconds: 15),
+            onTimeout: (sink) => sink.close(),
+          )) {
+            received.add(chunk);
+            if (received.length >= payload.length) break;
+          }
+          expect(received.takeBytes(), payload);
+        } finally {
+          await conn.close();
+        }
+      },
+    );
 
-      final responseBody = await utf8.decoder
-          .bind(connection.input)
-          .join()
+    test('tcp.dial round-trips a 1 MiB payload end-to-end', () async {
+      final conn = await tsnet.tcp
+          .dial(peer.ipv4, 7000, timeout: const Duration(seconds: 30))
           .timeout(const Duration(seconds: 30));
-      expect(responseBody, 'tcp-echo: ping-from-node-a');
+
+      try {
+        const payloadSize = 1 << 20; // 1 MiB
+        final payload = Uint8List(payloadSize);
+        for (var i = 0; i < payloadSize; i++) {
+          payload[i] = (i * 37 + 11) & 0xff; // pseudo-random, reproducible
+        }
+
+        // Fire the write off without awaiting; the echo will start
+        // flowing back immediately and we need to drain it concurrently
+        // or the peer's send buffer fills and deadlocks.
+        final writeDone = () async {
+          await conn.output.write(payload);
+          await conn.output.close(); // half-close signal — peer stops reading
+        }();
+
+        final received = BytesBuilder();
+        await for (final chunk in conn.input.timeout(
+          const Duration(seconds: 60),
+          onTimeout: (sink) => sink.close(),
+        )) {
+          received.add(chunk);
+          if (received.length >= payloadSize) break;
+        }
+        await writeDone;
+
+        expect(received.length, payloadSize);
+        final got = received.takeBytes();
+        // Spot-check rather than full-equality so a mismatch message
+        // doesn't dump a megabyte of hex.
+        for (final i in [0, 1, payloadSize ~/ 2, payloadSize - 1]) {
+          expect(got[i], payload[i], reason: 'byte at offset $i');
+        }
+      } finally {
+        await conn.close();
+      }
     });
 
-    test('udp.bind exchanges datagrams with a peer binding', () async {
-      final localBinding = await tsnet.udp.bind(7003);
-      addTearDown(() async {
-        try {
-          await localBinding.close();
-        } catch (_) {}
-      });
+    test('udp.bind sends and receives datagrams end-to-end', () async {
+      final binding = await tsnet.udp
+          .bind(port: 0)
+          .timeout(const Duration(seconds: 30));
+      final iterator = StreamIterator(binding.datagrams);
+      addTearDown(iterator.cancel);
+      addTearDown(binding.close);
 
-      await localBinding.send(
-        Uint8List.fromList(utf8.encode('ping-from-node-a')),
-        remote: TailscaleEndpoint(ip: InternetAddress(peer.ipv4), port: 7002),
+      final payload = utf8.encode(
+        'udp-echo-${DateTime.now().microsecondsSinceEpoch}',
+      );
+      final firstDatagram = iterator.moveNext().timeout(
+        const Duration(seconds: 15),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await binding.send(
+        payload,
+        to: TailscaleEndpoint(address: peer.ipv4, port: 7001),
       );
 
-      final reply = await localBinding.datagrams.first.timeout(
-        const Duration(seconds: 30),
+      expect(await firstDatagram, isTrue);
+      expect(iterator.current.remote.address, peer.ipv4);
+      expect(iterator.current.remote.port, 7001);
+      expect(iterator.current.payload, payload);
+    });
+
+    test('whois(peer.ipv4) returns the peer identity', () async {
+      final identity = await tsnet.whois(peer.ipv4);
+      expect(identity, isNotNull);
+      expect(identity!.hostName, peer.hostname);
+      expect(identity.nodeId, isNotEmpty);
+      expect(identity.tailscaleIPs, contains(peer.ipv4));
+    });
+
+    test('whois returns null for an IP not on the tailnet', () async {
+      final identity = await tsnet.whois('100.127.255.254');
+      expect(identity, isNull);
+    });
+
+    test('onNodeChanges emits while nodes are online', () async {
+      for (var i = 0; i < 30; i++) {
+        final identity = await tsnet.whois(peer.ipv4);
+        if (identity != null) break;
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+
+      final first = await tsnet.onNodeChanges.first.timeout(
+        const Duration(seconds: 2),
       );
-      expect(utf8.decode(reply.bytes), 'udp-echo: ping-from-node-a');
-      expect(reply.remote.port, 7002);
-      expect(reply.identity, isNotNull);
+      expect(first, isNotEmpty);
+      expect(first.any((p) => p.ipv4 == peer.ipv4), isTrue);
+    });
+
+    test('diag.ping reaches the peer', () async {
+      final result = await tsnet.diag
+          .ping(peer.ipv4, timeout: const Duration(seconds: 10))
+          .timeout(const Duration(seconds: 15));
+      expect(result.latency, greaterThan(Duration.zero));
+      expect(result.path, isNot(PingPath.unknown));
+    });
+
+    test('diag.ping resolves MagicDNS hostnames', () async {
+      final result = await tsnet.diag
+          .ping(peer.hostname, timeout: const Duration(seconds: 10))
+          .timeout(const Duration(seconds: 15));
+      expect(result.latency, greaterThan(Duration.zero));
+    });
+
+    test('diag.metrics returns Prometheus-format text', () async {
+      final metrics = await tsnet.diag.metrics();
+      expect(metrics, isNotEmpty);
+      // Prometheus scrapes always start with `# HELP` / `# TYPE`
+      // comment lines, or at minimum contain a metric_name counter.
+      expect(metrics, anyOf(contains('# HELP'), contains('# TYPE')));
+    });
+
+    test('diag.derpMap returns at least one region', () async {
+      final map = await tsnet.diag.derpMap();
+      expect(map.regions, isNotEmpty);
+      final first = map.regions.values.first;
+      expect(first.regionCode, isNotEmpty);
+    });
+
+    test('diag.checkUpdate returns without throwing', () async {
+      // Either null (already on latest, or Headscale doesn't advertise
+      // a newer version) or a populated ClientVersion. Anything else
+      // would be a contract violation.
+      final result = await tsnet.diag.checkUpdate();
+      if (result != null) {
+        expect(result.latestVersion, isNotEmpty);
+      }
+    });
+
+    test('tls.domains returns a list (empty on Headscale)', () async {
+      final domains = await tsnet.tls.domains();
+      // Headscale doesn't provision certs, so this is expected empty.
+      // The important thing is no exception.
+      expect(domains, isA<List<String>>());
     });
   });
 
@@ -535,11 +616,11 @@ void main() {
       expect((await tsnet.status()).state, NodeState.noState);
     });
 
-    // Consecutive-duplicate scenarios — the stream filters these via
-    // `Stream.distinct` in [Tailscale.onStateChange]. Each test attaches a
+    // Consecutive-duplicate scenarios — the stream filters these in
+    // [Tailscale.onStateChange]. Each test attaches a
     // single subscription across two transitions so the filter's internal
     // "previous" state carries over; a single subscription on a fresh
-    // distinct stream would only see the second event and wouldn't prove
+    // state-change stream would only see the second event and wouldn't prove
     // the filter fired.
 
     test('up() while already running does not re-emit Running', () async {
@@ -564,7 +645,7 @@ void main() {
         1,
         reason:
             'a no-op up() must not surface a second Running to the '
-            'stream — distinct() filters the watcher reattach duplicate',
+            'stream — onStateChange filters the watcher reattach duplicate',
       );
     });
 
@@ -580,13 +661,13 @@ void main() {
       });
 
       // First logout — emits Stopped then NoState. Both pass (different
-      // from each other; _previous starts at null for this fresh
-      // distinct stream).
+      // from each other; the previous-state filter starts at null for this
+      // fresh stream).
       await _recordUntil(tsnet, NodeState.noState, tsnet.logout);
 
       // Second logout — srv already nil (wasRunning guard skips Stop's
       // Stopped publish), state dir already gone, but Logout still
-      // calls publishState("NoState"). distinct() filters the duplicate
+      // calls publishState("NoState"). onStateChange filters the duplicate
       // because _previous is NoState from the first logout.
       await tsnet.logout();
       await Future<void>.delayed(const Duration(seconds: 1));
@@ -597,53 +678,13 @@ void main() {
         1,
         reason:
             'a redundant logout() must not surface a second NoState — '
-            'distinct() filters publishState("NoState") when it matches '
+            'onStateChange filters publishState("NoState") when it matches '
             'the most recently emitted state',
       );
     });
   });
 }
 
-Future<void> _waitForPeerHttpReady(
-  Tailscale tsnet,
-  Uri url, {
-  required String expectedBody,
-  Duration timeout = const Duration(seconds: 45),
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  Object? lastError;
-  while (DateTime.now().isBefore(deadline)) {
-    try {
-      final response = await tsnet.http
-          .get(url)
-          .timeout(const Duration(seconds: 5));
-      if (response.statusCode == 200 && response.body == expectedBody) {
-        return;
-      }
-      lastError = StateError(
-        'unexpected response ${response.statusCode}: ${response.body}',
-      );
-    } catch (error) {
-      lastError = error;
-    }
-    await Future<void>.delayed(const Duration(seconds: 1));
-  }
-  throw StateError(
-    'peer HTTP service at $url did not become ready within ${timeout.inSeconds}s'
-    '${lastError == null ? '' : ' (last error: $lastError)'}',
-  );
-}
-
-/// Records every [NodeState] emitted on `onStateChange` while [action] runs,
-/// stopping once [terminal] is observed. Attaches the listener *before*
-/// invoking [action] so events can't slip past due to subscription timing.
-///
-/// Times out with a [TimeoutException] that includes the partial sequence —
-/// the partial is load-bearing when debugging a stuck transition ("we
-/// emitted Starting but never Running" is a very different failure from "we
-/// never emitted anything").
-///
-/// Default 30s because the up paths wait on real network round-trips to
 /// Headscale (first-boot auth can be the slow leg on CI runners). The
 /// terminal-state paths (Stopped, NoState) are synthetic and nearly
 /// instant, so the extra headroom costs nothing when the test succeeds.
@@ -679,10 +720,11 @@ Future<List<NodeState>> _recordUntil(
 /// Handle to a `peer_main.dart` subprocess that has reached Running and
 /// announced its tailnet IPv4.
 class _PeerProcess {
-  _PeerProcess._(this._process, this.ipv4);
+  _PeerProcess._(this._process, this.ipv4, this.hostname);
 
   final Process _process;
   final String ipv4;
+  final String hostname;
 
   static Future<_PeerProcess> spawn({
     required String stateDir,
@@ -732,7 +774,7 @@ class _PeerProcess {
         throw StateError('peer "$hostname" did not become ready within 90s');
       },
     );
-    return _PeerProcess._(process, ipv4);
+    return _PeerProcess._(process, ipv4, hostname);
   }
 
   /// Gracefully shut the peer down by closing its stdin; falls back to

@@ -23,7 +23,7 @@ class TailscalePrefs {
   });
 
   /// CIDRs this node advertises as a subnet router. Requires operator
-  /// approval in the admin panel before peers will pick them up.
+  /// approval in the admin panel before other nodes will pick them up.
   /// See <https://tailscale.com/kb/1019/subnets>.
   final List<String> advertisedRoutes;
 
@@ -67,18 +67,19 @@ class TailscalePrefs {
 
   @override
   int get hashCode => Object.hash(
-        Object.hashAll(advertisedRoutes),
-        acceptRoutes,
-        shieldsUp,
-        Object.hashAll(advertisedTags),
-        wantRunning,
-        autoUpdate,
-        hostname,
-        exitNodeId,
-      );
+    Object.hashAll(advertisedRoutes),
+    acceptRoutes,
+    shieldsUp,
+    Object.hashAll(advertisedTags),
+    wantRunning,
+    autoUpdate,
+    hostname,
+    exitNodeId,
+  );
 
   @override
-  String toString() => 'TailscalePrefs(advertisedRoutes: $advertisedRoutes, '
+  String toString() =>
+      'TailscalePrefs(advertisedRoutes: $advertisedRoutes, '
       'acceptRoutes: $acceptRoutes, shieldsUp: $shieldsUp, '
       'advertisedTags: $advertisedTags, wantRunning: $wantRunning, '
       'autoUpdate: $autoUpdate, hostname: $hostname, '
@@ -133,18 +134,19 @@ class PrefsUpdate {
 
   @override
   int get hashCode => Object.hash(
-        advertisedRoutes == null ? null : Object.hashAll(advertisedRoutes!),
-        acceptRoutes,
-        shieldsUp,
-        advertisedTags == null ? null : Object.hashAll(advertisedTags!),
-        wantRunning,
-        autoUpdate,
-        hostname,
-        exitNodeId,
-      );
+    advertisedRoutes == null ? null : Object.hashAll(advertisedRoutes!),
+    acceptRoutes,
+    shieldsUp,
+    advertisedTags == null ? null : Object.hashAll(advertisedTags!),
+    wantRunning,
+    autoUpdate,
+    hostname,
+    exitNodeId,
+  );
 
   @override
-  String toString() => 'PrefsUpdate(advertisedRoutes: $advertisedRoutes, '
+  String toString() =>
+      'PrefsUpdate(advertisedRoutes: $advertisedRoutes, '
       'acceptRoutes: $acceptRoutes, shieldsUp: $shieldsUp, '
       'advertisedTags: $advertisedTags, wantRunning: $wantRunning, '
       'autoUpdate: $autoUpdate, hostname: $hostname, '
@@ -168,7 +170,7 @@ class Prefs {
 
   /// Replaces the set of CIDRs this node advertises as a subnet router.
   /// See <https://tailscale.com/kb/1019/subnets>. Still requires admin
-  /// approval of each route in the control plane before peers use it.
+  /// approval of each route in the control plane before other nodes use it.
   Future<TailscalePrefs> setAdvertisedRoutes(List<String> cidrs) =>
       throw UnimplementedError('prefs.setAdvertisedRoutes not yet implemented');
 

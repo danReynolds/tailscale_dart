@@ -2,22 +2,18 @@ part of 'worker.dart';
 
 enum _WorkerOperation {
   start,
-  listen,
-  attachTransport,
-  tcpDial,
-  tcpBind,
-  tcpUnbind,
-  udpBind,
+  httpBind,
+  httpCloseBinding,
+  tcpDialFd,
+  tcpListenFd,
+  tcpCloseFdListener,
+  udpBindFd,
   whois,
   tlsDomains,
   diagPing,
   diagMetrics,
   diagDERPMap,
   diagCheckUpdate,
-  httpStartRequest,
-  httpWriteBodyChunk,
-  httpCloseRequestBody,
-  httpCancelRequest,
   status,
   peers,
   down,
@@ -25,22 +21,18 @@ enum _WorkerOperation {
 
   TailscaleException exceptionForMessage(String message) => switch (this) {
     start => TailscaleUpException(message),
-    listen => TailscaleListenException(message),
-    attachTransport => TailscaleUpException(message),
-    tcpDial => TailscaleTcpDialException(message),
-    tcpBind => TailscaleTcpBindException(message),
-    tcpUnbind => TailscaleTcpBindException(message),
-    udpBind => TailscaleUdpBindException(message),
+    httpBind => TailscaleHttpException(message),
+    httpCloseBinding => TailscaleHttpException(message),
+    tcpDialFd => TailscaleTcpException(message),
+    tcpListenFd => TailscaleTcpException(message),
+    tcpCloseFdListener => TailscaleTcpException(message),
+    udpBindFd => TailscaleUdpException(message),
     whois => TailscaleStatusException(message),
     tlsDomains => TailscaleStatusException(message),
     diagPing => TailscaleDiagException(message),
     diagMetrics => TailscaleDiagException(message),
     diagDERPMap => TailscaleDiagException(message),
     diagCheckUpdate => TailscaleDiagException(message),
-    httpStartRequest => TailscaleHttpException(message),
-    httpWriteBodyChunk => TailscaleHttpException(message),
-    httpCloseRequestBody => TailscaleHttpException(message),
-    httpCancelRequest => TailscaleHttpException(message),
     status => TailscaleStatusException(message),
     peers => TailscaleStatusException(message),
     down => TailscaleOperationException('down', message),
@@ -60,62 +52,64 @@ final class _WorkerStartCommand extends _WorkerCommand {
     required this.authKey,
     required this.controlUrl,
     required this.stateDir,
+    required this.hostNetworkSnapshot,
   }) : super(_WorkerOperation.start);
 
   final String hostname;
   final String authKey;
   final String controlUrl;
   final String stateDir;
+  final String hostNetworkSnapshot;
 }
 
-final class _WorkerListenCommand extends _WorkerCommand {
-  const _WorkerListenCommand({
-    required this.localPort,
-    required this.tailnetPort,
-  }) : super(_WorkerOperation.listen);
+final class _WorkerHttpBindCommand extends _WorkerCommand {
+  const _WorkerHttpBindCommand({required this.tailnetPort})
+    : super(_WorkerOperation.httpBind);
 
-  final int localPort;
   final int tailnetPort;
 }
 
-final class _WorkerAttachTransportCommand extends _WorkerCommand {
-  const _WorkerAttachTransportCommand({
+final class _WorkerHttpCloseBindingCommand extends _WorkerCommand {
+  const _WorkerHttpCloseBindingCommand({required this.bindingId})
+    : super(_WorkerOperation.httpCloseBinding);
+
+  final int bindingId;
+}
+
+final class _WorkerTcpDialFdCommand extends _WorkerCommand {
+  const _WorkerTcpDialFdCommand({
     required this.host,
     required this.port,
-    required this.listenerOwner,
-  }) : super(_WorkerOperation.attachTransport);
+    required this.timeoutMillis,
+  }) : super(_WorkerOperation.tcpDialFd);
 
   final String host;
   final int port;
-  final String listenerOwner;
+  final int timeoutMillis;
 }
 
-final class _WorkerTcpDialCommand extends _WorkerCommand {
-  const _WorkerTcpDialCommand({required this.host, required this.port})
-    : super(_WorkerOperation.tcpDial);
+final class _WorkerTcpListenFdCommand extends _WorkerCommand {
+  const _WorkerTcpListenFdCommand({
+    required this.tailnetPort,
+    required this.tailnetHost,
+  }) : super(_WorkerOperation.tcpListenFd);
+
+  final int tailnetPort;
+  final String tailnetHost;
+}
+
+final class _WorkerTcpCloseFdListenerCommand extends _WorkerCommand {
+  const _WorkerTcpCloseFdListenerCommand({required this.listenerId})
+    : super(_WorkerOperation.tcpCloseFdListener);
+
+  final int listenerId;
+}
+
+final class _WorkerUdpBindFdCommand extends _WorkerCommand {
+  const _WorkerUdpBindFdCommand({required this.host, required this.port})
+    : super(_WorkerOperation.udpBindFd);
 
   final String host;
-  final int port;
-}
-
-final class _WorkerTcpBindCommand extends _WorkerCommand {
-  const _WorkerTcpBindCommand({required this.port})
-    : super(_WorkerOperation.tcpBind);
-
-  final int port;
-}
-
-final class _WorkerTcpUnbindCommand extends _WorkerCommand {
-  const _WorkerTcpUnbindCommand({required this.port})
-    : super(_WorkerOperation.tcpUnbind);
-
-  final int port;
-}
-
-final class _WorkerUdpBindCommand extends _WorkerCommand {
-  const _WorkerUdpBindCommand({required this.port})
-    : super(_WorkerOperation.udpBind);
-
   final int port;
 }
 
@@ -152,50 +146,6 @@ final class _WorkerDiagDERPMapCommand extends _WorkerCommand {
 final class _WorkerDiagCheckUpdateCommand extends _WorkerCommand {
   const _WorkerDiagCheckUpdateCommand()
     : super(_WorkerOperation.diagCheckUpdate);
-}
-
-final class _WorkerHttpStartRequestCommand extends _WorkerCommand {
-  const _WorkerHttpStartRequestCommand({
-    required this.requestId,
-    required this.method,
-    required this.url,
-    required this.headers,
-    required this.followRedirects,
-    required this.maxRedirects,
-    required this.persistentConnection,
-  }) : super(_WorkerOperation.httpStartRequest);
-
-  final int requestId;
-  final String method;
-  final String url;
-  final Map<String, List<String>> headers;
-  final bool followRedirects;
-  final int maxRedirects;
-  final bool persistentConnection;
-}
-
-final class _WorkerHttpWriteBodyChunkCommand extends _WorkerCommand {
-  const _WorkerHttpWriteBodyChunkCommand({
-    required this.requestId,
-    required this.bodyBytes,
-  }) : super(_WorkerOperation.httpWriteBodyChunk);
-
-  final int requestId;
-  final Uint8List bodyBytes;
-}
-
-final class _WorkerHttpCloseRequestBodyCommand extends _WorkerCommand {
-  const _WorkerHttpCloseRequestBodyCommand({required this.requestId})
-    : super(_WorkerOperation.httpCloseRequestBody);
-
-  final int requestId;
-}
-
-final class _WorkerHttpCancelRequestCommand extends _WorkerCommand {
-  const _WorkerHttpCancelRequestCommand({required this.requestId})
-    : super(_WorkerOperation.httpCancelRequest);
-
-  final int requestId;
 }
 
 final class _WorkerStatusCommand extends _WorkerCommand {
@@ -255,55 +205,7 @@ final class _WorkerRuntimeErrorEvent extends _WorkerEvent {
 final class _WorkerPeersEvent extends _WorkerEvent {
   const _WorkerPeersEvent({required this.peers});
 
-  final List<PeerStatus> peers;
-}
-
-final class _WorkerHttpResponseHeadEvent extends _WorkerEvent {
-  const _WorkerHttpResponseHeadEvent({
-    required this.requestId,
-    required this.statusCode,
-    required this.headers,
-    required this.contentLength,
-    required this.isRedirect,
-    required this.finalUrl,
-    required this.reasonPhrase,
-    required this.connectionClose,
-  });
-
-  final int requestId;
-  final int statusCode;
-  final Map<String, List<String>> headers;
-  final int? contentLength;
-  final bool isRedirect;
-  final String finalUrl;
-  final String reasonPhrase;
-  final bool connectionClose;
-}
-
-final class _WorkerHttpResponseBodyEvent extends _WorkerEvent {
-  const _WorkerHttpResponseBodyEvent({
-    required this.requestId,
-    required this.bytes,
-  });
-
-  final int requestId;
-  final Uint8List bytes;
-}
-
-final class _WorkerHttpResponseDoneEvent extends _WorkerEvent {
-  const _WorkerHttpResponseDoneEvent({required this.requestId});
-
-  final int requestId;
-}
-
-final class _WorkerHttpResponseErrorEvent extends _WorkerEvent {
-  const _WorkerHttpResponseErrorEvent({
-    required this.requestId,
-    required this.message,
-  });
-
-  final int requestId;
-  final String message;
+  final List<TailscaleNode> peers;
 }
 
 sealed class _WorkerResponse extends _WorkerMainMessage {
@@ -313,43 +215,81 @@ sealed class _WorkerResponse extends _WorkerMainMessage {
 }
 
 final class _WorkerStartResponse extends _WorkerResponse {
-  const _WorkerStartResponse({
-    required this.transportMasterSecretB64,
-    required this.transportSessionGenerationIdB64,
-    required this.transportPreferredCarrierKind,
-  }) : super(_WorkerOperation.start);
-
-  final String? transportMasterSecretB64;
-  final String? transportSessionGenerationIdB64;
-  final String? transportPreferredCarrierKind;
+  const _WorkerStartResponse() : super(_WorkerOperation.start);
 }
 
-final class _WorkerListenResponse extends _WorkerResponse {
-  const _WorkerListenResponse({required this.listenPort})
-    : super(_WorkerOperation.listen);
-
-  final int listenPort;
-}
-
-final class _WorkerTcpDialResponse extends _WorkerResponse {
-  const _WorkerTcpDialResponse({required this.streamId})
-    : super(_WorkerOperation.tcpDial);
-
-  final int streamId;
-}
-
-final class _WorkerUdpBindResponse extends _WorkerResponse {
-  const _WorkerUdpBindResponse({required this.bindingId})
-    : super(_WorkerOperation.udpBind);
+final class _WorkerHttpBindResponse extends _WorkerResponse {
+  const _WorkerHttpBindResponse({
+    required this.bindingId,
+    required this.tailnetAddress,
+    required this.tailnetPort,
+  }) : super(_WorkerOperation.httpBind);
 
   final int bindingId;
+  final String tailnetAddress;
+  final int tailnetPort;
+}
+
+final class _WorkerTcpDialFdResponse extends _WorkerResponse {
+  const _WorkerTcpDialFdResponse({
+    required this.fd,
+    required this.localAddress,
+    required this.localPort,
+    required this.remoteAddress,
+    required this.remotePort,
+  }) : super(_WorkerOperation.tcpDialFd);
+
+  final int fd;
+  final String localAddress;
+  final int localPort;
+  final String remoteAddress;
+  final int remotePort;
+}
+
+final class _WorkerTcpListenFdResponse extends _WorkerResponse {
+  const _WorkerTcpListenFdResponse({
+    required this.listenerId,
+    required this.localAddress,
+    required this.localPort,
+  }) : super(_WorkerOperation.tcpListenFd);
+
+  final int listenerId;
+  final String localAddress;
+  final int localPort;
+}
+
+final class _WorkerUdpBindFdResponse extends _WorkerResponse {
+  const _WorkerUdpBindFdResponse({
+    required this.fd,
+    required this.localAddress,
+    required this.localPort,
+  }) : super(_WorkerOperation.udpBindFd);
+
+  final int fd;
+  final String localAddress;
+  final int localPort;
+}
+
+final class _WorkerStatusResponse extends _WorkerResponse {
+  const _WorkerStatusResponse({required this.status})
+    : super(_WorkerOperation.status);
+
+  final TailscaleStatus status;
+}
+
+final class _WorkerPeersResponse extends _WorkerResponse {
+  const _WorkerPeersResponse({required this.peers})
+    : super(_WorkerOperation.peers);
+
+  final List<TailscaleNode> peers;
 }
 
 final class _WorkerWhoIsResponse extends _WorkerResponse {
   const _WorkerWhoIsResponse({required this.identity})
     : super(_WorkerOperation.whois);
 
-  final PeerIdentity? identity;
+  /// Null when LocalAPI reported the IP is not known on this tailnet.
+  final TailscaleNodeIdentity? identity;
 }
 
 final class _WorkerTlsDomainsResponse extends _WorkerResponse {
@@ -384,28 +324,8 @@ final class _WorkerDiagCheckUpdateResponse extends _WorkerResponse {
   const _WorkerDiagCheckUpdateResponse({required this.clientVersion})
     : super(_WorkerOperation.diagCheckUpdate);
 
+  /// Null when the node is on the latest version.
   final ClientVersion? clientVersion;
-}
-
-final class _WorkerHttpStartRequestResponse extends _WorkerResponse {
-  const _WorkerHttpStartRequestResponse({required this.requestId})
-    : super(_WorkerOperation.httpStartRequest);
-
-  final int requestId;
-}
-
-final class _WorkerStatusResponse extends _WorkerResponse {
-  const _WorkerStatusResponse({required this.status})
-    : super(_WorkerOperation.status);
-
-  final TailscaleStatus status;
-}
-
-final class _WorkerPeersResponse extends _WorkerResponse {
-  const _WorkerPeersResponse({required this.peers})
-    : super(_WorkerOperation.peers);
-
-  final List<PeerStatus> peers;
 }
 
 final class _WorkerAckResponse extends _WorkerResponse {

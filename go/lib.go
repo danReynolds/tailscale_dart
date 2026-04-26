@@ -1,19 +1,14 @@
 package tailscale
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -25,27 +20,10 @@ import (
 var LogLevel int32 // default 0 (silent)
 
 var (
-	mu sync.Mutex // protects srv, store, reverseProxyLn
+	mu sync.Mutex // protects srv and store
 
-	srv            *tsnet.Server
-	store          *SQLiteStore // package-owned; tsnet.Server doesn't close its Store, so we do in stopLocked
-
-	reverseProxyLn          net.Listener
-	reverseProxyTailnetPort int
-
-	// targetPort is the local Dart port we forward to.
-	targetPort   int
-	targetPortMu sync.Mutex
-
-	// reverseClient is reused across reverse-proxy requests for connection pooling.
-	reverseClient = &http.Client{
-		Timeout: 30 * time.Second,
-	}
-)
-
-const (
-	localForwardMaxAttempts = 3
-	localForwardRetryDelay  = 150 * time.Millisecond
+	srv   *tsnet.Server
+	store *SQLiteStore // package-owned; tsnet.Server doesn't close its Store, so we do in stopLocked
 )
 
 // HasState checks if the state directory contains a valid machine key.
@@ -106,18 +84,12 @@ func Stop() {
 
 // stopLocked tears down the server and all listeners. Caller must hold mu.
 func stopLocked() {
-	closeRuntimeTransportLocked()
-	cancelAllHTTPRequests()
-
-	if reverseProxyLn != nil {
-		reverseProxyLn.Close()
-		reverseProxyLn = nil
-	}
+	closeAllTcpFdListeners()
+	closeAllHttpBindings()
 
 	if srv != nil {
 		srv.Close()
 		srv = nil
-		reverseProxyTailnetPort = 0
 	}
 
 	// tsnet.Server doesn't own the Store — the caller does — so Close()
@@ -157,6 +129,14 @@ func Start(hostname, authKey, controlURL, stateDir string) (err error) {
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return fmt.Errorf("failed to create state dir: %v", err)
 	}
+	logDir := stateDir + "/logs"
+	if err := os.MkdirAll(logDir, 0700); err != nil {
+		return fmt.Errorf("failed to create log dir: %v", err)
+	}
+	// Android apps do not have the desktop/server filesystem locations that
+	// Tailscale's log policy probes by default. Point it at app-owned storage
+	// before tsnet starts so internal logging never falls through to panic.
+	os.Setenv("TS_LOGS_DIR", logDir)
 
 	statePath := stateDir + "/state.db"
 	newStore, err := NewSQLiteStore(statePath)
@@ -177,8 +157,9 @@ func Start(hostname, authKey, controlURL, stateDir string) (err error) {
 		},
 	}
 
-	// If we fail before committing newSrv/newStore to package state, release
-	// their resources. The named return `err` is the signal.
+	// If we fail before committing newSrv/newStore to package state,
+	// release their resources. The named return `err` is the signal — any
+	// `return ..., err` with a non-nil error triggers cleanup.
 	defer func() {
 		if err == nil {
 			return
@@ -188,153 +169,13 @@ func Start(hostname, authKey, controlURL, stateDir string) (err error) {
 	}()
 
 	if startErr := newSrv.Start(); startErr != nil {
-		if strings.Contains(startErr.Error(), "permission denied") || strings.Contains(startErr.Error(), "netlink") {
-			logInfo("Ignoring expected Android permission error: %v", startErr)
-		} else {
-			return fmt.Errorf("failed to start tsnet: %v", startErr)
-		}
+		return fmt.Errorf("failed to start tsnet: %v", startErr)
 	}
 
 	// Commit to package state only after every allocation succeeded.
 	srv = newSrv
 	store = newStore
-	ensureRuntimeTransportLocked()
-
 	return nil
-}
-
-// Listen starts the reverse proxy that accepts incoming tailnet HTTP traffic on
-// tailnetPort and forwards it to a local port. If localPort > 0, traffic is
-// forwarded there. If localPort == 0, an ephemeral port is allocated.
-// Returns the local port.
-func Listen(localPort, tailnetPort int) (int, error) {
-	if tailnetPort < 1 || tailnetPort > 65535 {
-		return 0, fmt.Errorf("invalid tailnet port %d", tailnetPort)
-	}
-
-	mu.Lock()
-	s := srv
-	alreadyListening := reverseProxyLn != nil
-	currentTailnetPort := reverseProxyTailnetPort
-	mu.Unlock()
-
-	if s == nil {
-		return 0, fmt.Errorf("Listen called before Start")
-	}
-
-	// Allocate ephemeral port if needed
-	if localPort == 0 {
-		tmpLn, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return 0, fmt.Errorf("failed to allocate listen port: %v", err)
-		}
-		localPort = tmpLn.Addr().(*net.TCPAddr).Port
-		tmpLn.Close()
-	}
-
-	// Update the target port
-	targetPortMu.Lock()
-	targetPort = localPort
-	targetPortMu.Unlock()
-
-	// If already listening on the requested port, the handler picks up the new targetPort.
-	if alreadyListening && currentTailnetPort == tailnetPort {
-		return localPort, nil
-	}
-
-	if alreadyListening {
-		mu.Lock()
-		if reverseProxyLn != nil {
-			reverseProxyLn.Close()
-			reverseProxyLn = nil
-			reverseProxyTailnetPort = 0
-		}
-		mu.Unlock()
-	}
-
-	ln, err := s.Listen("tcp", fmt.Sprintf(":%d", tailnetPort))
-	if err != nil {
-		return 0, fmt.Errorf("failed to listen on tsnet:%d: %v", tailnetPort, err)
-	}
-
-	mu.Lock()
-	// Re-check srv IDENTITY under lock (not just non-nil): a concurrent
-	// Stop() would have nulled srv, but a Stop()+Start() would replace
-	// it with a different instance. In either case `ln` is attached to
-	// the old `s` we captured before lock — committing it to package
-	// state would bind the reverse proxy to a server we no longer own.
-	if srv != s {
-		mu.Unlock()
-		ln.Close()
-		return 0, fmt.Errorf("Listen raced with Stop or server replacement")
-	}
-	if reverseProxyLn != nil {
-		mu.Unlock()
-		ln.Close()
-		return localPort, nil
-	}
-	reverseProxyLn = ln
-	reverseProxyTailnetPort = tailnetPort
-	mu.Unlock()
-
-	go http.Serve(ln, http.HandlerFunc(handleReverseProxy))
-
-	return localPort, nil
-}
-
-// handleReverseProxy forwards incoming Tailscale traffic to the local Dart server.
-func handleReverseProxy(w http.ResponseWriter, r *http.Request) {
-	targetPortMu.Lock()
-	port := targetPort
-	targetPortMu.Unlock()
-
-	target := fmt.Sprintf("http://127.0.0.1:%d", port)
-	targetURL := target + r.URL.RequestURI()
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read request body", 500)
-		return
-	}
-	r.Body.Close()
-
-	remoteIp, _, remoteIpErr := net.SplitHostPort(r.RemoteAddr)
-
-	var resp *http.Response
-	for attempt := 1; attempt <= localForwardMaxAttempts; attempt++ {
-		outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, bytes.NewReader(body))
-		if err != nil {
-			http.Error(w, "Failed to create proxy request", 500)
-			return
-		}
-
-		for k, v := range r.Header {
-			outReq.Header[k] = append([]string(nil), v...)
-		}
-
-		if remoteIpErr == nil {
-			outReq.Header.Set("X-Dune-Peer-Ip", remoteIp)
-		}
-
-		resp, err = reverseClient.Do(outReq)
-		if err == nil {
-			break
-		}
-
-		if attempt == localForwardMaxAttempts {
-			http.Error(w, fmt.Sprintf("Local Forward Error: %v", err), 502)
-			return
-		}
-
-		time.Sleep(localForwardRetryDelay)
-	}
-	defer resp.Body.Close()
-
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
 }
 
 // DuneStatus returns the local-node status JSON from the LocalAPI.

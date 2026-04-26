@@ -1,5 +1,9 @@
 include: package:lints/recommended.yaml
 
+analyzer:
+  exclude:
+    - packages/**
+
 linter:
   rules:
     - avoid_empty_else

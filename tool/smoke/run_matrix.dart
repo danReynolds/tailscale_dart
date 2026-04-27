@@ -74,7 +74,7 @@ final class _SmokeMatrixRunner {
       }
       if (config.targets.contains('ios') && !_hasIosSimulator(devices)) {
         await _launchIosSimulator(config.iosSimulator);
-        devices = await _waitForFlutterDevice('ios');
+        devices = await _waitForFlutterDevice('ios', requireEmulator: true);
       }
 
       final runs = config.targets
@@ -384,13 +384,38 @@ final class _SmokeMatrixRunner {
     }
   }
 
-  Future<List<_FlutterDevice>> _waitForFlutterDevice(String target) async {
+  Future<List<_FlutterDevice>> _waitForFlutterDevice(
+    String target, {
+    bool requireEmulator = false,
+  }) async {
     for (var i = 0; i < 90; i++) {
       final devices = await _flutterDevices();
-      if (_deviceIdFor(target, devices) != null) return devices;
+      if (_deviceIdFor(target, devices) != null) {
+        if (!requireEmulator) return devices;
+        // The runner may have just launched an emulator/simulator. Don't
+        // settle for a physical device match — wait until an emulator
+        // appears, otherwise an attached wireless iPhone gets picked even
+        // when we explicitly asked for the simulator.
+        if (devices.any((device) => device.emulator && _matchesTarget(device, target))) {
+          return devices;
+        }
+      }
       await Future<void>.delayed(const Duration(seconds: 2));
     }
     return _flutterDevices();
+  }
+
+  bool _matchesTarget(_FlutterDevice device, String target) {
+    final id = device.id.toLowerCase();
+    final platform = device.targetPlatform.toLowerCase();
+    return switch (target) {
+      'macos' => id == 'macos' || platform.contains('darwin'),
+      'linux' => id == 'linux' || platform.contains('linux'),
+      'ios' => platform.contains('ios') || device.platformType == 'ios',
+      'android' =>
+        platform.contains('android') || device.platformType == 'android',
+      _ => false,
+    };
   }
 
   String? _deviceIdFor(String target, List<_FlutterDevice> devices) {
@@ -494,13 +519,13 @@ final class _SmokeMatrixRunner {
           ),
         );
       } catch (error) {
-        result.complete(
-          _TargetRun(
-            target: target,
-            ok: false,
-            skipped: false,
-            message: 'invalid result JSON: $error',
-          ),
+        // Don't complete the result on stdout parse errors. Lines from
+        // `flutter run` can be truncated mid-flush when the device
+        // disconnects (e.g., "Lost connection to device" cuts the
+        // DUNE_SMOKE_RESULT line). The /result POST is the primary
+        // signal; let it land or let the outer timeout catch a real hang.
+        stderr.writeln(
+          '[$target/$stream] result line parse failed (truncated?): $error',
         );
       }
     }

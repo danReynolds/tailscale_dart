@@ -2,6 +2,7 @@
 build/
 pubspec.lock
 !packages/demo_flutter/pubspec.lock
+!packages/demo_smoke_flutter/pubspec.lock
 .vscode/
 
 # Go build artifacts (the build hook generates these)

@@ -302,7 +302,9 @@ func runHttpFdRequest(
 	}); err != nil {
 		return
 	}
-	_, _ = io.Copy(responseConn, resp.Body)
+	if _, err := io.Copy(responseConn, resp.Body); err != nil {
+		logInfo("HTTP fd response body copy failed: %v", err)
+	}
 }
 
 func serveHTTPFdRequest(state *httpBindingState, w http.ResponseWriter, r *http.Request) {
@@ -370,6 +372,9 @@ func serveHTTPFdRequest(state *httpBindingState, w http.ResponseWriter, r *http.
 		return
 	}
 
+	// The inner Close signals EOF on the request body fd to the Dart handler
+	// when the inbound body finishes naturally. The outer Close unblocks the
+	// goroutine if the Dart handler returns without draining the body.
 	go func() {
 		defer requestConn.Close()
 		_, _ = io.Copy(requestConn, r.Body)

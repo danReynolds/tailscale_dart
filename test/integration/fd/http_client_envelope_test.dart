@@ -103,6 +103,39 @@ void main() {
     );
   });
 
+  test('fails malformed response head payloads', () async {
+    final (:leftFd, :rightFd) = socketPair(sockStream);
+    final transport = await PosixFdTransport.adopt(leftFd);
+    addTearDown(transport.close);
+
+    final requestBodyDone = Completer<void>();
+    final request = http.Request('GET', Uri.parse('http://100.64.0.2/garbled'));
+    final responseFuture = parseHttpFdResponseForTesting(
+      responseTransport: transport,
+      request: request,
+      requestBodyDone: requestBodyDone.future,
+    );
+
+    final payload = utf8.encode('not json');
+    final bytes = Uint8List(4 + payload.length);
+    ByteData.sublistView(bytes).setUint32(0, payload.length, Endian.big);
+    bytes.setRange(4, bytes.length, payload);
+    TestPosixBindings.instance.write(rightFd, bytes);
+    TestPosixBindings.instance.close(rightFd);
+    requestBodyDone.complete();
+
+    await expectLater(
+      responseFuture.timeout(const Duration(seconds: 5)),
+      throwsA(
+        isA<TailscaleHttpException>().having(
+          (error) => error.message,
+          'message',
+          contains('Invalid HTTP response head'),
+        ),
+      ),
+    );
+  });
+
   test('surfaces native response-head errors as ClientException', () async {
     final (:leftFd, :rightFd) = socketPair(sockStream);
     final transport = await PosixFdTransport.adopt(leftFd);

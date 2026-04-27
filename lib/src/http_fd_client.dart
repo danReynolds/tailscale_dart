@@ -197,8 +197,17 @@ final class _HttpResponseParser {
 
     final headStart = _responseHeadPrefixBytes;
     final headEnd = headStart + headLength;
-    final headJson = utf8.decode(bytes.sublist(headStart, headEnd));
-    final head = jsonDecode(headJson) as Map<String, dynamic>;
+    final Map<String, dynamic> head;
+    try {
+      final headJson = utf8.decode(bytes.sublist(headStart, headEnd));
+      head = jsonDecode(headJson) as Map<String, dynamic>;
+    } catch (error, stackTrace) {
+      _fail(
+        TailscaleHttpException('Invalid HTTP response head: $error'),
+        stackTrace,
+      );
+      return;
+    }
 
     final error = head['error'] as String?;
     if (error != null) {

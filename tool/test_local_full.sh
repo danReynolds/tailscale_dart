@@ -15,6 +15,9 @@ echo "== demo_core tests =="
 echo "== demo_flutter tests =="
 (cd packages/demo_flutter && "$FLUTTER" test)
 
+echo "== demo_smoke_flutter tests =="
+(cd packages/demo_smoke_flutter && "$FLUTTER" test)
+
 echo "== whitespace check =="
 git diff --check
 

@@ -5,7 +5,6 @@ import "C"
 
 import (
 	"encoding/json"
-	"fmt"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -20,69 +19,179 @@ func DuneStart(hostname *C.char, authKey *C.char, controlURL *C.char, stateDir *
 	ctl := C.GoString(controlURL)
 	dir := C.GoString(stateDir)
 
-	port, proxyAuthToken, err := tailscale.Start(name, key, ctl, dir)
+	err := tailscale.Start(name, key, ctl, dir)
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneSetNetworkInterfaces
+func DuneSetNetworkInterfaces(snapshot *C.char) *C.char {
+	if err := tailscale.ConfigureHostNetworkSnapshot(C.GoString(snapshot)); err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneHttpStart
+func DuneHttpStart(method *C.char, url *C.char, headersJSON *C.char, contentLength C.longlong, followRedirects C.int, maxRedirects C.int) *C.char {
+	req, err := tailscale.HttpStart(
+		C.GoString(method),
+		C.GoString(url),
+		C.GoString(headersJSON),
+		int64(contentLength),
+		followRedirects != 0,
+		int(maxRedirects),
+	)
 	if err != nil {
 		m := map[string]string{"error": err.Error()}
 		b, _ := json.Marshal(m)
 		return C.CString(string(b))
 	}
 	result, _ := json.Marshal(map[string]any{
-		"proxyPort":      port,
-		"proxyAuthToken": proxyAuthToken,
+		"requestBodyFd":  req.RequestBodyFD,
+		"responseBodyFd": req.ResponseBodyFD,
 	})
 	return C.CString(string(result))
 }
 
-//export DuneListen
-func DuneListen(localPort C.int, tailnetPort C.int) *C.char {
-	port, err := tailscale.Listen(int(localPort), int(tailnetPort))
+//export DuneHttpBind
+func DuneHttpBind(tailnetPort C.int) *C.char {
+	binding, err := tailscale.HttpBind(int(tailnetPort))
 	if err != nil {
 		m := map[string]string{"error": err.Error()}
 		b, _ := json.Marshal(m)
 		return C.CString(string(b))
 	}
-	return C.CString(fmt.Sprintf(`{"listenPort": %d}`, port))
+	result, _ := json.Marshal(map[string]any{
+		"bindingId":      binding.ID,
+		"tailnetAddress": binding.TailnetAddress,
+		"tailnetPort":    binding.TailnetPort,
+	})
+	return C.CString(string(result))
 }
 
-//export DuneTcpDial
-func DuneTcpDial(host *C.char, port C.int, timeoutMillis C.longlong) *C.char {
+//export DuneHttpAccept
+func DuneHttpAccept(bindingID C.longlong) *C.char {
+	req, closed, err := tailscale.HttpAccept(int64(bindingID))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	if closed {
+		return C.CString(`{"closed":true}`)
+	}
+	result, _ := json.Marshal(map[string]any{
+		"bindingId":      req.BindingID,
+		"requestBodyFd":  req.RequestBodyFD,
+		"responseBodyFd": req.ResponseBodyFD,
+		"method":         req.Method,
+		"requestUri":     req.RequestURI,
+		"host":           req.Host,
+		"proto":          req.Proto,
+		"headers":        req.Headers,
+		"contentLength":  req.ContentLength,
+		"remoteAddress":  req.RemoteAddress,
+		"remotePort":     req.RemotePort,
+		"localAddress":   req.LocalAddress,
+		"localPort":      req.LocalPort,
+	})
+	return C.CString(string(result))
+}
+
+//export DuneHttpCloseBinding
+func DuneHttpCloseBinding(bindingID C.longlong) {
+	tailscale.HttpCloseBinding(int64(bindingID))
+}
+
+//export DuneTcpDialFd
+func DuneTcpDialFd(host *C.char, port C.int, timeoutMillis C.longlong) *C.char {
 	h := C.GoString(host)
 	var timeout time.Duration
 	if timeoutMillis > 0 {
 		timeout = time.Duration(timeoutMillis) * time.Millisecond
 	}
 
-	loopbackPort, token, err := tailscale.TcpDial(h, int(port), timeout)
+	conn, err := tailscale.TcpDialFd(h, int(port), timeout)
 	if err != nil {
 		m := map[string]string{"error": err.Error()}
 		b, _ := json.Marshal(m)
 		return C.CString(string(b))
 	}
 	result, _ := json.Marshal(map[string]any{
-		"loopbackPort": loopbackPort,
-		"token":        token,
+		"fd":            conn.FD,
+		"localAddress":  conn.LocalAddress,
+		"localPort":     conn.LocalPort,
+		"remoteAddress": conn.RemoteAddress,
+		"remotePort":    conn.RemotePort,
 	})
 	return C.CString(string(result))
 }
 
-//export DuneTcpBind
-func DuneTcpBind(tailnetPort C.int, tailnetHost *C.char, loopbackPort C.int) *C.char {
+//export DuneTcpListenFd
+func DuneTcpListenFd(tailnetPort C.int, tailnetHost *C.char) *C.char {
 	host := C.GoString(tailnetHost)
-	actualPort, err := tailscale.TcpBind(int(tailnetPort), host, int(loopbackPort))
+	listener, err := tailscale.TcpListenFd(int(tailnetPort), host)
 	if err != nil {
 		m := map[string]string{"error": err.Error()}
 		b, _ := json.Marshal(m)
 		return C.CString(string(b))
 	}
 	result, _ := json.Marshal(map[string]any{
-		"tailnetPort": actualPort,
+		"listenerId":   listener.ID,
+		"localAddress": listener.LocalAddress,
+		"localPort":    listener.LocalPort,
 	})
 	return C.CString(string(result))
 }
 
-//export DuneTcpUnbind
-func DuneTcpUnbind(loopbackPort C.int) {
-	tailscale.TcpUnbind(int(loopbackPort))
+//export DuneTcpAcceptFd
+func DuneTcpAcceptFd(listenerID C.longlong) *C.char {
+	conn, closed, err := tailscale.TcpAcceptFd(int64(listenerID))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	if closed {
+		return C.CString(`{"closed": true}`)
+	}
+	result, _ := json.Marshal(map[string]any{
+		"fd":            conn.FD,
+		"localAddress":  conn.LocalAddress,
+		"localPort":     conn.LocalPort,
+		"remoteAddress": conn.RemoteAddress,
+		"remotePort":    conn.RemotePort,
+	})
+	return C.CString(string(result))
+}
+
+//export DuneTcpCloseFdListener
+func DuneTcpCloseFdListener(listenerID C.longlong) {
+	tailscale.TcpCloseFdListener(int64(listenerID))
+}
+
+//export DuneUdpBindFd
+func DuneUdpBindFd(host *C.char, port C.int) *C.char {
+	h := C.GoString(host)
+	binding, err := tailscale.UdpBindFd(h, int(port))
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	result, _ := json.Marshal(map[string]any{
+		"fd":           binding.FD,
+		"localAddress": binding.LocalAddress,
+		"localPort":    binding.LocalPort,
+	})
+	return C.CString(string(result))
 }
 
 //export DuneWhoIs

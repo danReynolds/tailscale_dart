@@ -46,9 +46,9 @@ void _workerEntrypoint(SendPort sendPort) {
 
         if (parsed['type'] == 'peers') {
           final raw = parsed['peers'] as List<dynamic>? ?? const [];
-          sendPort.send(_WorkerPeersEvent(
-            peers: PeerStatus.listFromJson(raw),
-          ));
+          sendPort.send(
+            _WorkerPeersEvent(peers: TailscaleNode.listFromJson(raw)),
+          );
         }
       } catch (_) {
         // Malformed message from Go — ignore.
@@ -65,6 +65,7 @@ void _workerEntrypoint(SendPort sendPort) {
               :authKey,
               :controlUrl,
               :hostname,
+              :hostNetworkSnapshot,
               :stateDir,
             ) = request;
 
@@ -90,16 +91,22 @@ void _workerEntrypoint(SendPort sendPort) {
             ffi.Pointer<Utf8>? authKeyPtr;
             ffi.Pointer<Utf8>? controlUrlPtr;
             ffi.Pointer<Utf8>? stateDirPtr;
+            ffi.Pointer<Utf8>? hostNetworkSnapshotPtr;
 
             try {
               hostnamePtr = hostname.toNativeUtf8();
               authKeyPtr = authKey.toNativeUtf8();
               controlUrlPtr = controlUrl.toNativeUtf8();
               stateDirPtr = stateDir.toNativeUtf8();
+              hostNetworkSnapshotPtr = hostNetworkSnapshot.toNativeUtf8();
 
               native.duneStopWatch();
+              _callNativeJson(
+                () => native.duneSetNetworkInterfaces(hostNetworkSnapshotPtr!),
+                onError: TailscaleUpException.new,
+              );
 
-              final result = _callNativeJson(
+              _callNativeJson(
                 () => native.duneStart(
                   hostnamePtr!,
                   authKeyPtr!,
@@ -107,123 +114,170 @@ void _workerEntrypoint(SendPort sendPort) {
                   stateDirPtr!,
                 ),
                 onError: TailscaleUpException.new,
-              ) as Map<String, dynamic>;
-
-              final proxyPort = result['proxyPort'] as int? ?? 0;
-              final proxyAuthToken = result['proxyAuthToken'] as String?;
-              if (proxyPort == 0 ||
-                  proxyAuthToken == null ||
-                  proxyAuthToken.isEmpty) {
-                throw const TailscaleUpException(
-                  'Failed to start Tailscale: native runtime did not return a usable proxy endpoint.',
-                );
-              }
+              );
 
               native.duneStartWatch();
 
-              sendPort.send(
-                _WorkerStartResponse(
-                  proxyPort: proxyPort,
-                  proxyAuthToken: proxyAuthToken,
-                ),
-              );
+              sendPort.send(const _WorkerStartResponse());
             } finally {
               if (hostnamePtr != null) calloc.free(hostnamePtr);
               if (authKeyPtr != null) calloc.free(authKeyPtr);
               if (controlUrlPtr != null) calloc.free(controlUrlPtr);
               if (stateDirPtr != null) calloc.free(stateDirPtr);
+              if (hostNetworkSnapshotPtr != null) {
+                calloc.free(hostNetworkSnapshotPtr);
+              }
             }
-          case _WorkerListenCommand request:
-            final result = _callNativeJson(
-              () => native.duneListen(request.localPort, request.tailnetPort),
-              onError: TailscaleHttpException.new,
-            ) as Map<String, dynamic>;
+          case _WorkerHttpBindCommand request:
+            final result =
+                _callNativeJson(
+                      () => native.duneHttpBind(request.tailnetPort),
+                      onError: TailscaleHttpException.new,
+                    )
+                    as Map<String, dynamic>;
 
-            final listenPort = result['listenPort'] as int?;
-            if (listenPort == null || listenPort <= 0) {
+            final bindingId = result['bindingId'] as int?;
+            final tailnetPort = result['tailnetPort'] as int?;
+            if (bindingId == null ||
+                bindingId <= 0 ||
+                tailnetPort == null ||
+                tailnetPort <= 0) {
               throw const TailscaleHttpException(
-                'Native runtime did not return a usable local listen port.',
+                'Native runtime did not return a usable HTTP binding.',
               );
             }
 
-            sendPort.send(_WorkerListenResponse(listenPort: listenPort));
-          case _WorkerTcpDialCommand request:
+            sendPort.send(
+              _WorkerHttpBindResponse(
+                bindingId: bindingId,
+                tailnetAddress: result['tailnetAddress'] as String? ?? '',
+                tailnetPort: tailnetPort,
+              ),
+            );
+          case _WorkerHttpCloseBindingCommand request:
+            native.duneHttpCloseBinding(request.bindingId);
+            sendPort.send(
+              const _WorkerAckResponse(_WorkerOperation.httpCloseBinding),
+            );
+          case _WorkerTcpDialFdCommand request:
             final hostPtr = request.host.toNativeUtf8();
             try {
-              final result = _callNativeJson(
-                () => native.duneTcpDial(
-                  hostPtr,
-                  request.port,
-                  request.timeoutMillis,
-                ),
-                onError: TailscaleTcpException.new,
-              ) as Map<String, dynamic>;
+              final result =
+                  _callNativeJson(
+                        () => native.duneTcpDialFd(
+                          hostPtr,
+                          request.port,
+                          request.timeoutMillis,
+                        ),
+                        onError: TailscaleTcpException.new,
+                      )
+                      as Map<String, dynamic>;
 
-              final loopbackPort = result['loopbackPort'] as int?;
-              final token = result['token'] as String?;
-              if (loopbackPort == null ||
-                  loopbackPort <= 0 ||
-                  token == null ||
-                  token.isEmpty) {
+              final fd = result['fd'] as int?;
+              if (fd == null || fd < 0) {
                 throw const TailscaleTcpException(
-                  'Native runtime did not return a usable loopback bridge.',
+                  'Native runtime did not return a usable TCP fd.',
                 );
               }
 
-              sendPort.send(_WorkerTcpDialResponse(
-                loopbackPort: loopbackPort,
-                token: token,
-              ));
-            } finally {
-              calloc.free(hostPtr);
-            }
-          case _WorkerTcpBindCommand request:
-            final hostPtr = request.tailnetHost.toNativeUtf8();
-            try {
-              final result = _callNativeJson(
-                () => native.duneTcpBind(
-                  request.tailnetPort,
-                  hostPtr,
-                  request.loopbackPort,
-                ),
-                onError: TailscaleTcpException.new,
-              ) as Map<String, dynamic>;
-
-              final tailnetPort = result['tailnetPort'] as int?;
-              if (tailnetPort == null || tailnetPort <= 0) {
-                throw const TailscaleTcpException(
-                  'Native runtime did not return the bound tailnet port.',
-                );
-              }
               sendPort.send(
-                _WorkerTcpBindResponse(tailnetPort: tailnetPort),
+                _WorkerTcpDialFdResponse(
+                  fd: fd,
+                  localAddress: result['localAddress'] as String? ?? '',
+                  localPort: result['localPort'] as int? ?? 0,
+                  remoteAddress: result['remoteAddress'] as String? ?? '',
+                  remotePort: result['remotePort'] as int? ?? 0,
+                ),
               );
             } finally {
               calloc.free(hostPtr);
             }
-          case _WorkerTcpUnbindCommand request:
-            native.duneTcpUnbind(request.loopbackPort);
+          case _WorkerTcpListenFdCommand request:
+            final hostPtr = request.tailnetHost.toNativeUtf8();
+            try {
+              final result =
+                  _callNativeJson(
+                        () => native.duneTcpListenFd(
+                          request.tailnetPort,
+                          hostPtr,
+                        ),
+                        onError: TailscaleTcpException.new,
+                      )
+                      as Map<String, dynamic>;
+
+              final listenerId = result['listenerId'] as int?;
+              final localPort = result['localPort'] as int?;
+              if (listenerId == null || listenerId <= 0 || localPort == null) {
+                throw const TailscaleTcpException(
+                  'Native runtime did not return a usable TCP listener.',
+                );
+              }
+
+              sendPort.send(
+                _WorkerTcpListenFdResponse(
+                  listenerId: listenerId,
+                  localAddress: result['localAddress'] as String? ?? '',
+                  localPort: localPort,
+                ),
+              );
+            } finally {
+              calloc.free(hostPtr);
+            }
+          case _WorkerTcpCloseFdListenerCommand request:
+            native.duneTcpCloseFdListener(request.listenerId);
             sendPort.send(
-              const _WorkerAckResponse(_WorkerOperation.tcpUnbind),
+              const _WorkerAckResponse(_WorkerOperation.tcpCloseFdListener),
             );
+          case _WorkerUdpBindFdCommand request:
+            final hostPtr = request.host.toNativeUtf8();
+            try {
+              final result =
+                  _callNativeJson(
+                        () => native.duneUdpBindFd(hostPtr, request.port),
+                        onError: TailscaleUdpException.new,
+                      )
+                      as Map<String, dynamic>;
+
+              final fd = result['fd'] as int?;
+              final localPort = result['localPort'] as int?;
+              if (fd == null || fd < 0 || localPort == null) {
+                throw const TailscaleUdpException(
+                  'Native runtime did not return a usable UDP binding.',
+                );
+              }
+
+              sendPort.send(
+                _WorkerUdpBindFdResponse(
+                  fd: fd,
+                  localAddress: result['localAddress'] as String? ?? '',
+                  localPort: localPort,
+                ),
+              );
+            } finally {
+              calloc.free(hostPtr);
+            }
           case _WorkerWhoIsCommand request:
             final ipPtr = request.ip.toNativeUtf8();
             try {
-              final result = _callNativeJson(
-                () => native.duneWhoIs(ipPtr),
-                onError: TailscaleStatusException.new,
-              ) as Map<String, dynamic>;
-              sendPort.send(_WorkerWhoIsResponse(
-                identity: _parseWhoIsResponse(result),
-              ));
+              final result =
+                  _callNativeJson(
+                        () => native.duneWhoIs(ipPtr),
+                        onError: TailscaleStatusException.new,
+                      )
+                      as Map<String, dynamic>;
+              sendPort.send(
+                _WorkerWhoIsResponse(identity: _parseWhoIsResponse(result)),
+              );
             } finally {
               calloc.free(ipPtr);
             }
           case _WorkerTlsDomainsCommand():
-            final result = _callNativeJson(
-              native.duneTlsDomains,
-              onError: TailscaleStatusException.new,
-            ) as Map<String, dynamic>;
+            final result =
+                _callNativeJson(
+                      native.duneTlsDomains,
+                      onError: TailscaleStatusException.new,
+                    )
+                    as Map<String, dynamic>;
             final domains =
                 (result['domains'] as List?)?.cast<String>() ?? const [];
             sendPort.send(_WorkerTlsDomainsResponse(domains: domains));
@@ -231,49 +285,63 @@ void _workerEntrypoint(SendPort sendPort) {
             final ipPtr = request.ip.toNativeUtf8();
             final pingTypePtr = request.pingType.toNativeUtf8();
             try {
-              final result = _callNativeJson(
-                () => native.duneDiagPing(
-                  ipPtr,
-                  request.timeoutMillis,
-                  pingTypePtr,
-                ),
-                onError: TailscaleDiagException.new,
-              ) as Map<String, dynamic>;
-              sendPort.send(_WorkerDiagPingResponse(
-                result: _parsePingResult(result),
-              ));
+              final result =
+                  _callNativeJson(
+                        () => native.duneDiagPing(
+                          ipPtr,
+                          request.timeoutMillis,
+                          pingTypePtr,
+                        ),
+                        onError: TailscaleDiagException.new,
+                      )
+                      as Map<String, dynamic>;
+              sendPort.send(
+                _WorkerDiagPingResponse(result: _parsePingResult(result)),
+              );
             } finally {
               calloc.free(ipPtr);
               calloc.free(pingTypePtr);
             }
           case _WorkerDiagMetricsCommand():
-            final result = _callNativeJson(
-              native.duneDiagMetrics,
-              onError: TailscaleDiagException.new,
-            ) as Map<String, dynamic>;
-            sendPort.send(_WorkerDiagMetricsResponse(
-              metrics: result['metrics'] as String? ?? '',
-            ));
+            final result =
+                _callNativeJson(
+                      native.duneDiagMetrics,
+                      onError: TailscaleDiagException.new,
+                    )
+                    as Map<String, dynamic>;
+            sendPort.send(
+              _WorkerDiagMetricsResponse(
+                metrics: result['metrics'] as String? ?? '',
+              ),
+            );
           case _WorkerDiagDERPMapCommand():
-            final result = _callNativeJson(
-              native.duneDiagDERPMap,
-              onError: TailscaleDiagException.new,
-            ) as Map<String, dynamic>;
-            sendPort.send(_WorkerDiagDERPMapResponse(
-              map: _parseDERPMap(result),
-            ));
+            final result =
+                _callNativeJson(
+                      native.duneDiagDERPMap,
+                      onError: TailscaleDiagException.new,
+                    )
+                    as Map<String, dynamic>;
+            sendPort.send(
+              _WorkerDiagDERPMapResponse(map: _parseDERPMap(result)),
+            );
           case _WorkerDiagCheckUpdateCommand():
-            final result = _callNativeJson(
-              native.duneDiagCheckUpdate,
-              onError: TailscaleDiagException.new,
-            ) as Map<String, dynamic>;
-            sendPort.send(_WorkerDiagCheckUpdateResponse(
-              clientVersion: _parseClientVersion(result),
-            ));
+            final result =
+                _callNativeJson(
+                      native.duneDiagCheckUpdate,
+                      onError: TailscaleDiagException.new,
+                    )
+                    as Map<String, dynamic>;
+            sendPort.send(
+              _WorkerDiagCheckUpdateResponse(
+                clientVersion: _parseClientVersion(result),
+              ),
+            );
           case _WorkerStatusCommand(:final stateDir):
-            sendPort.send(_WorkerStatusResponse(
-              status: _loadStatusSnapshot(stateDir: stateDir),
-            ));
+            sendPort.send(
+              _WorkerStatusResponse(
+                status: _loadStatusSnapshot(stateDir: stateDir),
+              ),
+            );
           case _WorkerPeersCommand():
             sendPort.send(_WorkerPeersResponse(peers: _loadPeerSnapshot()));
           case _WorkerDownCommand():
@@ -342,11 +410,12 @@ String _callNativeString(ffi.Pointer<Utf8> Function() fn) {
 /// through from the Go-side error classification in
 /// [tailscale.classifyLocalAPIError] so callers can pattern-match on
 /// [TailscaleErrorCode].
-typedef _ErrorFactory = TailscaleException Function(
-  String message, {
-  TailscaleErrorCode code,
-  int? statusCode,
-});
+typedef _ErrorFactory =
+    TailscaleException Function(
+      String message, {
+      TailscaleErrorCode code,
+      int? statusCode,
+    });
 
 dynamic _callNativeJson(
   ffi.Pointer<Utf8> Function() fn, {
@@ -367,20 +436,22 @@ dynamic _callNativeJson(
 }
 
 TailscaleErrorCode _parseErrorCode(String? raw) => switch (raw) {
-      'notFound' => TailscaleErrorCode.notFound,
-      'forbidden' => TailscaleErrorCode.forbidden,
-      'conflict' => TailscaleErrorCode.conflict,
-      'preconditionFailed' => TailscaleErrorCode.preconditionFailed,
-      'featureDisabled' => TailscaleErrorCode.featureDisabled,
-      _ => TailscaleErrorCode.unknown,
-    };
+  'notFound' => TailscaleErrorCode.notFound,
+  'forbidden' => TailscaleErrorCode.forbidden,
+  'conflict' => TailscaleErrorCode.conflict,
+  'preconditionFailed' => TailscaleErrorCode.preconditionFailed,
+  'featureDisabled' => TailscaleErrorCode.featureDisabled,
+  _ => TailscaleErrorCode.unknown,
+};
 
 TailscaleStatus _loadStatusSnapshot({String? stateDir}) {
   try {
-    final parsed = _callNativeJson(
-      native.duneStatus,
-      onError: TailscaleStatusException.new,
-    ) as Map<String, dynamic>;
+    final parsed =
+        _callNativeJson(
+              native.duneStatus,
+              onError: TailscaleStatusException.new,
+            )
+            as Map<String, dynamic>;
 
     // When the engine isn't running, duneStatus returns {} which parses
     // to noState. If we have a stateDir to check and persisted credentials
@@ -407,7 +478,7 @@ TailscaleStatus _loadStatusSnapshot({String? stateDir}) {
   }
 }
 
-List<PeerStatus> _loadPeerSnapshot() {
+List<TailscaleNode> _loadPeerSnapshot() {
   try {
     final decoded = _callNativeJson(
       native.dunePeers,
@@ -418,7 +489,7 @@ List<PeerStatus> _loadPeerSnapshot() {
         'Failed to decode native Tailscale peers.',
       );
     }
-    return PeerStatus.listFromJson(decoded);
+    return TailscaleNode.listFromJson(decoded);
   } catch (error) {
     if (error is TailscaleStatusException) rethrow;
     throw TailscaleStatusException(
@@ -428,9 +499,9 @@ List<PeerStatus> _loadPeerSnapshot() {
   }
 }
 
-PeerIdentity? _parseWhoIsResponse(Map<String, dynamic> json) {
+TailscaleNodeIdentity? _parseWhoIsResponse(Map<String, dynamic> json) {
   if (json['found'] != true) return null;
-  return PeerIdentity(
+  return TailscaleNodeIdentity(
     nodeId: json['nodeId'] as String? ?? '',
     hostName: json['hostName'] as String? ?? '',
     userLoginName: json['userLoginName'] as String? ?? '',
@@ -480,14 +551,14 @@ DERPMap _parseDERPMap(Map<String, dynamic> json) {
 }
 
 DERPNode _parseDERPNode(Map<String, dynamic> n) => DERPNode(
-      name: n['name'] as String? ?? '',
-      hostName: n['hostName'] as String? ?? '',
-      ipv4: n['ipv4'] as String?,
-      ipv6: n['ipv6'] as String?,
-      derpPort: (n['derpPort'] as num?)?.toInt() ?? 0,
-      stunPort: (n['stunPort'] as num?)?.toInt() ?? 0,
-      canPort80: n['canPort80'] as bool? ?? false,
-    );
+  name: n['name'] as String? ?? '',
+  hostName: n['hostName'] as String? ?? '',
+  ipv4: n['ipv4'] as String?,
+  ipv6: n['ipv6'] as String?,
+  derpPort: (n['derpPort'] as num?)?.toInt() ?? 0,
+  stunPort: (n['stunPort'] as num?)?.toInt() ?? 0,
+  canPort80: n['canPort80'] as bool? ?? false,
+);
 
 ClientVersion? _parseClientVersion(Map<String, dynamic> json) {
   if (json['available'] != true) return null;

@@ -57,12 +57,13 @@ enum NodeState {
 /// A snapshot of the local node's current state.
 ///
 /// Includes the node's connection status, assigned IPs, and health
-/// information. Peer inventory is exposed separately through `Tailscale.peers`.
+/// information. Node inventory is exposed separately through `Tailscale.nodes`.
 @immutable
 class TailscaleStatus {
   const TailscaleStatus({
     required this.state,
     this.authUrl,
+    this.stableNodeId,
     required this.tailscaleIPs,
     required this.health,
     this.magicDNSSuffix,
@@ -78,6 +79,12 @@ class TailscaleStatus {
   /// transition to `running` once the user approves the login.
   final Uri? authUrl;
 
+  /// Stable identifier for this node (e.g. `n1234AbCd`).
+  ///
+  /// Persists across key rotations; prefer over public keys for durable
+  /// identity references. May be null before the node has registered.
+  final String? stableNodeId;
+
   /// This node's assigned Tailscale IP addresses — one IPv4 in the
   /// [CGNAT range](https://tailscale.com/kb/1304/ip-pool) (100.64.0.0/10)
   /// and one IPv6 in `fd7a:115c:a1e0::/48`.
@@ -89,7 +96,7 @@ class TailscaleStatus {
 
   /// The [MagicDNS](https://tailscale.com/kb/1081/magicdns) suffix for
   /// the tailnet (e.g. `tailnet-name.ts.net`) — append this to any
-  /// peer's hostname to get a resolvable name.
+  /// node's hostname to get a resolvable name.
   ///
   /// May be null when tailnet metadata is not yet available.
   final String? magicDNSSuffix;
@@ -118,6 +125,7 @@ class TailscaleStatus {
     return TailscaleStatus(
       state: NodeState.parse(json['BackendState'] as String?),
       authUrl: _parseUri(json['AuthURL']),
+      stableNodeId: _parseNonEmptyString(self?['ID']),
       tailscaleIPs: _parseIPs(self?['TailscaleIPs']),
       health: (json['Health'] as List?)?.cast<String>() ?? const [],
       magicDNSSuffix:
@@ -139,33 +147,36 @@ class TailscaleStatus {
       other is TailscaleStatus &&
           state == other.state &&
           authUrl == other.authUrl &&
+          stableNodeId == other.stableNodeId &&
           listEquals(tailscaleIPs, other.tailscaleIPs) &&
           listEquals(health, other.health) &&
           magicDNSSuffix == other.magicDNSSuffix;
 
   @override
   int get hashCode => Object.hash(
-        state,
-        authUrl,
-        Object.hashAll(tailscaleIPs),
-        Object.hashAll(health),
-        magicDNSSuffix,
-      );
+    state,
+    authUrl,
+    stableNodeId,
+    Object.hashAll(tailscaleIPs),
+    Object.hashAll(health),
+    magicDNSSuffix,
+  );
 
   @override
   String toString() =>
-      'TailscaleStatus(state: $state, ips: $tailscaleIPs, '
+      'TailscaleStatus(state: $state, stableNodeId: $stableNodeId, '
+      'ips: $tailscaleIPs, '
       'health: $health, magicDNSSuffix: $magicDNSSuffix)';
 }
 
-/// The status of a peer on the tailnet — any other node this node
-/// knows about, including offline peers.
+/// A node this node can see on the tailnet, including offline nodes.
 ///
-/// Returned by `Tailscale.peers()`. Matches Go's
-/// [`ipnstate.PeerStatus`](https://pkg.go.dev/tailscale.com/ipnstate#PeerStatus).
+/// Returned by `Tailscale.nodes()`. Parsed from Go's
+/// [`ipnstate.PeerStatus`](https://pkg.go.dev/tailscale.com/ipnstate#PeerStatus);
+/// the Dart API uses Tailscale's user-facing "node" terminology.
 @immutable
-class PeerStatus {
-  const PeerStatus({
+class TailscaleNode {
+  const TailscaleNode({
     required this.publicKey,
     required this.stableNodeId,
     required this.hostName,
@@ -181,24 +192,24 @@ class PeerStatus {
     this.curAddr,
   });
 
-  /// The peer's [WireGuard](https://www.wireguard.com/) public key.
-  /// Rotates whenever the peer re-registers — prefer [stableNodeId]
+  /// The node's [WireGuard](https://www.wireguard.com/) public key.
+  /// Rotates whenever the node re-registers — prefer [stableNodeId]
   /// for durable references.
   final String publicKey;
 
   /// Stable Tailscale node identifier (e.g. `n1234AbCd`).
   ///
-  /// Prefer this over [publicKey] when naming a peer in durable state —
+  /// Prefer this over [publicKey] when naming a node in durable state —
   /// the public key rotates when a node re-authenticates, the stable ID
   /// does not. This is the value accepted by exit-node handles (see
   /// `ExitNode.useById`).
   final String stableNodeId;
 
-  /// The peer's hostname on the tailnet. Also the
+  /// The node's hostname on the tailnet. Also the
   /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) label.
   final String hostName;
 
-  /// The peer's full
+  /// The node's full
   /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) name
   /// (for example, `my-laptop.tailnet.ts.net.`).
   ///
@@ -206,35 +217,35 @@ class PeerStatus {
   /// trailing dot.
   final String dnsName;
 
-  /// The peer's operating system.
+  /// The node's operating system.
   final String os;
 
-  /// The peer's assigned Tailscale IP addresses.
+  /// The node's assigned Tailscale IP addresses.
   final List<String> tailscaleIPs;
 
-  /// Whether the peer is currently online.
+  /// Whether the node is currently online.
   final bool online;
 
-  /// Whether Tailscale currently considers this peer active.
+  /// Whether Tailscale currently considers this node active.
   ///
   /// This is a useful hint for UI/diagnostics, but should be treated as a
   /// heuristic rather than a strict connectivity guarantee.
   final bool active;
 
-  /// Bytes received from this peer.
+  /// Bytes received from this node.
   final int rxBytes;
 
-  /// Bytes sent to this peer.
+  /// Bytes sent to this node.
   final int txBytes;
 
-  /// When this peer was last seen, or null if never.
+  /// When this node was last seen, or null if never.
   ///
-  /// Most useful for offline peers.
+  /// Most useful for offline nodes.
   final DateTime? lastSeen;
 
   /// The [DERP](https://tailscale.com/kb/1232/derp-servers) relay
   /// region code in use (for example, `nyc`), or null when the path
-  /// to this peer is direct (peer-to-peer WireGuard).
+  /// to this node is direct (node-to-node WireGuard).
   final String? relay;
 
   /// The current direct address in `host:port` form, or null if relayed.
@@ -242,23 +253,22 @@ class PeerStatus {
   /// Primarily useful for diagnostics.
   final String? curAddr;
 
-  /// This peer's first IPv4 address, or null.
+  /// This node's first IPv4 address, or null.
   String? get ipv4 => tailscaleIPs.firstIpv4;
 
-  /// Parses a peer snapshot list returned by `Tailscale.peers()`.
-  static List<PeerStatus> listFromJson(List<dynamic> json) {
+  /// Parses a node snapshot list returned by `Tailscale.nodes()`.
+  static List<TailscaleNode> listFromJson(List<dynamic> json) {
     return json
-        .map((peer) => PeerStatus.fromJson(Map<String, dynamic>.from(peer)))
+        .map((node) => TailscaleNode.fromJson(Map<String, dynamic>.from(node)))
         .toList(growable: false);
   }
 
-  /// Parses a single peer from the JSON shape produced by Go's
-  /// `ipnstate.PeerStatus`.
+  /// Parses one node from Go's `ipnstate.PeerStatus` JSON shape.
   ///
   /// Missing or malformed fields fall back to safe defaults (empty strings,
   /// `false`, `0`) rather than throwing.
-  factory PeerStatus.fromJson(Map<String, dynamic> json) {
-    return PeerStatus(
+  factory TailscaleNode.fromJson(Map<String, dynamic> json) {
+    return TailscaleNode(
       publicKey: json['PublicKey'] as String? ?? '',
       stableNodeId: json['ID'] as String? ?? '',
       hostName: json['HostName'] as String? ?? '',
@@ -278,7 +288,7 @@ class PeerStatus {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is PeerStatus &&
+      other is TailscaleNode &&
           publicKey == other.publicKey &&
           stableNodeId == other.stableNodeId &&
           hostName == other.hostName &&
@@ -295,24 +305,24 @@ class PeerStatus {
 
   @override
   int get hashCode => Object.hash(
-        publicKey,
-        stableNodeId,
-        hostName,
-        dnsName,
-        os,
-        Object.hashAll(tailscaleIPs),
-        online,
-        active,
-        rxBytes,
-        txBytes,
-        lastSeen,
-        relay,
-        curAddr,
-      );
+    publicKey,
+    stableNodeId,
+    hostName,
+    dnsName,
+    os,
+    Object.hashAll(tailscaleIPs),
+    online,
+    active,
+    rxBytes,
+    txBytes,
+    lastSeen,
+    relay,
+    curAddr,
+  );
 
   @override
   String toString() =>
-      'PeerStatus(id: $stableNodeId, hostName: $hostName, '
+      'TailscaleNode(id: $stableNodeId, hostName: $hostName, '
       'ips: $tailscaleIPs, online: $online)';
 }
 
@@ -341,5 +351,10 @@ Uri? _parseUri(dynamic value) {
   if (value is String && value.isNotEmpty) {
     return Uri.tryParse(value);
   }
+  return null;
+}
+
+String? _parseNonEmptyString(dynamic value) {
+  if (value is String && value.isNotEmpty) return value;
   return null;
 }

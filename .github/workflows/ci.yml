@@ -19,14 +19,8 @@ jobs:
         run: go test -v -count=1 ./...
 
   dart-tests:
-    name: Dart tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # Windows excluded: cgo requires MinGW/gcc which isn't on the runner.
-        # Windows is covered by the Go-only job above.
-        os: [ubuntu-latest, macos-latest]
+    name: Dart tests
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
@@ -39,10 +33,10 @@ jobs:
       - name: Analyze
         run: dart analyze lib/ test/ hook/
       - name: Tests
-        # Runs every test/*_test.dart (excluding test/e2e/, which has its
-        # own job). Files that drive FFI gate themselves via @TestOn;
-        # dart_test.yaml pins concurrency to 1 so the FFI-backed files
-        # don't stomp each other's per-process global state.
+        # Runs test/unit and test/integration. test/e2e is discovered too, but
+        # bails out unless HEADSCALE_* env vars are set; the real Headscale run
+        # has its own job below. dart_test.yaml pins concurrency to 1 so native
+        # runtime tests don't stomp per-process global state.
         run: dart test
 
   e2e-tests:

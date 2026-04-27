@@ -5,14 +5,14 @@ import '../_equality.dart';
 /// Identity of a tailnet node — the result of [Tailscale.whois].
 ///
 /// Combine with [Tailscale.tcp] `.bind(...)` to authorize incoming
-/// connections by identity: resolve the peer via `whois`, then
+/// connections by identity: resolve the node via `whois`, then
 /// check [tags] for tagged-node auth or [userLoginName] for
 /// user-owned nodes. Tags are the preferred mechanism for
 /// service-to-service auth on a tailnet; see
 /// <https://tailscale.com/kb/1068/tags>.
 @immutable
-class PeerIdentity {
-  const PeerIdentity({
+class TailscaleNodeIdentity {
+  const TailscaleNodeIdentity({
     required this.nodeId,
     required this.hostName,
     required this.userLoginName,
@@ -25,7 +25,7 @@ class PeerIdentity {
   /// identity references.
   final String nodeId;
 
-  /// Tailnet-visible hostname. Also the MagicDNS label (so the peer
+  /// Tailnet-visible hostname. Also the MagicDNS label (so the node
   /// is reachable at `<hostName>.<tailnet>.ts.net`).
   final String hostName;
 
@@ -44,7 +44,7 @@ class PeerIdentity {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is PeerIdentity &&
+      other is TailscaleNodeIdentity &&
           nodeId == other.nodeId &&
           hostName == other.hostName &&
           userLoginName == other.userLoginName &&
@@ -53,15 +53,16 @@ class PeerIdentity {
 
   @override
   int get hashCode => Object.hash(
-        nodeId,
-        hostName,
-        userLoginName,
-        Object.hashAll(tags),
-        Object.hashAll(tailscaleIPs),
-      );
+    nodeId,
+    hostName,
+    userLoginName,
+    Object.hashAll(tags),
+    Object.hashAll(tailscaleIPs),
+  );
 
   @override
-  String toString() => 'PeerIdentity(nodeId: $nodeId, hostName: $hostName, '
+  String toString() =>
+      'TailscaleNodeIdentity(nodeId: $nodeId, hostName: $hostName, '
       'userLoginName: $userLoginName, tags: $tags, '
       'tailscaleIPs: $tailscaleIPs)';
 }

@@ -40,8 +40,8 @@ func lcOr(op string) (*local.Client, error) {
 	return s.LocalClient()
 }
 
-// WhoIs resolves a tailnet IP to peer identity. Returns a JSON object
-// matching the Dart PeerIdentity shape on success. Returns `{"found":
+// WhoIs resolves a tailnet IP to node identity. Returns a JSON object
+// matching the Dart TailscaleNodeIdentity shape on success. Returns `{"found":
 // false}` when the IP isn't known on this tailnet (404 from
 // LocalAPI). All other errors surface as `{"error": ...}`.
 func WhoIs(ip string) string {
@@ -103,7 +103,9 @@ func isNotFound(err error) bool {
 	if errors.As(err, &herr) && herr.Status() == http.StatusNotFound {
 		return true
 	}
-	return strings.Contains(err.Error(), "404")
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "404") ||
+		strings.Contains(lower, "not found")
 }
 
 // classifyLocalAPIError maps a LocalAPI error to the

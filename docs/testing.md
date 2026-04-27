@@ -36,6 +36,8 @@ dart analyze
 dart test
 cd go && go test -count=1 ./...
 test/e2e/run_e2e.sh
+tool/test_pr_gate.sh
+tool/test_local_full.sh
 cd packages/demo_core && dart test
 cd packages/demo_flutter && flutter test
 ```
@@ -43,3 +45,44 @@ cd packages/demo_flutter && flutter test
 Run Dart test commands serially. Several integration tests load the native
 runtime, which has process-global state, and the native-assets hook can race if
 multiple test commands rebuild the shared library at once.
+
+## Validation Tiers
+
+### Required PR Gate
+
+PR CI is intentionally narrow and fast. It runs on Linux and covers:
+
+- Go tests.
+- Dart analysis and root tests.
+- Headscale E2E.
+
+Run the same shape locally with:
+
+```bash
+tool/test_pr_gate.sh
+```
+
+### Local Full Suite
+
+Run this before merging large transport changes or cutting releases:
+
+```bash
+tool/test_local_full.sh
+```
+
+This runs the PR gate, demo core tests, Flutter demo widget tests, and
+`git diff --check`.
+
+### Platform Compatibility Suite
+
+Run this when changing native assets, fd transport, mobile startup, packaging,
+or platform-specific networking:
+
+- macOS: run the Flutter demo on macOS and execute the probe.
+- iOS: run the Flutter demo on simulator or device and execute the probe.
+- Android: run the Flutter demo on emulator or device and execute the probe.
+- Linux: run `tool/test_pr_gate.sh`, which includes Docker Headscale E2E.
+
+Real iOS/Android devices remain the release-confidence path because simulators
+and emulators do not fully cover ARM64 packaging, mobile networking, app
+lifecycle, or device-specific sandbox behavior.

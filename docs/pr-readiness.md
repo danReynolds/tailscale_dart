@@ -54,6 +54,8 @@ Automated validation to run before merge:
 - Flutter demo tests: `(cd packages/demo_flutter && flutter test)`
 - Go unit tests: `(cd go && go test -count=1 ./...)`
 - Headscale E2E: `test/e2e/run_e2e.sh`
+- Local PR gate: `tool/test_pr_gate.sh`
+- Local full suite: `tool/test_local_full.sh`
 - Whitespace check: `git diff --check`
 
 Run Dart test commands serially. Running multiple `dart test` invocations in

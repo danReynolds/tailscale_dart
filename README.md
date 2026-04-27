@@ -242,6 +242,8 @@ dart analyze                                     # Static analysis
 dart test                                        # Unit + local integration tests
 cd go && go test -count=1 ./...                  # Go tests
 test/e2e/run_e2e.sh                              # E2E against Headscale in Docker
+tool/test_pr_gate.sh                             # Local equivalent of required PR checks
+tool/test_local_full.sh                          # PR gate + demo package tests
 cd packages/demo_core && dart test --enable-experiment=native-assets
 cd packages/demo_flutter && flutter test
 ```

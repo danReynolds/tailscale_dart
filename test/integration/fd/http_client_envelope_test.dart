@@ -11,7 +11,7 @@ import 'package:tailscale/src/fd_transport.dart';
 import 'package:tailscale/src/http_fd_client.dart';
 import 'package:test/test.dart';
 
-import 'support/posix_fd_test_support.dart';
+import '../support/posix_fd_test_support.dart';
 
 void main() {
   test('parses response head and body bytes from the same fd chunk', () async {

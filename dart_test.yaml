@@ -1,11 +1,10 @@
-# The FFI-backed tests (lifecycle, http, ffi_bindings) drive the embedded
-# Go runtime, which holds per-process global state (tsnet.Server,
-# SQLiteStore). Running them in parallel isolates causes the processes
-# to stomp each other's state. Pure-Dart tests are fast enough that
-# forcing the whole run serial is cheaper than tagging selectively.
+# Integration tests under test/integration/ drive the embedded Go runtime,
+# which holds per-process global state (tsnet.Server, SQLiteStore). Running
+# them in parallel isolates causes the processes to stomp each other's state.
+# Pure-Dart tests are fast enough that forcing the whole run serial is cheaper
+# than tagging selectively.
 concurrency: 1
 
-# `dart test` with no args recurses into test/ (including test/e2e/).
-# The e2e suite bails out early without HEADSCALE env vars set, so it's
-# a no-op in the default dart-tests CI job and only does real work in
-# the e2e-tests job which sets those vars.
+# `dart test` with no args recurses into test/ (including test/e2e/). The E2E
+# suite bails out early without HEADSCALE env vars set, so it is a no-op in the
+# default dart-tests CI job and only does real work in the e2e-tests job.

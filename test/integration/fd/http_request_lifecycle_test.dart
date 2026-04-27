@@ -9,7 +9,7 @@ import 'package:tailscale/src/api/http.dart';
 import 'package:tailscale/src/fd_transport.dart';
 import 'package:test/test.dart';
 
-import 'support/posix_fd_test_support.dart';
+import '../support/posix_fd_test_support.dart';
 
 void main() {
   group('TailscaleHttpRequest fd lifecycle', () {

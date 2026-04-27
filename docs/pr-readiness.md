@@ -48,7 +48,8 @@ Manual validation:
 Automated validation to run before merge:
 
 - Dart static analysis: `dart analyze`
-- Dart root tests: `dart test`
+- Dart root tests: `dart test` (unit + local integration; E2E skips unless
+  Headscale env vars are set)
 - Demo core tests: `(cd packages/demo_core && dart test)`
 - Flutter demo tests: `(cd packages/demo_flutter && flutter test)`
 - Go unit tests: `(cd go && go test -count=1 ./...)`

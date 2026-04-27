@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:tailscale/src/runtime_connection.dart';
 import 'package:test/test.dart';
 
-import 'support/posix_fd_test_support.dart';
+import '../support/posix_fd_test_support.dart';
 
 void main() {
   group(

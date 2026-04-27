@@ -18,6 +18,10 @@ import 'package:path/path.dart' as p;
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
+import 'support/native_asset_workaround.dart';
+import 'support/peer_process.dart';
+import 'support/state_waiters.dart';
+
 void main() {
   final controlUrl = Platform.environment['HEADSCALE_URL'];
   final authKey = Platform.environment['HEADSCALE_AUTH_KEY'];
@@ -32,57 +36,11 @@ void main() {
   late String stateDir;
 
   setUpAll(() async {
-    // Warm up the package's native build hook by invoking peer_main.dart
-    // once with PEER_WARMUP=1 (it exits immediately). This populates the
-    // hook framework's cache and materializes
-    // .dart_tool/lib/libtailscale.so before this process tries to mmap it.
-    final warmup = await Process.run(
-      Platform.resolvedExecutable,
-      ['run', '--enable-experiment=native-assets', 'test/e2e/peer_main.dart'],
-      environment: {...Platform.environment, 'PEER_WARMUP': '1'},
-    );
-    if (warmup.exitCode != 0) {
-      throw StateError(
-        'Peer warmup failed (exit ${warmup.exitCode})\n'
-        'stdout: ${warmup.stdout}\nstderr: ${warmup.stderr}',
-      );
-    }
+    await prepareNativeAssetForPeerSubprocesses();
 
-    // Load the .so via FFI in this process.
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
     Tailscale.init(stateDir: stateDir);
     tsnet = Tailscale.instance;
-
-    // Detach the loaded .so from its directory entry so subsequent
-    // subprocess `dart run` invocations can't crash this process.
-    //
-    // The Dart hooks framework re-copies the cached
-    // .so → .dart_tool/lib/libtailscale.so on every `dart run`,
-    // truncating and rewriting the existing inode in place. On Linux,
-    // overwriting an mmap'd file kills mappers with SIGBUS. We can't
-    // change the framework, so we rename a freshly-copied sibling over
-    // the original: the directory entry now points to a NEW inode, the
-    // kernel keeps the OLD inode (which we have mmap'd) alive until we
-    // exit, and any future framework copy hits the new inode without
-    // touching our mapping.
-    //
-    // TODO: remove this workaround once we're on a Dart stable that
-    // includes the upstream fix. Tracked in dart-lang/native#2921; fix
-    // merged on `main` 2026-01-07 as dart-lang/sdk@3e020921 ("[dartdev]
-    // Delete and create dylibs instead of truncate") but is not in Dart
-    // 3.11.5. Expected to ship with Dart 3.12+.
-    if (Platform.isLinux) {
-      const libPath = '.dart_tool/lib/libtailscale.so';
-      final detachedPath = '$libPath.detached';
-      final cp = await Process.run('cp', ['-f', libPath, detachedPath]);
-      if (cp.exitCode != 0) {
-        throw StateError('cp failed: ${cp.stderr}');
-      }
-      final mv = await Process.run('mv', [detachedPath, libPath]);
-      if (mv.exitCode != 0) {
-        throw StateError('mv failed: ${mv.stderr}');
-      }
-    }
   });
 
   tearDownAll(() async {
@@ -98,7 +56,7 @@ void main() {
     // Records the full emitted sequence (not just the Running terminal) so
     // we catch skipped intermediates. Contract from `Tailscale.up` docs:
     // a fresh login goes through `starting` on its way to `running`.
-    final sequence = await _recordUntil(
+    final sequence = await recordUntil(
       tsnet,
       NodeState.running,
       () => tsnet.up(
@@ -142,7 +100,7 @@ void main() {
   // pattern. Currently un-skipped while diagnosing; the CI workflow dumps
   // /tmp/dune_hook.log on failure (DUNE_HOOK_LOG=1 is set in env).
   group('two-node connectivity', () {
-    late _PeerProcess peer;
+    late PeerProcess peer;
     late String peerStateDir;
     final peerResponseBody =
         'hello from peer ${DateTime.now().microsecondsSinceEpoch}';
@@ -151,7 +109,7 @@ void main() {
       peerStateDir = Directory.systemTemp
           .createTempSync('tailscale_e2e_peer_')
           .path;
-      peer = await _PeerProcess.spawn(
+      peer = await PeerProcess.spawn(
         stateDir: peerStateDir,
         controlUrl: controlUrl,
         authKey: authKey,
@@ -406,7 +364,7 @@ void main() {
     });
 
     test('first launch registers and persists credentials', () async {
-      final peer = await _PeerProcess.spawn(
+      final peer = await PeerProcess.spawn(
         stateDir: persistStateDir,
         controlUrl: controlUrl,
         authKey: authKey,
@@ -422,7 +380,7 @@ void main() {
     });
 
     test('second launch reconnects without an authKey', () async {
-      final peer = await _PeerProcess.spawn(
+      final peer = await PeerProcess.spawn(
         stateDir: persistStateDir,
         controlUrl: controlUrl,
         // Deliberately no authKey — must come up from persisted state.
@@ -474,16 +432,16 @@ void main() {
         tsnet.up(hostname: hostname, controlUrl: Uri.parse(controlUrl));
 
     setUp(() async {
-      // Route each normalization transition through [_recordUntil] so its
+      // Route each normalization transition through [recordUntil] so its
       // events are captured by setUp's subscription instead of leaking
       // into the test's subscription.
       switch ((await tsnet.status()).state) {
         case NodeState.noState:
           // Logout wiped creds. Re-establish and shut down.
-          await _recordUntil(tsnet, NodeState.running, bringUp);
-          await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
+          await recordUntil(tsnet, NodeState.running, bringUp);
+          await recordUntil(tsnet, NodeState.stopped, tsnet.down);
         case NodeState.running:
-          await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
+          await recordUntil(tsnet, NodeState.stopped, tsnet.down);
         case NodeState.stopped:
           break;
         case final unexpected:
@@ -492,7 +450,7 @@ void main() {
     });
 
     test('up with auth key emits Starting → Running', () async {
-      final sequence = await _recordUntil(tsnet, NodeState.running, bringUp);
+      final sequence = await recordUntil(tsnet, NodeState.running, bringUp);
 
       expect(
         sequence,
@@ -505,9 +463,9 @@ void main() {
     });
 
     test('down from running emits [Stopped]', () async {
-      await _recordUntil(tsnet, NodeState.running, bringUp);
+      await recordUntil(tsnet, NodeState.running, bringUp);
 
-      final sequence = await _recordUntil(tsnet, NodeState.stopped, tsnet.down);
+      final sequence = await recordUntil(tsnet, NodeState.stopped, tsnet.down);
 
       expect(
         sequence,
@@ -521,7 +479,7 @@ void main() {
     });
 
     test('up without auth key reconnects via persisted credentials', () async {
-      final sequence = await _recordUntil(tsnet, NodeState.running, reconnect);
+      final sequence = await recordUntil(tsnet, NodeState.running, reconnect);
 
       expect(
         sequence,
@@ -573,9 +531,9 @@ void main() {
     test(
       'logout from running emits [Stopped, NoState] and clears creds',
       () async {
-        await _recordUntil(tsnet, NodeState.running, bringUp);
+        await recordUntil(tsnet, NodeState.running, bringUp);
 
-        final sequence = await _recordUntil(
+        final sequence = await recordUntil(
           tsnet,
           NodeState.noState,
           tsnet.logout,
@@ -600,7 +558,7 @@ void main() {
     );
 
     test('logout from stopped emits [NoState] (no phantom Stopped)', () async {
-      final sequence = await _recordUntil(
+      final sequence = await recordUntil(
         tsnet,
         NodeState.noState,
         tsnet.logout,
@@ -630,7 +588,7 @@ void main() {
       });
 
       // First up — real transition, emits Running.
-      await _recordUntil(tsnet, NodeState.running, bringUp);
+      await recordUntil(tsnet, NodeState.running, bringUp);
       // Second up without an auth key — Go's Start returns early (srv
       // != nil, authKey == ""), but the worker still runs
       // duneStopWatch + duneStartWatch. The new watcher's
@@ -653,7 +611,7 @@ void main() {
       // Bring up *before* subscribing so the IPN watcher's initial
       // NoState emit (during engine startup) doesn't show up in our
       // count — we want to isolate the logout emits.
-      await _recordUntil(tsnet, NodeState.running, bringUp);
+      await recordUntil(tsnet, NodeState.running, bringUp);
 
       var noStateCount = 0;
       final sub = tsnet.onStateChange.listen((s) {
@@ -663,7 +621,7 @@ void main() {
       // First logout — emits Stopped then NoState. Both pass (different
       // from each other; the previous-state filter starts at null for this
       // fresh stream).
-      await _recordUntil(tsnet, NodeState.noState, tsnet.logout);
+      await recordUntil(tsnet, NodeState.noState, tsnet.logout);
 
       // Second logout — srv already nil (wasRunning guard skips Stop's
       // Stopped publish), state dir already gone, but Logout still
@@ -683,108 +641,4 @@ void main() {
       );
     });
   });
-}
-
-/// Headscale (first-boot auth can be the slow leg on CI runners). The
-/// terminal-state paths (Stopped, NoState) are synthetic and nearly
-/// instant, so the extra headroom costs nothing when the test succeeds.
-Future<List<NodeState>> _recordUntil(
-  Tailscale tsnet,
-  NodeState terminal,
-  Future<void> Function() action, {
-  Duration timeout = const Duration(seconds: 30),
-}) async {
-  final sequence = <NodeState>[];
-  final done = Completer<void>();
-
-  final sub = tsnet.onStateChange.listen((s) {
-    sequence.add(s);
-    if (s == terminal && !done.isCompleted) done.complete();
-  });
-
-  try {
-    await action();
-    await done.future.timeout(
-      timeout,
-      onTimeout: () => throw TimeoutException(
-        'onStateChange never emitted $terminal; '
-        'got [${sequence.join(' → ')}]',
-      ),
-    );
-    return sequence;
-  } finally {
-    await sub.cancel();
-  }
-}
-
-/// Handle to a `peer_main.dart` subprocess that has reached Running and
-/// announced its tailnet IPv4.
-class _PeerProcess {
-  _PeerProcess._(this._process, this.ipv4, this.hostname);
-
-  final Process _process;
-  final String ipv4;
-  final String hostname;
-
-  static Future<_PeerProcess> spawn({
-    required String stateDir,
-    required String controlUrl,
-    required String hostname,
-    String? authKey,
-    String? responseBody,
-  }) async {
-    final process = await Process.start(
-      Platform.resolvedExecutable,
-      ['run', '--enable-experiment=native-assets', 'test/e2e/peer_main.dart'],
-      environment: {
-        ...Platform.environment,
-        'STATE_DIR': stateDir,
-        'CONTROL_URL': controlUrl,
-        'HOSTNAME': hostname,
-        if (authKey != null) 'AUTH_KEY': authKey,
-        if (responseBody != null) 'RESPONSE_BODY': responseBody,
-      },
-    );
-
-    unawaited(
-      process.stderr
-          .transform(utf8.decoder)
-          .forEach((chunk) => stderr.write('[peer stderr] $chunk')),
-    );
-
-    final ready = Completer<String>();
-    final readyRegex = RegExp(r'READY\s+(\S+)');
-    unawaited(
-      process.stdout
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .forEach((line) {
-            stdout.writeln('[peer $hostname] $line');
-            final match = readyRegex.firstMatch(line);
-            if (match != null && !ready.isCompleted) {
-              ready.complete(match.group(1)!);
-            }
-          }),
-    );
-
-    final ipv4 = await ready.future.timeout(
-      const Duration(seconds: 90),
-      onTimeout: () {
-        process.kill(ProcessSignal.sigterm);
-        throw StateError('peer "$hostname" did not become ready within 90s');
-      },
-    );
-    return _PeerProcess._(process, ipv4, hostname);
-  }
-
-  /// Gracefully shut the peer down by closing its stdin; falls back to
-  /// SIGTERM if it doesn't exit within 15 seconds.
-  Future<void> shutdown() async {
-    try {
-      await _process.stdin.close();
-      await _process.exitCode.timeout(const Duration(seconds: 15));
-    } catch (_) {
-      _process.kill(ProcessSignal.sigterm);
-    }
-  }
 }

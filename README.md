@@ -239,7 +239,7 @@ The Go layer wraps [`tailscale.com/tsnet`](https://pkg.go.dev/tailscale.com/tsne
 
 ```bash
 dart analyze                                     # Static analysis
-dart test                                        # Root unit and integration-style tests
+dart test                                        # Unit + local integration tests
 cd go && go test -count=1 ./...                  # Go tests
 test/e2e/run_e2e.sh                              # E2E against Headscale in Docker
 cd packages/demo_core && dart test --enable-experiment=native-assets
@@ -247,6 +247,7 @@ cd packages/demo_flutter && flutter test
 ```
 
 The E2E suite starts a [Headscale](https://github.com/juanfont/headscale) server in Docker, creates an ephemeral auth key, connects a real embedded node, verifies IP assignment and node discovery, then cleans up. No Tailscale account needed.
+See [docs/testing.md](docs/testing.md) for the test layout and placement rules.
 
 ## License
 

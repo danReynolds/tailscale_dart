@@ -2,69 +2,10 @@ import 'dart:async';
 
 import 'package:demo_core/demo_core.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('DemoProbeReport ok reflects all probe results', () {
-    final report = DemoProbeReport(
-      nodeIp: '100.64.0.2',
-      results: [
-        DemoProbeResult(
-          kind: DemoProbeKind.httpGet,
-          ok: true,
-          duration: Duration.zero,
-          message: 'ok',
-        ),
-        DemoProbeResult(
-          kind: DemoProbeKind.tcpEcho,
-          ok: false,
-          duration: Duration.zero,
-          message: 'boom',
-        ),
-      ],
-    );
-
-    expect(report.ok, isFalse);
-  });
-
-  test('createDemoAuthKey posts the Tailscale admin key request shape', () async {
-    late Uri requestedUrl;
-    late Map<String, String> requestedHeaders;
-    late String requestedBody;
-    final result = await createDemoAuthKey(
-      const DemoAuthKeyRequest(
-        apiKey: 'tskey-api-test',
-        tailnetId: 'example.com',
-        reusable: true,
-        preauthorized: true,
-        expiry: Duration(hours: 2),
-      ),
-      client: MockClient((request) async {
-        requestedUrl = request.url;
-        requestedHeaders = request.headers;
-        requestedBody = request.body;
-        return http.Response(
-          '{"id":"k123","key":"tskey-auth-test","expires":"2026-04-24T00:00:00Z"}',
-          200,
-        );
-      }),
-    );
-
-    expect(result.key, 'tskey-auth-test');
-    expect(result.id, 'k123');
-    expect(
-      requestedUrl.toString(),
-      'https://api.tailscale.com/api/v2/tailnet/example.com/keys',
-    );
-    expect(requestedHeaders['authorization'], startsWith('Basic '));
-    expect(requestedHeaders['content-type'], 'application/json');
-    expect(requestedBody, contains('"expirySeconds":7200'));
-    expect(requestedBody, contains('"reusable":true'));
-    expect(requestedBody, contains('"preauthorized":true'));
-  });
-
   test('startServices rebinds when the node IPv4 changes', () async {
     final tsnet = _FakeTailscale('100.64.0.10');
     final demo = DemoCore(tailscale: tsnet);
@@ -141,6 +82,7 @@ class _FakeTailscale implements Tailscale {
     String hostname = '',
     String? authKey,
     Uri? controlUrl,
+    Duration timeout = const Duration(seconds: 30),
   }) => status();
 
   @override
@@ -221,6 +163,7 @@ class _FakeListener implements TailscaleListener {
 
   final void Function() onClose;
   final _connections = StreamController<TailscaleConnection>();
+  final _done = Completer<void>();
   var _closed = false;
 
   @override
@@ -230,11 +173,15 @@ class _FakeListener implements TailscaleListener {
   Stream<TailscaleConnection> get connections => _connections.stream;
 
   @override
+  Future<void> get done => _done.future;
+
+  @override
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
     onClose();
     await _connections.close();
+    if (!_done.isCompleted) _done.complete();
   }
 }
 

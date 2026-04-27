@@ -3,7 +3,7 @@
 /// exported function returns the documented shape when invoked in
 /// isolation (before any server startup).
 ///
-/// Public-API lifecycle tests live in `test/lifecycle_test.dart`; this
+/// Public-API lifecycle tests live in `test/integration/runtime/lifecycle_test.dart`; this
 /// file is intentionally scoped to the binding surface that sits
 /// between Dart and Go.
 @TestOn('mac-os || linux')

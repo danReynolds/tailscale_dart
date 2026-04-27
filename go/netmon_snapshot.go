@@ -65,7 +65,7 @@ func ConfigureHostNetworkSnapshot(raw string) error {
 		})
 	})
 
-	netmon.UpdateLastKnownDefaultRouteInterface(defaultRoute)
+	updateLastKnownDefaultRouteInterface(defaultRoute)
 	return nil
 }
 

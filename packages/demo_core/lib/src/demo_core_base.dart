@@ -235,19 +235,26 @@ final class DemoCore {
     DemoServiceConfig config = const DemoServiceConfig(),
     Duration timeout = const Duration(seconds: 15),
   }) async {
-    // The probes are independent and each opens its own connection, so run
-    // them concurrently. Future.wait preserves input order in the output.
-    final results = await Future.wait(<Future<DemoProbeResult>>[
-      _runProbe(DemoProbeKind.ping, () async {
+    // Probes are sequential. Parallelizing all six fd-backed probes hit the
+    // per-fd-isolate scaling ceiling described in docs/rfc-shared-fd-reactor.md
+    // — measured ~5.2s per probe vs ~50ms sequential. Revisit once the shared
+    // POSIX fd reactor lands.
+    final results = <DemoProbeResult>[];
+    results.add(
+      await _runProbe(DemoProbeKind.ping, () async {
         final result = await _tsnet.diag.ping(nodeIp, timeout: timeout);
         return 'latency ${result.latency.inMilliseconds}ms via ${result.path.name}';
       }),
-      _runProbe(DemoProbeKind.whois, () async {
+    );
+    results.add(
+      await _runProbe(DemoProbeKind.whois, () async {
         final identity = await _tsnet.whois(nodeIp);
         if (identity == null) throw StateError('node identity not found');
         return identity.hostName;
       }),
-      _runProbe(DemoProbeKind.httpGet, () async {
+    );
+    results.add(
+      await _runProbe(DemoProbeKind.httpGet, () async {
         final uri = Uri.parse('http://$nodeIp:${config.httpTailnetPort}/demo');
         final response = await _tsnet.http.client.get(uri).timeout(timeout);
         if (response.statusCode != 200) {
@@ -255,7 +262,9 @@ final class DemoCore {
         }
         return response.body;
       }),
-      _runProbe(DemoProbeKind.httpPost, () async {
+    );
+    results.add(
+      await _runProbe(DemoProbeKind.httpPost, () async {
         final payload = _payload('http');
         final uri = Uri.parse('http://$nodeIp:${config.httpTailnetPort}/echo');
         final response = await _tsnet.http.client
@@ -266,7 +275,9 @@ final class DemoCore {
         }
         return 'echoed ${payload.length} bytes';
       }),
-      _runProbe(DemoProbeKind.tcpEcho, () async {
+    );
+    results.add(
+      await _runProbe(DemoProbeKind.tcpEcho, () async {
         final payload = utf8.encode(_payload('tcp'));
         final conn = await _tsnet.tcp
             .dial(nodeIp, config.tcpPort, timeout: timeout)
@@ -287,7 +298,9 @@ final class DemoCore {
           await conn.close();
         }
       }),
-      _runProbe(DemoProbeKind.udpEcho, () async {
+    );
+    results.add(
+      await _runProbe(DemoProbeKind.udpEcho, () async {
         final status = await _tsnet.status();
         final localIp = status.ipv4;
         if (localIp == null || localIp.isEmpty) {
@@ -315,7 +328,7 @@ final class DemoCore {
           await binding.close();
         }
       }),
-    ]);
+    );
 
     return DemoProbeReport(
       nodeIp: nodeIp,

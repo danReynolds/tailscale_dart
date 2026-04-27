@@ -1,12 +1,7 @@
 import 'dart:io';
 
-/// Prepares the native asset before the E2E test starts peer subprocesses.
-///
-/// The warmup call forces Dart's native-assets hook to build and cache the
-/// shared library once. On Linux, the detach step avoids SIGBUS when later
-/// `dart run` subprocesses cause the hook framework to rewrite the same dylib
-/// path while the parent process has it mmap'd.
-Future<void> prepareNativeAssetForPeerSubprocesses() async {
+/// Forces the native-assets hook to build and cache the shared library once.
+Future<void> warmUpNativeAssetForPeerSubprocesses() async {
   final warmup = await Process.run(
     Platform.resolvedExecutable,
     ['run', '--enable-experiment=native-assets', 'test/e2e/peer_main.dart'],
@@ -18,7 +13,21 @@ Future<void> prepareNativeAssetForPeerSubprocesses() async {
       'stdout: ${warmup.stdout}\nstderr: ${warmup.stderr}',
     );
   }
+}
 
+/// Detaches the loaded Linux `.so` from its directory entry.
+///
+/// Call this after `Tailscale.init()` has loaded the library via FFI. The Dart
+/// hooks framework re-copies `.dart_tool/lib/libtailscale.so` on every
+/// `dart run`, truncating and rewriting the existing inode in place. On Linux,
+/// overwriting an mmap'd file kills mappers with SIGBUS. Renaming a freshly
+/// copied sibling over the original gives future subprocess hook runs a new
+/// inode while the current process keeps its already-mmap'd inode alive.
+///
+/// TODO: remove this once the project is on a Dart stable that includes
+/// dart-lang/sdk@3e020921 ("[dartdev] Delete and create dylibs instead of
+/// truncate"), expected in Dart 3.12+.
+Future<void> detachLoadedNativeAssetForPeerSubprocesses() async {
   if (!Platform.isLinux) return;
 
   const libPath = '.dart_tool/lib/libtailscale.so';

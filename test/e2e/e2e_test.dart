@@ -36,11 +36,12 @@ void main() {
   late String stateDir;
 
   setUpAll(() async {
-    await prepareNativeAssetForPeerSubprocesses();
+    await warmUpNativeAssetForPeerSubprocesses();
 
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
     Tailscale.init(stateDir: stateDir);
     tsnet = Tailscale.instance;
+    await detachLoadedNativeAssetForPeerSubprocesses();
   });
 
   tearDownAll(() async {

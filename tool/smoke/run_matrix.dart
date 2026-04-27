@@ -39,6 +39,16 @@ final class _SmokeMatrixRunner {
     final stateRoot = Directory.systemTemp.createTempSync('dune_smoke_matrix_');
     _ManagedPeer? peer;
     var headscaleStarted = false;
+    // Pre-builds run in parallel with peer setup since auth key + target IP
+    // are no longer compile-time constants. The futures resolve to the path
+    // of the built artifact, used by `flutter run --use-application-binary`.
+    final preBuildFutures = <String, Future<String>>{};
+    if (config.preBuild) {
+      for (final target in config.targets) {
+        if (_buildArgsFor(target) == null) continue;
+        preBuildFutures[target] = _preBuildTarget(target);
+      }
+    }
     try {
       await _startRunnerServer();
       await _startHeadscale();
@@ -70,7 +80,10 @@ final class _SmokeMatrixRunner {
       final runs = config.targets
           .map((target) => _TargetLaunch(target, _deviceIdFor(target, devices)))
           .toList(growable: false);
-      final results = await _runFlutterTargets(runs: runs);
+      final results = await _runFlutterTargets(
+        runs: runs,
+        preBuildFutures: preBuildFutures,
+      );
 
       final failed = results.where((result) => !result.ok).toList();
       final skipped = results.where((result) => result.skipped).toList();
@@ -109,8 +122,83 @@ final class _SmokeMatrixRunner {
         }),
         _stopLaunchedAndroidEmulator(),
         _stopRunnerServer(),
+        // Drain any still-pending pre-builds so the runner doesn't leave
+        // stray flutter build subprocesses behind. Errors are absorbed.
+        for (final future in preBuildFutures.values)
+          future.then((_) {}, onError: (Object _) {}),
       ]);
     }
+  }
+
+  List<String>? _buildArgsFor(String target) {
+    switch (target) {
+      case 'macos':
+        return ['build', 'macos', '--debug'];
+      case 'ios':
+        // Pre-build for the iOS simulator. If the user pinned an iOS device
+        // override, fall back to flutter run's inline build (skip pre-build).
+        if (config.deviceOverrides.containsKey('ios')) return null;
+        return [
+          'build',
+          'ios',
+          '--simulator',
+          '--debug',
+          '--no-codesign',
+        ];
+      case 'android':
+        return ['build', 'apk', '--${config.androidRunMode}'];
+      default:
+        return null;
+    }
+  }
+
+  String _binaryPathFor(String target) {
+    switch (target) {
+      case 'macos':
+        return '$smokeAppDir/build/macos/Build/Products/Debug/'
+            'dune_smoke_flutter.app';
+      case 'ios':
+        return '$smokeAppDir/build/ios/iphonesimulator/Runner.app';
+      case 'android':
+        final mode = config.androidRunMode;
+        return '$smokeAppDir/build/app/outputs/flutter-apk/app-$mode.apk';
+      default:
+        throw StateError('no binary path for $target');
+    }
+  }
+
+  Future<String> _preBuildTarget(String target) async {
+    final args = _buildArgsFor(target);
+    if (args == null) {
+      throw StateError('pre-build not supported for $target');
+    }
+    _log('pre-building $target ($args)');
+    final sw = Stopwatch()..start();
+    final process = await Process.start(
+      config.flutter,
+      args,
+      workingDirectory: smokeAppDir,
+    );
+    final stdoutSub = process.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((line) => stdout.writeln('[$target/build] $line'));
+    final stderrSub = process.stderr
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((line) => stderr.writeln('[$target/build] $line'));
+    final exitCode = await process.exitCode;
+    await stdoutSub.cancel();
+    await stderrSub.cancel();
+    if (exitCode != 0) {
+      throw StateError('flutter build $target exited with $exitCode');
+    }
+    final path = _binaryPathFor(target);
+    _log(
+      'pre-built $target in ${sw.elapsed.inSeconds}s '
+      '(${path.split('/').last})',
+    );
+    return path;
   }
 
   Future<void> _startRunnerServer() async {
@@ -337,9 +425,19 @@ final class _SmokeMatrixRunner {
   Future<_TargetRun> _runFlutterTarget({
     required String target,
     required String deviceId,
+    Future<String>? preBuildFuture,
   }) async {
     if (target == 'android') {
       await _waitForAndroidReady(deviceId);
+    }
+    String? binaryPath;
+    if (preBuildFuture != null) {
+      try {
+        binaryPath = await preBuildFuture;
+        _log('$target using pre-built binary at $binaryPath');
+      } catch (error) {
+        _log('$target pre-build failed: $error; falling back to inline build');
+      }
     }
     final runnerUrl = _runnerUrlFor(target);
     _log('running $target smoke on Flutter device $deviceId');
@@ -349,6 +447,7 @@ final class _SmokeMatrixRunner {
       '-d',
       deviceId,
       '--$runMode',
+      if (binaryPath != null) ...['--use-application-binary', binaryPath],
       '--dart-define=DUNE_SMOKE_RUNNER_URL=$runnerUrl',
       '--dart-define=DUNE_SMOKE_SESSION=$target',
     ], workingDirectory: smokeAppDir);
@@ -454,11 +553,12 @@ final class _SmokeMatrixRunner {
 
   Future<List<_TargetRun>> _runFlutterTargets({
     required List<_TargetLaunch> runs,
+    required Map<String, Future<String>> preBuildFutures,
   }) async {
     if (config.jobs <= 1) {
       final results = <_TargetRun>[];
       for (final run in runs) {
-        results.add(await _runOrSkipTarget(run));
+        results.add(await _runOrSkipTarget(run, preBuildFutures));
       }
       return results;
     }
@@ -470,7 +570,7 @@ final class _SmokeMatrixRunner {
         final index = next;
         if (index >= runs.length) return;
         next++;
-        results[index] = await _runOrSkipTarget(runs[index]);
+        results[index] = await _runOrSkipTarget(runs[index], preBuildFutures);
       }
     }
 
@@ -479,14 +579,21 @@ final class _SmokeMatrixRunner {
     return results.cast<_TargetRun>();
   }
 
-  Future<_TargetRun> _runOrSkipTarget(_TargetLaunch run) async {
+  Future<_TargetRun> _runOrSkipTarget(
+    _TargetLaunch run,
+    Map<String, Future<String>> preBuildFutures,
+  ) async {
     final deviceId = run.deviceId;
     if (deviceId == null) {
       final skipped = _TargetRun.skipped(run.target, 'no Flutter device found');
       _log('${run.target.toUpperCase()} SKIP ${skipped.message}');
       return skipped;
     }
-    return _runFlutterTarget(target: run.target, deviceId: deviceId);
+    return _runFlutterTarget(
+      target: run.target,
+      deviceId: deviceId,
+      preBuildFuture: preBuildFutures[run.target],
+    );
   }
 
   String _controlUrlFor(String target) {
@@ -793,6 +900,7 @@ final class _Config {
     required this.jobs,
     required this.keepHeadscale,
     required this.keepAndroidEmulator,
+    required this.preBuild,
     required this.strict,
     required this.help,
   });
@@ -813,6 +921,7 @@ final class _Config {
   final int jobs;
   final bool keepHeadscale;
   final bool keepAndroidEmulator;
+  final bool preBuild;
   final bool strict;
   final bool help;
 
@@ -929,6 +1038,7 @@ final class _Config {
       keepHeadscale:
           flags.contains('keep-headscale') || flags.contains('reuse-headscale'),
       keepAndroidEmulator: flags.contains('keep-android-emulator'),
+      preBuild: !flags.contains('no-pre-build'),
       strict: flags.contains('strict'),
       help: flags.contains('help'),
     );
@@ -1000,6 +1110,12 @@ Options:
                                       visible. Default: apple_ios_simulator.
                                       The runner prefers simulators over
                                       physical iOS devices for automation.
+  --no-pre-build                      Skip pre-building target binaries in
+                                      parallel with peer setup. Default is to
+                                      pre-build via `flutter build` and launch
+                                      with `flutter run --use-application-binary`,
+                                      moving the per-target build off the
+                                      critical path.
   --macos-device ID                   Flutter device id override.
   --ios-device ID                     Flutter device id override.
   --android-device ID                 Flutter device id override.

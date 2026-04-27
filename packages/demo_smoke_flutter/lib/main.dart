@@ -10,17 +10,33 @@ import 'package:path_provider/path_provider.dart';
 const _resultPrefix = 'DUNE_SMOKE_RESULT ';
 const _defaultTimeout = Duration(seconds: 120);
 
-const _controlUrl = String.fromEnvironment('DUNE_SMOKE_CONTROL_URL');
-const _authKey = String.fromEnvironment('DUNE_SMOKE_AUTH_KEY');
-const _targetIp = String.fromEnvironment('DUNE_SMOKE_TARGET_IP');
-const _hostname = String.fromEnvironment(
-  'DUNE_SMOKE_HOSTNAME',
-  defaultValue: 'dune-smoke-flutter',
+// Compile-time only: where to fetch run-time config from. Stable across
+// matrix runs on the same machine + target, so dart-defines don't change
+// and Flutter doesn't have to rebuild between repeat runs.
+const _runnerUrl = String.fromEnvironment(
+  'DUNE_SMOKE_RUNNER_URL',
+  defaultValue: 'http://localhost:18099',
 );
-const _stateSuffix = String.fromEnvironment(
-  'DUNE_SMOKE_STATE_SUFFIX',
+const _session = String.fromEnvironment(
+  'DUNE_SMOKE_SESSION',
   defaultValue: 'default',
 );
+
+class _SmokeConfig {
+  const _SmokeConfig({
+    required this.controlUrl,
+    required this.authKey,
+    required this.targetIp,
+    required this.hostname,
+    required this.stateSuffix,
+  });
+
+  final String controlUrl;
+  final String authKey;
+  final String targetIp;
+  final String hostname;
+  final String stateSuffix;
+}
 
 void main() {
   runApp(const SmokeApp());
@@ -69,6 +85,7 @@ class _SmokeHomeState extends State<SmokeHome> {
 
   bool _running = false;
   SmokeResult? _result;
+  _SmokeConfig? _config;
 
   @override
   void initState() {
@@ -106,21 +123,23 @@ class _SmokeHomeState extends State<SmokeHome> {
     });
 
     final startedAt = DateTime.now().toUtc();
+    _SmokeConfig? config;
     try {
-      _requireConfig('DUNE_SMOKE_CONTROL_URL', _controlUrl);
-      _requireConfig('DUNE_SMOKE_AUTH_KEY', _authKey);
-      _requireConfig('DUNE_SMOKE_TARGET_IP', _targetIp);
+      _event('fetching config from $_runnerUrl session=$_session');
+      config = await _fetchConfig().timeout(_defaultTimeout);
+      if (mounted) setState(() => _config = config);
+      _event('config target=${config.targetIp} host=${config.hostname}');
 
-      final stateDir = await _stateDir();
+      final stateDir = await _stateDir(config.stateSuffix);
       _event('state-dir $stateDir');
       final running = _demo.onStateChange.firstWhere(
         (state) => state == NodeState.running,
       );
       final status = await _demo.up(
         stateDir: stateDir,
-        hostname: _hostname,
-        authKey: _authKey,
-        controlUrl: Uri.parse(_controlUrl),
+        hostname: config.hostname,
+        authKey: config.authKey,
+        controlUrl: Uri.parse(config.controlUrl),
         logLevel: TailscaleLogLevel.error,
       );
       if (!status.isRunning) {
@@ -131,19 +150,19 @@ class _SmokeHomeState extends State<SmokeHome> {
       final services = await _demo.startServices();
       final nodes = await _demo.nodes();
       final report = await _demo.probeNode(
-        _targetIp,
+        config.targetIp,
         timeout: const Duration(seconds: 20),
       );
 
-      _finish(
+      await _finish(
         SmokeResult(
           ok: _requiredSmokeProbesOk(report),
           startedAt: startedAt,
           finishedAt: DateTime.now().toUtc(),
-          hostname: _hostname,
+          hostname: config.hostname,
           platform: Platform.operatingSystem,
           localIp: finalStatus.ipv4,
-          targetIp: _targetIp,
+          targetIp: config.targetIp,
           services: services,
           nodesSeen: nodes.length,
           report: report,
@@ -152,15 +171,15 @@ class _SmokeHomeState extends State<SmokeHome> {
       );
     } catch (error, stackTrace) {
       _event('failure $error');
-      _finish(
+      await _finish(
         SmokeResult(
           ok: false,
           startedAt: startedAt,
           finishedAt: DateTime.now().toUtc(),
-          hostname: _hostname,
+          hostname: config?.hostname ?? 'dune-smoke-$_session',
           platform: Platform.operatingSystem,
           localIp: null,
-          targetIp: _targetIp,
+          targetIp: config?.targetIp ?? '',
           services: null,
           nodesSeen: 0,
           report: null,
@@ -172,8 +191,9 @@ class _SmokeHomeState extends State<SmokeHome> {
     }
   }
 
-  void _finish(SmokeResult result) {
+  Future<void> _finish(SmokeResult result) async {
     _emitResult(result);
+    await _postResult(result);
     if (!mounted) return;
     setState(() {
       _running = false;
@@ -189,14 +209,14 @@ class _SmokeHomeState extends State<SmokeHome> {
     });
   }
 
-  Future<String> _stateDir() async {
+  Future<String> _stateDir(String stateSuffix) async {
     try {
       final docs = await getApplicationDocumentsDirectory();
-      return p.join(docs.path, 'dune_smoke', _stateSuffix);
+      return p.join(docs.path, 'dune_smoke', stateSuffix);
     } catch (_) {
       return p.join(
         Directory.systemTemp.path,
-        'dune_smoke_${Platform.operatingSystem}_$_stateSuffix',
+        'dune_smoke_${Platform.operatingSystem}_$stateSuffix',
       );
     }
   }
@@ -228,8 +248,9 @@ class _SmokeHomeState extends State<SmokeHome> {
                 runSpacing: 8,
                 children: [
                   _Chip(label: 'platform', value: Platform.operatingSystem),
-                  _Chip(label: 'host', value: _hostname),
-                  _Chip(label: 'target', value: _targetIp),
+                  _Chip(label: 'session', value: _session),
+                  if (_config != null)
+                    _Chip(label: 'target', value: _config!.targetIp),
                 ],
               ),
               const SizedBox(height: 16),
@@ -420,14 +441,56 @@ final class SmokeResult {
   };
 }
 
-void _requireConfig(String name, String value) {
-  if (value.trim().isEmpty) {
-    throw StateError('$name is required');
+Future<_SmokeConfig> _fetchConfig() async {
+  final uri = Uri.parse('$_runnerUrl/config?session=$_session');
+  final client = HttpClient();
+  try {
+    final request = await client.getUrl(uri);
+    final response = await request.close();
+    if (response.statusCode != 200) {
+      throw StateError('runner /config returned HTTP ${response.statusCode}');
+    }
+    final body = await response.transform(utf8.decoder).join();
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    return _SmokeConfig(
+      controlUrl: _requiredField(data, 'controlUrl'),
+      authKey: _requiredField(data, 'authKey'),
+      targetIp: _requiredField(data, 'targetIp'),
+      hostname: data['hostname'] as String? ?? 'dune-smoke-$_session',
+      stateSuffix: data['stateSuffix'] as String? ?? _session,
+    );
+  } finally {
+    client.close(force: true);
+  }
+}
+
+String _requiredField(Map<String, dynamic> data, String key) {
+  final value = data[key];
+  if (value is! String || value.isEmpty) {
+    throw StateError('runner /config missing required field $key');
+  }
+  return value;
+}
+
+Future<void> _postResult(SmokeResult result) async {
+  final uri = Uri.parse('$_runnerUrl/result?session=$_session');
+  final client = HttpClient();
+  try {
+    final request = await client.postUrl(uri);
+    request.headers.contentType = ContentType.json;
+    request.write(jsonEncode(result.toJson()));
+    final response = await request.close();
+    await response.drain<void>();
+  } catch (_) {
+    // Result is also emitted to stdout, so don't fail the run if POST fails.
+  } finally {
+    client.close(force: true);
   }
 }
 
 void _emitResult(SmokeResult result) {
-  // The matrix runner parses this exact line from `flutter run` logs.
+  // The matrix runner accepts this stdout line as a fallback if /result POST
+  // fails to land. Keep emitting it for diagnostic visibility too.
   // ignore: avoid_print
   print('$_resultPrefix${jsonEncode(result.toJson())}');
 }

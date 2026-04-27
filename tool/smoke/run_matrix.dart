@@ -28,24 +28,31 @@ final class _SmokeMatrixRunner {
   late final String composeFile = '$root/test/e2e/docker-compose.yml';
   late final String demoCoreDir = '$root/packages/demo_core';
   late final String smokeAppDir = '$root/packages/demo_smoke_flutter';
+  late final int _runStartMillis = DateTime.now().millisecondsSinceEpoch;
   Process? _launchedAndroidEmulator;
+  HttpServer? _runnerServer;
+  String? _currentAuthKey;
+  String? _currentTargetIp;
+  final Map<String, Completer<Map<String, Object?>>> _resultCompleters = {};
 
   Future<bool> run() async {
     final stateRoot = Directory.systemTemp.createTempSync('dune_smoke_matrix_');
     _ManagedPeer? peer;
     var headscaleStarted = false;
     try {
+      await _startRunnerServer();
       await _startHeadscale();
       headscaleStarted = true;
-      final authKey = await _createAuthKey();
+      _currentAuthKey = await _createAuthKey();
       peer = await _ManagedPeer.spawn(
         dart: config.dart,
         packageRoot: demoCoreDir,
         stateDir: '${stateRoot.path}/peer',
-        authKey: authKey,
+        authKey: _currentAuthKey!,
         controlUrl: _hostControlUrl,
       );
       final peerReady = await peer.ready.timeout(config.timeout);
+      _currentTargetIp = peerReady.ip;
       _log('headless peer ready at ${peerReady.ip}');
 
       var devices = await _flutterDevices();
@@ -59,11 +66,7 @@ final class _SmokeMatrixRunner {
       final runs = config.targets
           .map((target) => _TargetLaunch(target, _deviceIdFor(target, devices)))
           .toList(growable: false);
-      final results = await _runFlutterTargets(
-        runs: runs,
-        authKey: authKey,
-        targetIp: peerReady.ip,
-      );
+      final results = await _runFlutterTargets(runs: runs);
 
       final failed = results.where((result) => !result.ok).toList();
       final skipped = results.where((result) => result.skipped).toList();
@@ -101,8 +104,91 @@ final class _SmokeMatrixRunner {
           } catch (_) {}
         }),
         _stopLaunchedAndroidEmulator(),
+        _stopRunnerServer(),
       ]);
     }
+  }
+
+  Future<void> _startRunnerServer() async {
+    _runnerServer = await HttpServer.bind(
+      InternetAddress.anyIPv4,
+      config.runnerPort,
+    );
+    _log('runner HTTP server listening on port ${config.runnerPort}');
+    unawaited(_serveRunnerRequests());
+  }
+
+  Future<void> _stopRunnerServer() async {
+    final server = _runnerServer;
+    _runnerServer = null;
+    if (server == null) return;
+    await server.close(force: true);
+  }
+
+  Future<void> _serveRunnerRequests() async {
+    final server = _runnerServer;
+    if (server == null) return;
+    try {
+      await for (final request in server) {
+        try {
+          await _handleRunnerRequest(request);
+        } catch (error) {
+          stderr.writeln('runner HTTP handler error: $error');
+          try {
+            request.response.statusCode = HttpStatus.internalServerError;
+            await request.response.close();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      // Server closed during shutdown.
+    }
+  }
+
+  Future<void> _handleRunnerRequest(HttpRequest request) async {
+    final session = request.uri.queryParameters['session'] ?? 'default';
+    final path = request.uri.path;
+    if (request.method == 'GET' && path == '/config') {
+      final body = <String, Object?>{
+        'authKey': _currentAuthKey ?? '',
+        'controlUrl': _controlUrlFor(session),
+        'targetIp': _currentTargetIp ?? '',
+        'hostname': 'dune-smoke-$session',
+        'stateSuffix': '$session-$_runStartMillis',
+      };
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType.json
+        ..write(jsonEncode(body));
+      await request.response.close();
+      return;
+    }
+    if (request.method == 'POST' && path == '/result') {
+      final raw = await utf8.decoder.bind(request).join();
+      Map<String, Object?>? data;
+      try {
+        data = jsonDecode(raw) as Map<String, Object?>;
+      } catch (_) {}
+      final completer = _resultCompleters[session];
+      if (data != null && completer != null && !completer.isCompleted) {
+        completer.complete(data);
+      }
+      request.response.statusCode = HttpStatus.noContent;
+      await request.response.close();
+      return;
+    }
+    request.response.statusCode = HttpStatus.notFound;
+    await request.response.close();
+  }
+
+  String _runnerUrlFor(String target) {
+    final specific = Platform
+        .environment['DUNE_SMOKE_RUNNER_URL_${target.toUpperCase()}'];
+    if (specific != null && specific.isNotEmpty) return specific;
+    final shared = Platform.environment['DUNE_SMOKE_RUNNER_URL'];
+    if (shared != null && shared.isNotEmpty) return shared;
+    if (target == 'android') return 'http://10.0.2.2:${config.runnerPort}';
+    return 'http://localhost:${config.runnerPort}';
   }
 
   String get _hostControlUrl => 'http://localhost:${config.headscalePort}';
@@ -240,15 +326,11 @@ final class _SmokeMatrixRunner {
   Future<_TargetRun> _runFlutterTarget({
     required String target,
     required String deviceId,
-    required String authKey,
-    required String targetIp,
   }) async {
     if (target == 'android') {
       await _waitForAndroidReady(deviceId);
     }
-    final controlUrl = _controlUrlFor(target);
-    final hostname = 'dune-smoke-$target';
-    final stateSuffix = '$target-${DateTime.now().millisecondsSinceEpoch}';
+    final runnerUrl = _runnerUrlFor(target);
     _log('running $target smoke on Flutter device $deviceId');
     final runMode = target == 'android' ? config.androidRunMode : 'debug';
     final process = await Process.start(config.flutter, [
@@ -256,18 +338,36 @@ final class _SmokeMatrixRunner {
       '-d',
       deviceId,
       '--$runMode',
-      '--dart-define=DUNE_SMOKE_CONTROL_URL=$controlUrl',
-      '--dart-define=DUNE_SMOKE_AUTH_KEY=$authKey',
-      '--dart-define=DUNE_SMOKE_TARGET_IP=$targetIp',
-      '--dart-define=DUNE_SMOKE_HOSTNAME=$hostname',
-      '--dart-define=DUNE_SMOKE_STATE_SUFFIX=$stateSuffix',
+      '--dart-define=DUNE_SMOKE_RUNNER_URL=$runnerUrl',
+      '--dart-define=DUNE_SMOKE_SESSION=$target',
     ], workingDirectory: smokeAppDir);
 
     final result = Completer<_TargetRun>();
+    final httpResult = Completer<Map<String, Object?>>();
+    _resultCompleters[target] = httpResult;
+    unawaited(
+      httpResult.future.then((data) {
+        if (result.isCompleted) return;
+        final ok = data['ok'] == true;
+        final duration = data['durationMs'];
+        result.complete(
+          _TargetRun(
+            target: target,
+            ok: ok,
+            skipped: false,
+            message: ok
+                ? 'completed in ${duration ?? '?'}ms'
+                : (data['error'] as String? ?? 'probe failed'),
+          ),
+        );
+      }),
+    );
+
     void handleLine(String stream, String line) {
       stdout.writeln('[$target/$stream] $line');
       final resultIndex = line.indexOf(_resultPrefix);
       if (resultIndex < 0 || result.isCompleted) return;
+      // Stdout result is a fallback path if /result POST never lands.
       final jsonText = line.substring(resultIndex + _resultPrefix.length);
       try {
         final decoded = jsonDecode(jsonText) as Map<String, Object?>;
@@ -329,6 +429,7 @@ final class _SmokeMatrixRunner {
         message: 'timed out after ${config.timeout.inSeconds}s',
       );
     } finally {
+      _resultCompleters.remove(target);
       process.kill(ProcessSignal.sigint);
       try {
         await process.exitCode.timeout(const Duration(seconds: 10));
@@ -342,15 +443,11 @@ final class _SmokeMatrixRunner {
 
   Future<List<_TargetRun>> _runFlutterTargets({
     required List<_TargetLaunch> runs,
-    required String authKey,
-    required String targetIp,
   }) async {
     if (config.jobs <= 1) {
       final results = <_TargetRun>[];
       for (final run in runs) {
-        results.add(
-          await _runOrSkipTarget(run, authKey: authKey, targetIp: targetIp),
-        );
+        results.add(await _runOrSkipTarget(run));
       }
       return results;
     }
@@ -362,11 +459,7 @@ final class _SmokeMatrixRunner {
         final index = next;
         if (index >= runs.length) return;
         next++;
-        results[index] = await _runOrSkipTarget(
-          runs[index],
-          authKey: authKey,
-          targetIp: targetIp,
-        );
+        results[index] = await _runOrSkipTarget(runs[index]);
       }
     }
 
@@ -375,23 +468,14 @@ final class _SmokeMatrixRunner {
     return results.cast<_TargetRun>();
   }
 
-  Future<_TargetRun> _runOrSkipTarget(
-    _TargetLaunch run, {
-    required String authKey,
-    required String targetIp,
-  }) async {
+  Future<_TargetRun> _runOrSkipTarget(_TargetLaunch run) async {
     final deviceId = run.deviceId;
     if (deviceId == null) {
       final skipped = _TargetRun.skipped(run.target, 'no Flutter device found');
       _log('${run.target.toUpperCase()} SKIP ${skipped.message}');
       return skipped;
     }
-    return _runFlutterTarget(
-      target: run.target,
-      deviceId: deviceId,
-      authKey: authKey,
-      targetIp: targetIp,
-    );
+    return _runFlutterTarget(target: run.target, deviceId: deviceId);
   }
 
   String _controlUrlFor(String target) {
@@ -660,6 +744,7 @@ final class _Config {
     required this.deviceOverrides,
     required this.timeout,
     required this.headscalePort,
+    required this.runnerPort,
     required this.dart,
     required this.flutter,
     required this.docker,
@@ -678,6 +763,7 @@ final class _Config {
   final Map<String, String> deviceOverrides;
   final Duration timeout;
   final String headscalePort;
+  final int runnerPort;
   final String dart;
   final String flutter;
   final String docker;
@@ -767,6 +853,17 @@ final class _Config {
       }
     }
 
+    final runnerPort =
+        int.tryParse(
+          options['runner-port'] ??
+              Platform.environment['DUNE_SMOKE_RUNNER_PORT'] ??
+              '',
+        ) ??
+        18099;
+    if (runnerPort < 1 || runnerPort > 65535) {
+      throw ArgumentError('runner-port must be in 1..65535');
+    }
+
     return _Config(
       targets: targets,
       deviceOverrides: deviceOverrides,
@@ -775,6 +872,7 @@ final class _Config {
           options['headscale-port'] ??
           Platform.environment['HEADSCALE_PORT'] ??
           '18080',
+      runnerPort: runnerPort,
       dart: Platform.environment['DART'] ?? 'dart',
       flutter: Platform.environment['FLUTTER'] ?? 'flutter',
       docker: Platform.environment['DOCKER'] ?? 'docker',
@@ -848,6 +946,9 @@ Options:
   --timeout-seconds N                 Per-target flutter run timeout. Default: 600.
   --jobs N                            Number of platform targets to run at once. Default: 1.
   --headscale-port N                  Host Headscale port. Default: 18080.
+  --runner-port N                     Local HTTP port the runner uses to serve
+                                      smoke-app config and accept results.
+                                      Default: 18099.
   --android-avd NAME                  Launch this Android AVD if no Android device is visible.
   --android-run-mode debug|profile    Android Flutter run mode. Default: profile.
   --keep-android-emulator             Leave an emulator launched by this runner alive.
@@ -867,6 +968,12 @@ Environment:
   ANDROID_EMULATOR                    emulator executable override.
   DUNE_SMOKE_CONTROL_URL              Override control URL for all targets.
   DUNE_SMOKE_CONTROL_URL_ANDROID      Override per-target control URL.
+  DUNE_SMOKE_RUNNER_URL               Override runner URL the smoke app fetches
+                                      its config from (all targets).
+  DUNE_SMOKE_RUNNER_URL_<TARGET>      Override runner URL per target (useful
+                                      for wireless iOS/Android needing a host
+                                      LAN IP instead of localhost).
+  DUNE_SMOKE_RUNNER_PORT              Same as --runner-port.
   DUNE_SMOKE_<TARGET>_DEVICE          Per-target Flutter device id.
 ''');
 }

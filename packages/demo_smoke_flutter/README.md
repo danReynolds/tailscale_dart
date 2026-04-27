@@ -73,13 +73,17 @@ Ping is included as diagnostic output but is not required for a pass. LocalAPI
 ping can lag during fresh netmap and DERP convergence even when the package data
 paths are working.
 
-Required dart defines:
+Dart defines (all compile-time):
 
-- `DUNE_SMOKE_CONTROL_URL`
-- `DUNE_SMOKE_AUTH_KEY`
-- `DUNE_SMOKE_TARGET_IP`
+- `DUNE_SMOKE_RUNNER_URL` — the matrix runner's local HTTP server. Default
+  `http://localhost:18099`. Per-target override needed when the device cannot
+  reach `localhost` on the host (Android emulator: `http://10.0.2.2:18099`,
+  wireless iOS device: host LAN IP).
+- `DUNE_SMOKE_SESSION` — short identifier for this run, surfaced as the chip
+  label and used to scope `/config` and `/result` requests. The matrix runner
+  passes the target name (`macos`, `ios`, `android`).
 
-Optional dart defines:
-
-- `DUNE_SMOKE_HOSTNAME`
-- `DUNE_SMOKE_STATE_SUFFIX`
+The auth key, control URL, target IP, hostname, and state suffix are returned
+by the runner over HTTP at `GET /config?session=<session>`. The smoke app
+posts its result to `POST /result?session=<session>` (and also emits the same
+JSON to stdout as a fallback for the matrix runner).

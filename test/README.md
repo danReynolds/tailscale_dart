@@ -155,10 +155,13 @@ checks rather than inner-loop debugging.
 peer are ready. Keep it at the default `1` when debugging noisy platform issues;
 use `--jobs 3` for a faster local matrix once the individual targets are stable.
 
-Physical devices usually need a reachable host LAN URL:
+Physical devices usually need a reachable host LAN URL. The runner exposes
+both the Headscale control plane and a small config-fetch HTTP server back to
+the smoke app, so override both:
 
 ```bash
 DUNE_SMOKE_CONTROL_URL_IOS=http://192.168.86.22:18080 \
+DUNE_SMOKE_RUNNER_URL_IOS=http://192.168.86.22:18099 \
   tool/smoke/run_matrix.sh --targets ios
 ```
 

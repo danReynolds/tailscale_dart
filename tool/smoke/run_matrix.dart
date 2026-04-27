@@ -62,6 +62,10 @@ final class _SmokeMatrixRunner {
         await _launchAndroidAvd(config.androidAvd!);
         devices = await _waitForFlutterDevice('android');
       }
+      if (config.targets.contains('ios') && !_hasIosSimulator(devices)) {
+        await _launchIosSimulator(config.iosSimulator);
+        devices = await _waitForFlutterDevice('ios');
+      }
 
       final runs = config.targets
           .map((target) => _TargetLaunch(target, _deviceIdFor(target, devices)))
@@ -320,6 +324,13 @@ final class _SmokeMatrixRunner {
 
     final matchesForTarget = devices.where(matches).toList();
     if (matchesForTarget.isEmpty) return null;
+    // Prefer emulators/simulators over physical devices for automated runs.
+    // Physical devices (especially over wireless) can sleep, miss trust
+    // prompts, or hang on cold install — none of which an automated matrix
+    // can recover from.
+    matchesForTarget.sort(
+      (a, b) => (b.emulator ? 1 : 0) - (a.emulator ? 1 : 0),
+    );
     return matchesForTarget.first.id;
   }
 
@@ -533,6 +544,29 @@ final class _SmokeMatrixRunner {
     _launchedAndroidEmulator = null;
   }
 
+  bool _hasIosSimulator(List<_FlutterDevice> devices) {
+    return devices.any((device) {
+      if (!device.emulator) return false;
+      final platform = device.targetPlatform.toLowerCase();
+      return platform.contains('ios') || device.platformType == 'ios';
+    });
+  }
+
+  Future<void> _launchIosSimulator(String simulatorId) async {
+    _log('launching iOS Simulator $simulatorId');
+    final result = await Process.run(config.flutter, [
+      'emulators',
+      '--launch',
+      simulatorId,
+    ]);
+    if (result.exitCode != 0) {
+      final err = (result.stderr as String? ?? '').trim();
+      throw StateError(
+        'failed to launch iOS Simulator $simulatorId: $err',
+      );
+    }
+  }
+
   String _androidEmulatorExecutable() {
     final explicit = config.emulator;
     if (explicit != null && explicit.isNotEmpty) return explicit;
@@ -701,16 +735,19 @@ final class _FlutterDevice {
     required this.id,
     required this.targetPlatform,
     required this.platformType,
+    required this.emulator,
   });
 
   final String id;
   final String targetPlatform;
   final String platformType;
+  final bool emulator;
 
   static _FlutterDevice fromJson(Map<String, Object?> json) => _FlutterDevice(
     id: json['id'] as String? ?? '',
     targetPlatform: json['targetPlatform'] as String? ?? '',
     platformType: json['platformType'] as String? ?? '',
+    emulator: json['emulator'] == true,
   );
 }
 
@@ -751,6 +788,7 @@ final class _Config {
     required this.adb,
     required this.emulator,
     required this.androidAvd,
+    required this.iosSimulator,
     required this.androidRunMode,
     required this.jobs,
     required this.keepHeadscale,
@@ -770,6 +808,7 @@ final class _Config {
   final String adb;
   final String? emulator;
   final String? androidAvd;
+  final String iosSimulator;
   final String androidRunMode;
   final int jobs;
   final bool keepHeadscale;
@@ -881,6 +920,10 @@ final class _Config {
       androidAvd:
           options['android-avd'] ??
           Platform.environment['DUNE_SMOKE_ANDROID_AVD'],
+      iosSimulator:
+          options['ios-simulator'] ??
+          Platform.environment['DUNE_SMOKE_IOS_SIMULATOR'] ??
+          'apple_ios_simulator',
       androidRunMode: androidRunMode,
       jobs: jobs,
       keepHeadscale:
@@ -952,6 +995,11 @@ Options:
   --android-avd NAME                  Launch this Android AVD if no Android device is visible.
   --android-run-mode debug|profile    Android Flutter run mode. Default: profile.
   --keep-android-emulator             Leave an emulator launched by this runner alive.
+  --ios-simulator ID                  iOS simulator id to launch when iOS is
+                                      requested and no iOS simulator is
+                                      visible. Default: apple_ios_simulator.
+                                      The runner prefers simulators over
+                                      physical iOS devices for automation.
   --macos-device ID                   Flutter device id override.
   --ios-device ID                     Flutter device id override.
   --android-device ID                 Flutter device id override.
@@ -964,6 +1012,7 @@ Environment:
   DUNE_SMOKE_JOBS                     Same as --jobs.
   DUNE_SMOKE_ANDROID_AVD              Same as --android-avd.
   DUNE_SMOKE_ANDROID_RUN_MODE         Same as --android-run-mode.
+  DUNE_SMOKE_IOS_SIMULATOR            Same as --ios-simulator.
   ADB                                 adb executable. Default: adb.
   ANDROID_EMULATOR                    emulator executable override.
   DUNE_SMOKE_CONTROL_URL              Override control URL for all targets.

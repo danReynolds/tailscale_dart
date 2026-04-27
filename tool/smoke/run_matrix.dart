@@ -81,19 +81,27 @@ final class _SmokeMatrixRunner {
       if (config.strict && skipped.isNotEmpty) return false;
       return failed.isEmpty;
     } finally {
-      await peer?.stop();
-      try {
-        stateRoot.deleteSync(recursive: true);
-      } catch (_) {}
+      // Cleanup tasks are independent: parallelize the foreground ones and
+      // detach `compose down -v` so the runner exits as soon as the summary
+      // is reported. Detached docker continues teardown in the background.
       if (headscaleStarted && !config.keepHeadscale) {
-        await _run(
+        _log('detaching docker compose down -v in background');
+        await Process.start(
           config.docker,
           ['compose', '-f', composeFile, 'down', '-v'],
           environment: {'HEADSCALE_PORT': config.headscalePort},
-          allowFailure: true,
+          mode: ProcessStartMode.detached,
         );
       }
-      await _stopLaunchedAndroidEmulator();
+      await Future.wait(<Future<void>>[
+        if (peer != null) peer.stop(),
+        Future(() {
+          try {
+            stateRoot.deleteSync(recursive: true);
+          } catch (_) {}
+        }),
+        _stopLaunchedAndroidEmulator(),
+      ]);
     }
   }
 
@@ -822,8 +830,11 @@ String _repoRoot() {
   }
 }
 
+final _runStopwatch = Stopwatch()..start();
+
 void _log(String message) {
-  stdout.writeln(message);
+  final elapsed = (_runStopwatch.elapsedMilliseconds / 1000).toStringAsFixed(1);
+  stdout.writeln('[T+${elapsed}s] $message');
 }
 
 void _printUsage() {

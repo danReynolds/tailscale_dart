@@ -3,10 +3,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 const _knownTargets = ['macos', 'ios', 'android', 'linux'];
 const _defaultTargets = ['macos', 'ios', 'android'];
 const _resultPrefix = 'DUNE_SMOKE_RESULT ';
+const _runnerTokenHeader = 'x-dune-smoke-token';
 
 Future<void> main(List<String> args) async {
   final config = _Config.parse(args);
@@ -28,24 +30,42 @@ final class _SmokeMatrixRunner {
   late final String composeFile = '$root/test/e2e/docker-compose.yml';
   late final String demoCoreDir = '$root/packages/demo_core';
   late final String smokeAppDir = '$root/packages/demo_smoke_flutter';
+  late final int _runStartMillis = DateTime.now().millisecondsSinceEpoch;
+  late final String _runnerToken = _loadOrCreateRunnerToken();
   Process? _launchedAndroidEmulator;
+  HttpServer? _runnerServer;
+  String? _currentAuthKey;
+  String? _currentTargetIp;
+  final Map<String, Completer<Map<String, Object?>>> _resultCompleters = {};
 
   Future<bool> run() async {
     final stateRoot = Directory.systemTemp.createTempSync('dune_smoke_matrix_');
     _ManagedPeer? peer;
     var headscaleStarted = false;
+    // Pre-builds run in parallel with peer setup since auth key + target IP
+    // are no longer compile-time constants. The futures resolve to the path
+    // of the built artifact, used by `flutter run --use-application-binary`.
+    final preBuildFutures = <String, Future<String>>{};
+    if (config.preBuild) {
+      for (final target in config.targets) {
+        if (_buildArgsFor(target) == null) continue;
+        preBuildFutures[target] = _preBuildTarget(target);
+      }
+    }
     try {
+      await _startRunnerServer();
       await _startHeadscale();
       headscaleStarted = true;
-      final authKey = await _createAuthKey();
+      _currentAuthKey = await _createAuthKey();
       peer = await _ManagedPeer.spawn(
         dart: config.dart,
         packageRoot: demoCoreDir,
         stateDir: '${stateRoot.path}/peer',
-        authKey: authKey,
+        authKey: _currentAuthKey!,
         controlUrl: _hostControlUrl,
       );
       final peerReady = await peer.ready.timeout(config.timeout);
+      _currentTargetIp = peerReady.ip;
       _log('headless peer ready at ${peerReady.ip}');
 
       var devices = await _flutterDevices();
@@ -55,14 +75,17 @@ final class _SmokeMatrixRunner {
         await _launchAndroidAvd(config.androidAvd!);
         devices = await _waitForFlutterDevice('android');
       }
+      if (config.targets.contains('ios') && !_hasIosSimulator(devices)) {
+        await _launchIosSimulator(config.iosSimulator);
+        devices = await _waitForFlutterDevice('ios', requireEmulator: true);
+      }
 
       final runs = config.targets
           .map((target) => _TargetLaunch(target, _deviceIdFor(target, devices)))
           .toList(growable: false);
       final results = await _runFlutterTargets(
         runs: runs,
-        authKey: authKey,
-        targetIp: peerReady.ip,
+        preBuildFutures: preBuildFutures,
       );
 
       final failed = results.where((result) => !result.ok).toList();
@@ -81,20 +104,243 @@ final class _SmokeMatrixRunner {
       if (config.strict && skipped.isNotEmpty) return false;
       return failed.isEmpty;
     } finally {
-      await peer?.stop();
-      try {
-        stateRoot.deleteSync(recursive: true);
-      } catch (_) {}
+      // Cleanup tasks are independent: parallelize the foreground ones and
+      // detach `compose down -v` so the runner exits as soon as the summary
+      // is reported. Detached docker continues teardown in the background.
       if (headscaleStarted && !config.keepHeadscale) {
-        await _run(
-          config.docker,
-          ['compose', '-f', composeFile, 'down', '-v'],
-          environment: {'HEADSCALE_PORT': config.headscalePort},
-          allowFailure: true,
-        );
+        _log('detaching docker compose down -v in background');
+        try {
+          await Process.start(
+            config.docker,
+            ['compose', '-f', composeFile, 'down', '-v'],
+            environment: {'HEADSCALE_PORT': config.headscalePort},
+            mode: ProcessStartMode.detached,
+          );
+        } catch (error) {
+          stderr.writeln('failed to detach docker compose down -v: $error');
+        }
       }
-      await _stopLaunchedAndroidEmulator();
+      await Future.wait(<Future<void>>[
+        if (peer != null) peer.stop(),
+        Future(() {
+          try {
+            stateRoot.deleteSync(recursive: true);
+          } catch (_) {}
+        }),
+        _stopLaunchedAndroidEmulator(),
+        _stopRunnerServer(),
+        // Drain any still-pending pre-builds so the runner doesn't leave
+        // stray flutter build subprocesses behind. Errors are absorbed.
+        for (final future in preBuildFutures.values)
+          future.then((_) {}, onError: (Object _) {}),
+      ]);
     }
+  }
+
+  List<String>? _buildArgsFor(String target) {
+    switch (target) {
+      case 'macos':
+        return ['build', 'macos', '--debug'];
+      case 'ios':
+        // Pre-build for the iOS simulator. If the user pinned an iOS device
+        // override, fall back to flutter run's inline build (skip pre-build).
+        if (config.deviceOverrides.containsKey('ios')) return null;
+        return ['build', 'ios', '--simulator', '--debug', '--no-codesign'];
+      case 'android':
+        return ['build', 'apk', '--${config.androidRunMode}'];
+      default:
+        return null;
+    }
+  }
+
+  String _binaryPathFor(String target) {
+    switch (target) {
+      case 'macos':
+        return '$smokeAppDir/build/macos/Build/Products/Debug/'
+            'dune_smoke_flutter.app';
+      case 'ios':
+        return '$smokeAppDir/build/ios/iphonesimulator/Runner.app';
+      case 'android':
+        final mode = config.androidRunMode;
+        return '$smokeAppDir/build/app/outputs/flutter-apk/app-$mode.apk';
+      default:
+        throw StateError('no binary path for $target');
+    }
+  }
+
+  Future<String> _preBuildTarget(String target) async {
+    final args = _buildArgsFor(target);
+    if (args == null) {
+      throw StateError('pre-build not supported for $target');
+    }
+    _log('pre-building $target ($args)');
+    final buildArgs = [...args, ..._smokeAppDartDefines(target)];
+    final sw = Stopwatch()..start();
+    final process = await Process.start(
+      config.flutter,
+      buildArgs,
+      workingDirectory: smokeAppDir,
+    );
+    final stdoutSub = process.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((line) => stdout.writeln('[$target/build] $line'));
+    final stderrSub = process.stderr
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((line) => stderr.writeln('[$target/build] $line'));
+    final exitCode = await process.exitCode;
+    await stdoutSub.cancel();
+    await stderrSub.cancel();
+    if (exitCode != 0) {
+      throw StateError('flutter build $target exited with $exitCode');
+    }
+    final path = _binaryPathFor(target);
+    _log(
+      'pre-built $target in ${sw.elapsed.inSeconds}s '
+      '(${path.split('/').last})',
+    );
+    return path;
+  }
+
+  Future<void> _startRunnerServer() async {
+    _runnerServer = await HttpServer.bind(
+      config.runnerBindAddress,
+      config.runnerPort,
+    );
+    _log(
+      'runner HTTP server listening on '
+      '${config.runnerBindAddress}:${config.runnerPort}',
+    );
+    unawaited(_serveRunnerRequests());
+  }
+
+  Future<void> _stopRunnerServer() async {
+    final server = _runnerServer;
+    _runnerServer = null;
+    if (server == null) return;
+    await server.close(force: true);
+  }
+
+  Future<void> _serveRunnerRequests() async {
+    final server = _runnerServer;
+    if (server == null) return;
+    try {
+      await for (final request in server) {
+        try {
+          await _handleRunnerRequest(request);
+        } catch (error) {
+          stderr.writeln('runner HTTP handler error: $error');
+          try {
+            request.response.statusCode = HttpStatus.internalServerError;
+            await request.response.close();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      // Server closed during shutdown.
+    }
+  }
+
+  Future<void> _handleRunnerRequest(HttpRequest request) async {
+    final session = request.uri.queryParameters['session'] ?? 'default';
+    final path = request.uri.path;
+    if (!_isRunnerRequestAuthorized(request)) {
+      request.response.statusCode = HttpStatus.unauthorized;
+      await request.response.close();
+      return;
+    }
+    if (request.method == 'GET' && path == '/config') {
+      final body = <String, Object?>{
+        'authKey': _currentAuthKey ?? '',
+        'controlUrl': _controlUrlFor(session),
+        'targetIp': _currentTargetIp ?? '',
+        'hostname': 'dune-smoke-$session',
+        'stateSuffix': '$session-$_runStartMillis',
+      };
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType.json
+        ..write(jsonEncode(body));
+      await request.response.close();
+      return;
+    }
+    if (request.method == 'POST' && path == '/result') {
+      final raw = await utf8.decoder.bind(request).join();
+      Map<String, Object?>? data;
+      try {
+        data = jsonDecode(raw) as Map<String, Object?>;
+      } catch (_) {}
+      final completer = _resultCompleters[session];
+      if (data != null &&
+          _isValidSmokeResult(data) &&
+          completer != null &&
+          !completer.isCompleted) {
+        completer.complete(data);
+      }
+      request.response.statusCode = HttpStatus.noContent;
+      await request.response.close();
+      return;
+    }
+    request.response.statusCode = HttpStatus.notFound;
+    await request.response.close();
+  }
+
+  bool _isRunnerRequestAuthorized(HttpRequest request) {
+    // Header-only: the runner logs every flutter run line verbatim, and a
+    // token in the query string would land in those logs (and any pasted
+    // bug report). The smoke app's runner_client uses the header path.
+    final token = request.headers.value(_runnerTokenHeader);
+    if (token == null || token.length != _runnerToken.length) return false;
+    var diff = 0;
+    for (var i = 0; i < token.length; i++) {
+      diff |= token.codeUnitAt(i) ^ _runnerToken.codeUnitAt(i);
+    }
+    return diff == 0;
+  }
+
+  bool _isValidSmokeResult(Map<String, Object?> data) {
+    return data['ok'] is bool &&
+        data['startedAt'] is String &&
+        data['finishedAt'] is String &&
+        data['hostname'] is String &&
+        data['platform'] is String &&
+        data['targetIp'] is String;
+  }
+
+  String _runnerUrlFor(String target) {
+    final specific =
+        Platform.environment['DUNE_SMOKE_RUNNER_URL_${target.toUpperCase()}'];
+    if (specific != null && specific.isNotEmpty) return specific;
+    final shared = Platform.environment['DUNE_SMOKE_RUNNER_URL'];
+    if (shared != null && shared.isNotEmpty) return shared;
+    if (target == 'android') return 'http://10.0.2.2:${config.runnerPort}';
+    return 'http://localhost:${config.runnerPort}';
+  }
+
+  String _loadOrCreateRunnerToken() {
+    final fromEnv = Platform.environment['DUNE_SMOKE_RUNNER_TOKEN'];
+    if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+
+    final file = File('$root/.dart_tool/dune_smoke_runner_token');
+    try {
+      if (file.existsSync()) {
+        final existing = file.readAsStringSync().trim();
+        if (existing.isNotEmpty) return existing;
+      }
+      file.parent.createSync(recursive: true);
+      final token = _newRunnerToken();
+      file.writeAsStringSync('$token\n', flush: true);
+      return token;
+    } catch (_) {
+      return _newRunnerToken();
+    }
+  }
+
+  String _newRunnerToken() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+    return base64Url.encode(bytes).replaceAll('=', '');
   }
 
   String get _hostControlUrl => 'http://localhost:${config.headscalePort}';
@@ -198,13 +444,40 @@ final class _SmokeMatrixRunner {
     }
   }
 
-  Future<List<_FlutterDevice>> _waitForFlutterDevice(String target) async {
+  Future<List<_FlutterDevice>> _waitForFlutterDevice(
+    String target, {
+    bool requireEmulator = false,
+  }) async {
     for (var i = 0; i < 90; i++) {
       final devices = await _flutterDevices();
-      if (_deviceIdFor(target, devices) != null) return devices;
+      if (_deviceIdFor(target, devices) != null) {
+        if (!requireEmulator) return devices;
+        // The runner may have just launched an emulator/simulator. Don't
+        // settle for a physical device match — wait until an emulator
+        // appears, otherwise an attached wireless iPhone gets picked even
+        // when we explicitly asked for the simulator.
+        if (devices.any(
+          (device) => device.emulator && _matchesTarget(device, target),
+        )) {
+          return devices;
+        }
+      }
       await Future<void>.delayed(const Duration(seconds: 2));
     }
     return _flutterDevices();
+  }
+
+  bool _matchesTarget(_FlutterDevice device, String target) {
+    final id = device.id.toLowerCase();
+    final platform = device.targetPlatform.toLowerCase();
+    return switch (target) {
+      'macos' => id == 'macos' || platform.contains('darwin'),
+      'linux' => id == 'linux' || platform.contains('linux'),
+      'ios' => platform.contains('ios') || device.platformType == 'ios',
+      'android' =>
+        platform.contains('android') || device.platformType == 'android',
+      _ => false,
+    };
   }
 
   String? _deviceIdFor(String target, List<_FlutterDevice> devices) {
@@ -226,21 +499,43 @@ final class _SmokeMatrixRunner {
 
     final matchesForTarget = devices.where(matches).toList();
     if (matchesForTarget.isEmpty) return null;
+    // Prefer emulators/simulators over physical devices for automated runs.
+    // Physical devices (especially over wireless) can sleep, miss trust
+    // prompts, or hang on cold install — none of which an automated matrix
+    // can recover from.
+    matchesForTarget.sort(
+      (a, b) => (b.emulator ? 1 : 0) - (a.emulator ? 1 : 0),
+    );
     return matchesForTarget.first.id;
   }
 
   Future<_TargetRun> _runFlutterTarget({
     required String target,
     required String deviceId,
-    required String authKey,
-    required String targetIp,
+    Future<String>? preBuildFuture,
   }) async {
     if (target == 'android') {
       await _waitForAndroidReady(deviceId);
     }
-    final controlUrl = _controlUrlFor(target);
-    final hostname = 'dune-smoke-$target';
-    final stateSuffix = '$target-${DateTime.now().millisecondsSinceEpoch}';
+    String? binaryPath;
+    if (preBuildFuture != null) {
+      try {
+        final candidate = await preBuildFuture;
+        if (FileSystemEntity.typeSync(candidate) ==
+            FileSystemEntityType.notFound) {
+          _log(
+            '$target pre-built artifact missing at $candidate; '
+            'falling back to inline build',
+          );
+        } else {
+          binaryPath = candidate;
+          _log('$target using pre-built binary at $candidate');
+        }
+      } catch (error) {
+        _log('$target pre-build failed: $error; falling back to inline build');
+      }
+    }
+    final runnerUrl = _runnerUrlFor(target);
     _log('running $target smoke on Flutter device $deviceId');
     final runMode = target == 'android' ? config.androidRunMode : 'debug';
     final process = await Process.start(config.flutter, [
@@ -248,18 +543,36 @@ final class _SmokeMatrixRunner {
       '-d',
       deviceId,
       '--$runMode',
-      '--dart-define=DUNE_SMOKE_CONTROL_URL=$controlUrl',
-      '--dart-define=DUNE_SMOKE_AUTH_KEY=$authKey',
-      '--dart-define=DUNE_SMOKE_TARGET_IP=$targetIp',
-      '--dart-define=DUNE_SMOKE_HOSTNAME=$hostname',
-      '--dart-define=DUNE_SMOKE_STATE_SUFFIX=$stateSuffix',
+      if (binaryPath != null) ...['--use-application-binary', binaryPath],
+      ..._smokeAppDartDefines(target, runnerUrl: runnerUrl),
     ], workingDirectory: smokeAppDir);
 
     final result = Completer<_TargetRun>();
+    final httpResult = Completer<Map<String, Object?>>();
+    _resultCompleters[target] = httpResult;
+    unawaited(
+      httpResult.future.then((data) {
+        if (result.isCompleted) return;
+        final ok = data['ok'] == true;
+        final duration = data['durationMs'];
+        result.complete(
+          _TargetRun(
+            target: target,
+            ok: ok,
+            skipped: false,
+            message: ok
+                ? 'completed in ${duration ?? '?'}ms'
+                : (data['error'] as String? ?? 'probe failed'),
+          ),
+        );
+      }),
+    );
+
     void handleLine(String stream, String line) {
       stdout.writeln('[$target/$stream] $line');
       final resultIndex = line.indexOf(_resultPrefix);
       if (resultIndex < 0 || result.isCompleted) return;
+      // Stdout result is a fallback path if /result POST never lands.
       final jsonText = line.substring(resultIndex + _resultPrefix.length);
       try {
         final decoded = jsonDecode(jsonText) as Map<String, Object?>;
@@ -276,13 +589,13 @@ final class _SmokeMatrixRunner {
           ),
         );
       } catch (error) {
-        result.complete(
-          _TargetRun(
-            target: target,
-            ok: false,
-            skipped: false,
-            message: 'invalid result JSON: $error',
-          ),
+        // Don't complete the result on stdout parse errors. Lines from
+        // `flutter run` can be truncated mid-flush when the device
+        // disconnects (e.g., "Lost connection to device" cuts the
+        // DUNE_SMOKE_RESULT line). The /result POST is the primary
+        // signal; let it land or let the outer timeout catch a real hang.
+        stderr.writeln(
+          '[$target/$stream] result line parse failed (truncated?): $error',
         );
       }
     }
@@ -321,6 +634,7 @@ final class _SmokeMatrixRunner {
         message: 'timed out after ${config.timeout.inSeconds}s',
       );
     } finally {
+      _resultCompleters.remove(target);
       process.kill(ProcessSignal.sigint);
       try {
         await process.exitCode.timeout(const Duration(seconds: 10));
@@ -334,15 +648,12 @@ final class _SmokeMatrixRunner {
 
   Future<List<_TargetRun>> _runFlutterTargets({
     required List<_TargetLaunch> runs,
-    required String authKey,
-    required String targetIp,
+    required Map<String, Future<String>> preBuildFutures,
   }) async {
     if (config.jobs <= 1) {
       final results = <_TargetRun>[];
       for (final run in runs) {
-        results.add(
-          await _runOrSkipTarget(run, authKey: authKey, targetIp: targetIp),
-        );
+        results.add(await _runOrSkipTarget(run, preBuildFutures));
       }
       return results;
     }
@@ -354,11 +665,7 @@ final class _SmokeMatrixRunner {
         final index = next;
         if (index >= runs.length) return;
         next++;
-        results[index] = await _runOrSkipTarget(
-          runs[index],
-          authKey: authKey,
-          targetIp: targetIp,
-        );
+        results[index] = await _runOrSkipTarget(runs[index], preBuildFutures);
       }
     }
 
@@ -368,10 +675,9 @@ final class _SmokeMatrixRunner {
   }
 
   Future<_TargetRun> _runOrSkipTarget(
-    _TargetLaunch run, {
-    required String authKey,
-    required String targetIp,
-  }) async {
+    _TargetLaunch run,
+    Map<String, Future<String>> preBuildFutures,
+  ) async {
     final deviceId = run.deviceId;
     if (deviceId == null) {
       final skipped = _TargetRun.skipped(run.target, 'no Flutter device found');
@@ -381,8 +687,7 @@ final class _SmokeMatrixRunner {
     return _runFlutterTarget(
       target: run.target,
       deviceId: deviceId,
-      authKey: authKey,
-      targetIp: targetIp,
+      preBuildFuture: preBuildFutures[run.target],
     );
   }
 
@@ -394,6 +699,14 @@ final class _SmokeMatrixRunner {
     if (shared != null && shared.isNotEmpty) return shared;
     if (target == 'android') return 'http://10.0.2.2:${config.headscalePort}';
     return _hostControlUrl;
+  }
+
+  List<String> _smokeAppDartDefines(String target, {String? runnerUrl}) {
+    return [
+      '--dart-define=DUNE_SMOKE_RUNNER_URL=${runnerUrl ?? _runnerUrlFor(target)}',
+      '--dart-define=DUNE_SMOKE_SESSION=$target',
+      '--dart-define=DUNE_SMOKE_RUNNER_TOKEN=$_runnerToken',
+    ];
   }
 
   Future<void> _launchAndroidAvd(String avd) async {
@@ -439,6 +752,27 @@ final class _SmokeMatrixRunner {
       process.kill(ProcessSignal.sigkill);
     }
     _launchedAndroidEmulator = null;
+  }
+
+  bool _hasIosSimulator(List<_FlutterDevice> devices) {
+    return devices.any((device) {
+      if (!device.emulator) return false;
+      final platform = device.targetPlatform.toLowerCase();
+      return platform.contains('ios') || device.platformType == 'ios';
+    });
+  }
+
+  Future<void> _launchIosSimulator(String simulatorId) async {
+    _log('launching iOS Simulator $simulatorId');
+    final result = await Process.run(config.flutter, [
+      'emulators',
+      '--launch',
+      simulatorId,
+    ]);
+    if (result.exitCode != 0) {
+      final err = (result.stderr as String? ?? '').trim();
+      throw StateError('failed to launch iOS Simulator $simulatorId: $err');
+    }
   }
 
   String _androidEmulatorExecutable() {
@@ -609,16 +943,19 @@ final class _FlutterDevice {
     required this.id,
     required this.targetPlatform,
     required this.platformType,
+    required this.emulator,
   });
 
   final String id;
   final String targetPlatform;
   final String platformType;
+  final bool emulator;
 
   static _FlutterDevice fromJson(Map<String, Object?> json) => _FlutterDevice(
     id: json['id'] as String? ?? '',
     targetPlatform: json['targetPlatform'] as String? ?? '',
     platformType: json['platformType'] as String? ?? '',
+    emulator: json['emulator'] == true,
   );
 }
 
@@ -652,16 +989,20 @@ final class _Config {
     required this.deviceOverrides,
     required this.timeout,
     required this.headscalePort,
+    required this.runnerPort,
+    required this.runnerBindAddress,
     required this.dart,
     required this.flutter,
     required this.docker,
     required this.adb,
     required this.emulator,
     required this.androidAvd,
+    required this.iosSimulator,
     required this.androidRunMode,
     required this.jobs,
     required this.keepHeadscale,
     required this.keepAndroidEmulator,
+    required this.preBuild,
     required this.strict,
     required this.help,
   });
@@ -670,16 +1011,20 @@ final class _Config {
   final Map<String, String> deviceOverrides;
   final Duration timeout;
   final String headscalePort;
+  final int runnerPort;
+  final String runnerBindAddress;
   final String dart;
   final String flutter;
   final String docker;
   final String adb;
   final String? emulator;
   final String? androidAvd;
+  final String iosSimulator;
   final String androidRunMode;
   final int jobs;
   final bool keepHeadscale;
   final bool keepAndroidEmulator;
+  final bool preBuild;
   final bool strict;
   final bool help;
 
@@ -759,6 +1104,17 @@ final class _Config {
       }
     }
 
+    final runnerPort =
+        int.tryParse(
+          options['runner-port'] ??
+              Platform.environment['DUNE_SMOKE_RUNNER_PORT'] ??
+              '',
+        ) ??
+        18099;
+    if (runnerPort < 1 || runnerPort > 65535) {
+      throw ArgumentError('runner-port must be in 1..65535');
+    }
+
     return _Config(
       targets: targets,
       deviceOverrides: deviceOverrides,
@@ -767,6 +1123,11 @@ final class _Config {
           options['headscale-port'] ??
           Platform.environment['HEADSCALE_PORT'] ??
           '18080',
+      runnerPort: runnerPort,
+      runnerBindAddress:
+          options['runner-bind-address'] ??
+          Platform.environment['DUNE_SMOKE_RUNNER_BIND_ADDRESS'] ??
+          '127.0.0.1',
       dart: Platform.environment['DART'] ?? 'dart',
       flutter: Platform.environment['FLUTTER'] ?? 'flutter',
       docker: Platform.environment['DOCKER'] ?? 'docker',
@@ -775,11 +1136,16 @@ final class _Config {
       androidAvd:
           options['android-avd'] ??
           Platform.environment['DUNE_SMOKE_ANDROID_AVD'],
+      iosSimulator:
+          options['ios-simulator'] ??
+          Platform.environment['DUNE_SMOKE_IOS_SIMULATOR'] ??
+          'apple_ios_simulator',
       androidRunMode: androidRunMode,
       jobs: jobs,
       keepHeadscale:
           flags.contains('keep-headscale') || flags.contains('reuse-headscale'),
       keepAndroidEmulator: flags.contains('keep-android-emulator'),
+      preBuild: !flags.contains('no-pre-build'),
       strict: flags.contains('strict'),
       help: flags.contains('help'),
     );
@@ -822,8 +1188,11 @@ String _repoRoot() {
   }
 }
 
+final _runStopwatch = Stopwatch()..start();
+
 void _log(String message) {
-  stdout.writeln(message);
+  final elapsed = (_runStopwatch.elapsedMilliseconds / 1000).toStringAsFixed(1);
+  stdout.writeln('[T+${elapsed}s] $message');
 }
 
 void _printUsage() {
@@ -837,9 +1206,26 @@ Options:
   --timeout-seconds N                 Per-target flutter run timeout. Default: 600.
   --jobs N                            Number of platform targets to run at once. Default: 1.
   --headscale-port N                  Host Headscale port. Default: 18080.
+  --runner-port N                     Local HTTP port the runner uses to serve
+                                      smoke-app config and accept results.
+                                      Default: 18099.
+  --runner-bind-address ADDRESS       Address for the runner HTTP server.
+                                      Default: 127.0.0.1. Use 0.0.0.0 only
+                                      when a physical device must reach it.
   --android-avd NAME                  Launch this Android AVD if no Android device is visible.
   --android-run-mode debug|profile    Android Flutter run mode. Default: profile.
   --keep-android-emulator             Leave an emulator launched by this runner alive.
+  --ios-simulator ID                  iOS simulator id to launch when iOS is
+                                      requested and no iOS simulator is
+                                      visible. Default: apple_ios_simulator.
+                                      The runner prefers simulators over
+                                      physical iOS devices for automation.
+  --no-pre-build                      Skip pre-building target binaries in
+                                      parallel with peer setup. Default is to
+                                      pre-build via `flutter build` and launch
+                                      with `flutter run --use-application-binary`,
+                                      moving the per-target build off the
+                                      critical path.
   --macos-device ID                   Flutter device id override.
   --ios-device ID                     Flutter device id override.
   --android-device ID                 Flutter device id override.
@@ -852,10 +1238,20 @@ Environment:
   DUNE_SMOKE_JOBS                     Same as --jobs.
   DUNE_SMOKE_ANDROID_AVD              Same as --android-avd.
   DUNE_SMOKE_ANDROID_RUN_MODE         Same as --android-run-mode.
+  DUNE_SMOKE_IOS_SIMULATOR            Same as --ios-simulator.
   ADB                                 adb executable. Default: adb.
   ANDROID_EMULATOR                    emulator executable override.
   DUNE_SMOKE_CONTROL_URL              Override control URL for all targets.
   DUNE_SMOKE_CONTROL_URL_ANDROID      Override per-target control URL.
+  DUNE_SMOKE_RUNNER_URL               Override runner URL the smoke app fetches
+                                      its config from (all targets).
+  DUNE_SMOKE_RUNNER_URL_<TARGET>      Override runner URL per target (useful
+                                      for wireless iOS/Android needing a host
+                                      LAN IP instead of localhost).
+  DUNE_SMOKE_RUNNER_PORT              Same as --runner-port.
+  DUNE_SMOKE_RUNNER_BIND_ADDRESS      Same as --runner-bind-address.
+  DUNE_SMOKE_RUNNER_TOKEN             Optional stable runner auth token. When
+                                      unset, one is created under .dart_tool.
   DUNE_SMOKE_<TARGET>_DEVICE          Per-target Flutter device id.
 ''');
 }

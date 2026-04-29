@@ -42,7 +42,7 @@ The runner:
 2. creates a reusable Headscale auth key
 3. starts one headless `demo_core` peer
 4. runs this Flutter app on each selected platform target
-5. parses the first `DUNE_SMOKE_RESULT` line from `flutter run`
+5. receives the result over `POST /result`
 6. tears down Headscale and any emulator it launched, unless told to keep them
 
 Useful variants:
@@ -73,13 +73,21 @@ Ping is included as diagnostic output but is not required for a pass. LocalAPI
 ping can lag during fresh netmap and DERP convergence even when the package data
 paths are working.
 
-Required dart defines:
+Dart defines (all compile-time):
 
-- `DUNE_SMOKE_CONTROL_URL`
-- `DUNE_SMOKE_AUTH_KEY`
-- `DUNE_SMOKE_TARGET_IP`
+- `DUNE_SMOKE_RUNNER_URL` — the matrix runner's local HTTP server. Default
+  `http://localhost:18099`. Per-target override needed when the device cannot
+  reach `localhost` on the host (Android emulator: `http://10.0.2.2:18099`,
+  wireless iOS device: host LAN IP).
+- `DUNE_SMOKE_SESSION` — short identifier for this run, surfaced as the chip
+  label and used to scope `/config` and `/result` requests. The matrix runner
+  passes the target name (`macos`, `ios`, `android`).
+- `DUNE_SMOKE_RUNNER_TOKEN` — stable per-worktree token used to authorize
+  `/config` and `/result`. The runner creates one under `.dart_tool` when not
+  provided through the environment.
 
-Optional dart defines:
-
-- `DUNE_SMOKE_HOSTNAME`
-- `DUNE_SMOKE_STATE_SUFFIX`
+The auth key, control URL, target IP, hostname, and state suffix are returned
+by the runner over HTTP at `GET /config?session=<session>`. The smoke app
+posts its result to `POST /result?session=<session>` with the runner token in
+the `x-dune-smoke-token` header. It also emits the same JSON to stdout as a
+fallback diagnostic for the matrix runner.

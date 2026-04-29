@@ -235,6 +235,10 @@ final class DemoCore {
     DemoServiceConfig config = const DemoServiceConfig(),
     Duration timeout = const Duration(seconds: 15),
   }) async {
+    // Probes are sequential. Parallelizing all six fd-backed probes hit the
+    // per-fd-isolate scaling ceiling described in docs/rfc-shared-fd-reactor.md
+    // — measured ~5.2s per probe vs ~50ms sequential. Revisit once the shared
+    // POSIX fd reactor lands.
     final results = <DemoProbeResult>[];
     results.add(
       await _runProbe(DemoProbeKind.ping, () async {

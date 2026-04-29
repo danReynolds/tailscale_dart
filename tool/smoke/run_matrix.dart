@@ -174,10 +174,11 @@ final class _SmokeMatrixRunner {
       throw StateError('pre-build not supported for $target');
     }
     _log('pre-building $target ($args)');
+    final buildArgs = [...args, ..._smokeAppDartDefines(target)];
     final sw = Stopwatch()..start();
     final process = await Process.start(
       config.flutter,
-      args,
+      buildArgs,
       workingDirectory: smokeAppDir,
     );
     final stdoutSub = process.stdout
@@ -528,9 +529,7 @@ final class _SmokeMatrixRunner {
       deviceId,
       '--$runMode',
       if (binaryPath != null) ...['--use-application-binary', binaryPath],
-      '--dart-define=DUNE_SMOKE_RUNNER_URL=$runnerUrl',
-      '--dart-define=DUNE_SMOKE_SESSION=$target',
-      '--dart-define=DUNE_SMOKE_RUNNER_TOKEN=$_runnerToken',
+      ..._smokeAppDartDefines(target, runnerUrl: runnerUrl),
     ], workingDirectory: smokeAppDir);
 
     final result = Completer<_TargetRun>();
@@ -685,6 +684,14 @@ final class _SmokeMatrixRunner {
     if (shared != null && shared.isNotEmpty) return shared;
     if (target == 'android') return 'http://10.0.2.2:${config.headscalePort}';
     return _hostControlUrl;
+  }
+
+  List<String> _smokeAppDartDefines(String target, {String? runnerUrl}) {
+    return [
+      '--dart-define=DUNE_SMOKE_RUNNER_URL=${runnerUrl ?? _runnerUrlFor(target)}',
+      '--dart-define=DUNE_SMOKE_SESSION=$target',
+      '--dart-define=DUNE_SMOKE_RUNNER_TOKEN=$_runnerToken',
+    ];
   }
 
   Future<void> _launchAndroidAvd(String avd) async {

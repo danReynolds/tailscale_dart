@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
+import 'package:meta/meta.dart';
+
+import 'ffi_bindings.dart';
 
 /// Internal POSIX fd transport primitive.
 ///
@@ -15,15 +19,17 @@ final class PosixFdTransport {
   PosixFdTransport._(
     this.fd, {
     required this.maxReadChunkSize,
+    required this.maxInboundQueuedBytes,
     required this.maxPendingWriteBytes,
   }) {
     _fdFinalizer.attach(this, fd, detach: this);
   }
 
-  /// Adopts [fd] and starts asynchronous read/write workers.
+  /// Adopts [fd] and registers it with the shared POSIX fd reactor.
   static Future<PosixFdTransport> adopt(
     int fd, {
     int maxReadChunkSize = 64 * 1024,
+    int maxInboundQueuedBytes = 1024 * 1024,
     int maxPendingWriteBytes = 1024 * 1024,
   }) async {
     if (Platform.isWindows) {
@@ -34,6 +40,13 @@ final class PosixFdTransport {
       throw ArgumentError.value(
         maxReadChunkSize,
         'maxReadChunkSize',
+        'must be positive',
+      );
+    }
+    if (maxInboundQueuedBytes <= 0) {
+      throw ArgumentError.value(
+        maxInboundQueuedBytes,
+        'maxInboundQueuedBytes',
         'must be positive',
       );
     }
@@ -48,9 +61,10 @@ final class PosixFdTransport {
     final transport = PosixFdTransport._(
       fd,
       maxReadChunkSize: maxReadChunkSize,
+      maxInboundQueuedBytes: maxInboundQueuedBytes,
       maxPendingWriteBytes: maxPendingWriteBytes,
     );
-    await transport._startWorkers();
+    await transport._registerWithReactor();
     return transport;
   }
 
@@ -60,26 +74,27 @@ final class PosixFdTransport {
   /// Maximum bytes read from the descriptor per input event.
   final int maxReadChunkSize;
 
+  /// Maximum bytes allowed to be queued for input delivery in Dart.
+  final int maxInboundQueuedBytes;
+
   /// Maximum bytes allowed in the user-space write queue.
   final int maxPendingWriteBytes;
 
   late final StreamController<Uint8List> _input;
+  late final RawReceivePort _events;
+  late final _SharedFdReactorProxy _reactor;
+
   final _done = Completer<void>();
   final _writeCompletions = <int, _PendingWrite>{};
 
-  late final RawReceivePort _readerEvents;
-  late final RawReceivePort _writerEvents;
-
-  SendPort? _readerCommands;
-  SendPort? _writerCommands;
-
+  int _id = 0;
   int _nextWriteId = 0;
   int _pendingWriteBytes = 0;
-  bool _readInFlight = false;
+  int _queuedInboundBytes = 0;
+  bool _readEnabled = false;
   bool _closed = false;
   bool _readFinished = false;
   bool _writeFinished = false;
-  bool _fdClosed = false;
   bool _portsClosed = false;
 
   /// Single-subscription byte stream read from the fd.
@@ -88,76 +103,41 @@ final class PosixFdTransport {
   /// Completes when the transport fully closes.
   Future<void> get done => _done.future;
 
-  Future<void> _startWorkers() async {
+  Future<void> _registerWithReactor() async {
     _input = StreamController<Uint8List>(
       sync: true,
-      onListen: _requestReadIfReady,
-      onResume: _requestReadIfReady,
+      onListen: _enableReadIfReady,
+      onPause: _disableRead,
+      onResume: _enableReadIfReady,
     );
-    final readerReady = Completer<SendPort>();
-    final writerReady = Completer<SendPort>();
-
-    _readerEvents = RawReceivePort((Object? message) {
-      if (message is List && message.length == 2 && message[0] == 'ready') {
-        final sendPort = message[1];
-        if (sendPort is SendPort && !readerReady.isCompleted) {
-          _readerCommands = sendPort;
-          readerReady.complete(sendPort);
-          _requestReadIfReady();
-        }
-        return;
-      }
-      _handleReaderEvent(message);
-    });
-    _writerEvents = RawReceivePort((Object? message) {
-      if (message is List && message.length == 2 && message[0] == 'ready') {
-        final sendPort = message[1];
-        if (sendPort is SendPort && !writerReady.isCompleted) {
-          _writerCommands = sendPort;
-          writerReady.complete(sendPort);
-        }
-        return;
-      }
-      _handleWriterEvent(message);
-    });
+    _events = RawReceivePort(_handleReactorEvent);
 
     try {
-      await Isolate.spawn(_fdReadWorker, <Object>[
-        fd,
-        maxReadChunkSize,
-        _readerEvents.sendPort,
-      ], debugName: 'tailscale-fd-read-$fd');
-      await Isolate.spawn(_fdWriteWorker, <Object>[
-        fd,
-        _writerEvents.sendPort,
-      ], debugName: 'tailscale-fd-write-$fd');
-      await readerReady.future.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw StateError('fd reader worker did not start'),
+      _reactor = await _SharedFdReactorProxy.instance;
+      _id = await _reactor.register(
+        fd: fd,
+        maxReadChunkSize: maxReadChunkSize,
+        eventPort: _events.sendPort,
       );
-      await writerReady.future.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw StateError('fd writer worker did not start'),
-      );
-    } catch (e) {
-      await close();
-      throw StateError('failed to start fd transport workers: $e');
+    } catch (error) {
+      _stopPorts();
+      _closeInput();
+      _fdFinalizer.detach(this);
+      closePosixFdForCleanup(fd);
+      throw StateError('failed to register fd transport: $error');
     }
   }
 
   /// Queues [bytes] for ordered delivery to the fd.
   ///
   /// The caller may reuse or mutate [bytes] immediately after this method is
-  /// called. The returned future completes when the worker has written all
+  /// called. The returned future completes when the reactor has written all
   /// bytes to the descriptor.
   Future<void> write(Uint8List bytes) {
     if (bytes.isEmpty) return Future.value();
     if (_closed) return Future.error(StateError('fd transport is closed'));
     if (_writeFinished) {
       return Future.error(StateError('fd transport write side is closed'));
-    }
-    if (_writerCommands == null) {
-      return Future.error(StateError('fd writer worker is not ready'));
     }
 
     final copy = Uint8List.fromList(bytes);
@@ -173,26 +153,36 @@ final class PosixFdTransport {
     final completer = Completer<void>();
     _pendingWriteBytes += copy.length;
     _writeCompletions[id] = _PendingWrite(copy.length, completer);
-    _writerCommands!.send(<Object>[
-      'write',
-      id,
-      TransferableTypedData.fromList(<Uint8List>[copy]),
-    ]);
+
+    try {
+      _reactor.send(<Object>[
+        'write',
+        _id,
+        id,
+        TransferableTypedData.fromList(<Uint8List>[copy]),
+      ]);
+    } catch (error) {
+      _writeCompletions.remove(id);
+      _pendingWriteBytes -= copy.length;
+      completer.completeError(error);
+    }
     return completer.future;
   }
 
   /// Gracefully closes the write half after already queued writes complete.
   Future<void> closeWrite() {
     if (_closed || _writeFinished) return Future.value();
-    if (_writerCommands == null) {
-      return Future.error(StateError('fd writer worker is not ready'));
-    }
 
     _writeFinished = true;
     final id = ++_nextWriteId;
     final completer = Completer<void>();
     _writeCompletions[id] = _PendingWrite(0, completer);
-    _writerCommands!.send(<Object>['shutdownWrite', id]);
+    try {
+      _reactor.send(<Object>['shutdownWrite', _id, id]);
+    } catch (error) {
+      _writeCompletions.remove(id);
+      completer.completeError(error);
+    }
     return completer.future;
   }
 
@@ -203,60 +193,54 @@ final class PosixFdTransport {
     _readFinished = true;
     _writeFinished = true;
 
-    _writerCommands?.send(<Object>['close']);
+    try {
+      _reactor.send(<Object>['close', _id]);
+    } catch (_) {
+      closePosixFdForCleanup(fd);
+    }
+    _fdFinalizer.detach(this);
     _failPendingWrites(StateError('fd transport is closed'));
-    _shutdown(_ShutdownHow.readWrite);
-    _closeFd();
-    _stopWorkersAndPorts();
     _closeInput();
+    _stopPorts();
     if (!_done.isCompleted) _done.complete();
   }
 
-  void _handleReaderEvent(Object? message) {
+  void _handleReactorEvent(Object? message) {
     if (_closed) return;
-    _readInFlight = false;
-    if (message == null) {
+    if (message is! List || message.isEmpty) return;
+    final kind = message[0];
+
+    if (kind == 'data' && message.length == 2) {
+      final data = message[1];
+      if (data is! TransferableTypedData) return;
+      final bytes = data.materialize().asUint8List();
+      _queuedInboundBytes += bytes.length;
+      _input.add(bytes);
+      _queuedInboundBytes -= bytes.length;
+      _enableReadIfReady();
+      return;
+    }
+
+    if (kind == 'eof') {
       _readFinished = true;
       _closeInput();
       _maybeCompleteDone();
       return;
     }
-    if (message is TransferableTypedData) {
-      _input.add(message.materialize().asUint8List());
-      _requestReadIfReady();
-      return;
-    }
-    if (message is List && message.length == 2 && message[0] == 'error') {
+
+    if (kind == 'readError' && message.length >= 2) {
       final error = StateError('fd read failed: ${message[1]}');
       _input.addError(error);
       _closeInput();
-      _closed = true;
-      _failPendingWrites(error);
-      _closeFd();
-      _stopWorkersAndPorts();
-      if (!_done.isCompleted) _done.completeError(error);
+      _finishWithError(error);
+      return;
     }
-  }
 
-  void _requestReadIfReady() {
-    if (_closed || _readFinished || _readInFlight) return;
-    if (_readerCommands == null) return;
-    if (!_input.hasListener || _input.isPaused || _input.isClosed) return;
-    _readInFlight = true;
-    _readerCommands!.send(<Object>['read']);
-  }
-
-  void _handleWriterEvent(Object? message) {
-    if (_closed) return;
-    if (message is! List || message.length < 2) return;
-    final kind = message[0];
-    final id = message[1];
-    if (id is! int) return;
-
-    final pending = _writeCompletions.remove(id);
-    if (pending != null) _pendingWriteBytes -= pending.bytes;
-
-    if (kind == 'ok') {
+    if (kind == 'writeOk' && message.length >= 2) {
+      final id = message[1];
+      if (id is! int) return;
+      final pending = _writeCompletions.remove(id);
+      if (pending != null) _pendingWriteBytes -= pending.bytes;
       pending?.completer.complete();
       if (pending?.bytes == 0) {
         _writeFinished = true;
@@ -265,28 +249,67 @@ final class PosixFdTransport {
       return;
     }
 
-    if (kind == 'error') {
-      final detail = message.length >= 3 ? message[2] : 'unknown error';
-      final error = StateError('fd write failed: $detail');
+    if (kind == 'writeError' && message.length >= 3) {
+      final id = message[1];
+      final pending = id is int ? _writeCompletions.remove(id) : null;
+      if (pending != null) _pendingWriteBytes -= pending.bytes;
+      final error = StateError('fd write failed: ${message[2]}');
       pending?.completer.completeError(error);
+      _finishWithError(error);
+      return;
+    }
+
+    if (kind == 'closed') {
       _closed = true;
-      _failPendingWrites(error);
-      _shutdown(_ShutdownHow.readWrite);
-      _closeFd();
-      _stopWorkersAndPorts();
+      _fdFinalizer.detach(this);
+      _failPendingWrites(StateError('fd transport is closed'));
       _closeInput();
-      if (!_done.isCompleted) _done.completeError(error);
+      _stopPorts();
+      if (!_done.isCompleted) _done.complete();
+    }
+  }
+
+  void _enableReadIfReady() {
+    if (_closed || _readFinished || _readEnabled) return;
+    if (!_input.hasListener || _input.isPaused || _input.isClosed) return;
+    if (_queuedInboundBytes >= maxInboundQueuedBytes) return;
+    _readEnabled = true;
+    try {
+      _reactor.send(<Object>['enableRead', _id]);
+    } catch (error) {
+      _finishWithError(StateError('fd read enable failed: $error'));
+    }
+  }
+
+  void _disableRead() {
+    if (_closed || !_readEnabled) return;
+    _readEnabled = false;
+    try {
+      _reactor.send(<Object>['disableRead', _id]);
+    } catch (_) {
+      // The close/error path will surface if the reactor is gone.
     }
   }
 
   void _maybeCompleteDone() {
     if (_closed) return;
     if (!_readFinished || !_writeFinished) return;
-
     _closed = true;
-    _closeFd();
-    _stopWorkersAndPorts();
+    _fdFinalizer.detach(this);
+    _stopPorts();
     if (!_done.isCompleted) _done.complete();
+  }
+
+  void _finishWithError(Object error) {
+    if (_closed) return;
+    _closed = true;
+    _readFinished = true;
+    _writeFinished = true;
+    _fdFinalizer.detach(this);
+    _failPendingWrites(error);
+    _closeInput();
+    _stopPorts();
+    if (!_done.isCompleted) _done.completeError(error);
   }
 
   void _failPendingWrites(Object error) {
@@ -304,25 +327,10 @@ final class PosixFdTransport {
     if (!_input.isClosed) unawaited(_input.close());
   }
 
-  void _shutdown(_ShutdownHow how) {
-    if (_fdClosed) return;
-    _PosixBindings.instance.shutdown(fd, how.value);
-  }
-
-  void _closeFd() {
-    if (_fdClosed) return;
-    _fdClosed = true;
-    _fdFinalizer.detach(this);
-    _PosixBindings.instance.close(fd);
-  }
-
-  void _stopWorkersAndPorts() {
-    _readerCommands?.send(<Object>['close']);
-    _writerCommands?.send(<Object>['close']);
+  void _stopPorts() {
     if (_portsClosed) return;
     _portsClosed = true;
-    _readerEvents.close();
-    _writerEvents.close();
+    _events.close();
   }
 }
 
@@ -342,8 +350,18 @@ enum _ShutdownHow {
 }
 
 const int _eintr = 4;
+const int _eagainLinux = 11;
+const int _eagainDarwin = 35;
 const int _afUnix = 1;
 const int _sockStream = 1;
+const int _reactorEventRead = 1 << 0;
+const int _reactorEventWrite = 1 << 1;
+const int _reactorEventHup = 1 << 2;
+const int _reactorEventError = 1 << 3;
+const int _reactorEventWake = 1 << 4;
+const int _reactorMaxEvents = 128;
+const int _reactorMaxRegisteredTransports = 4096;
+const int _reactorWriteBudgetBytes = 1024 * 1024;
 
 bool _posixFdTransportProbeComplete = false;
 
@@ -366,6 +384,7 @@ void ensurePosixFdTransportAvailable() {
       throw StateError('errno symbol could not be resolved');
     }
     _probeSocketPair(bindings);
+    _probeReactor();
     _posixFdTransportProbeComplete = true;
   } catch (error) {
     throw StateError('POSIX fd transport probe failed: $error');
@@ -376,6 +395,54 @@ void closePosixFdForCleanup(int fd) {
   if (fd < 0 || Platform.isWindows) return;
   _PosixBindings.instance.shutdown(fd, _ShutdownHow.readWrite.value);
   _PosixBindings.instance.close(fd);
+}
+
+@visibleForTesting
+Future<PosixFdReactorSnapshot?> debugPosixFdReactorSnapshot() {
+  final proxy = _SharedFdReactorProxy.activeOrNull;
+  if (proxy == null) return Future<PosixFdReactorSnapshot?>.value();
+  return proxy.snapshot();
+}
+
+@visibleForTesting
+final class PosixFdReactorSnapshot {
+  const PosixFdReactorSnapshot({
+    required this.registeredTransports,
+    required this.queuedOutboundBytes,
+    required this.wakeEvents,
+    required this.readSyscalls,
+    required this.writeSyscalls,
+    required this.againCount,
+    required this.hardErrorCount,
+    required this.closeCount,
+  });
+
+  final int registeredTransports;
+  final int queuedOutboundBytes;
+  final int wakeEvents;
+  final int readSyscalls;
+  final int writeSyscalls;
+  final int againCount;
+  final int hardErrorCount;
+  final int closeCount;
+
+  static PosixFdReactorSnapshot fromMap(Map<Object?, Object?> map) {
+    return PosixFdReactorSnapshot(
+      registeredTransports: _readInt(map, 'registeredTransports'),
+      queuedOutboundBytes: _readInt(map, 'queuedOutboundBytes'),
+      wakeEvents: _readInt(map, 'wakeEvents'),
+      readSyscalls: _readInt(map, 'readSyscalls'),
+      writeSyscalls: _readInt(map, 'writeSyscalls'),
+      againCount: _readInt(map, 'againCount'),
+      hardErrorCount: _readInt(map, 'hardErrorCount'),
+      closeCount: _readInt(map, 'closeCount'),
+    );
+  }
+
+  static int _readInt(Map<Object?, Object?> map, String key) {
+    final value = map[key];
+    return value is int ? value : 0;
+  }
 }
 
 void _probeSocketPair(_PosixBindings bindings) {
@@ -420,6 +487,25 @@ void _probeSocketPair(_PosixBindings bindings) {
   }
 }
 
+void _probeReactor() {
+  final handle = duneReactorCreate();
+  if (handle < 0) {
+    throw StateError('reactor create failed');
+  }
+  final events = calloc<_NativeReactorEvent>(1);
+  try {
+    final wakeResult = duneReactorWake(handle);
+    if (wakeResult != 0) throw StateError('reactor wake failed');
+    final n = duneReactorWait(handle, events.cast<Void>(), 1, 1000);
+    if (n < 1 || events[0].events & _reactorEventWake == 0) {
+      throw StateError('reactor wake wait failed n=$n');
+    }
+  } finally {
+    calloc.free(events);
+    duneReactorClose(handle);
+  }
+}
+
 void _probeWriteOne(_PosixBindings bindings, int fd, Pointer<Uint8> buffer) {
   while (true) {
     final n = bindings.write(fd, buffer, 1);
@@ -440,126 +526,574 @@ void _probeReadOne(_PosixBindings bindings, int fd, Pointer<Uint8> buffer) {
   }
 }
 
-void _fdReadWorker(List<Object> args) {
-  final fd = args[0] as int;
-  final maxReadChunkSize = args[1] as int;
-  final sendPort = args[2] as SendPort;
-  final commands = ReceivePort();
-  sendPort.send(<Object>['ready', commands.sendPort]);
+final class _SharedFdReactorProxy {
+  _SharedFdReactorProxy._({required SendPort commands, required int handle})
+    : _commands = commands,
+      _handle = handle;
 
-  final buffer = calloc<Uint8>(maxReadChunkSize);
-  unawaited(() async {
+  static Future<_SharedFdReactorProxy> get instance {
+    final active = _activeProxy;
+    if (active != null && !active._closed) {
+      return Future<_SharedFdReactorProxy>.value(active);
+    }
+    return _instance ??= _start();
+  }
+
+  static Future<_SharedFdReactorProxy>? _instance;
+  static _SharedFdReactorProxy? _activeProxy;
+  static int _nextTransportId = 0;
+
+  static _SharedFdReactorProxy? get activeOrNull {
+    final active = _activeProxy;
+    if (active == null || active._closed) return null;
+    return active;
+  }
+
+  final SendPort _commands;
+  final int _handle;
+  bool _closed = false;
+
+  static Future<_SharedFdReactorProxy> _start() async {
+    final ready = ReceivePort();
+    final exit = RawReceivePort();
+    final isolate = await Isolate.spawn(
+      _fdReactorWorker,
+      ready.sendPort,
+      debugName: 'tailscale-fd-reactor',
+    );
+    isolate.addOnExitListener(exit.sendPort);
+    final message = await ready.first.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => throw StateError('fd reactor worker did not start'),
+    );
+    ready.close();
+    if (message is List &&
+        message.length == 3 &&
+        message[0] == 'ready' &&
+        message[1] is SendPort &&
+        message[2] is int) {
+      final proxy = _SharedFdReactorProxy._(
+        commands: message[1] as SendPort,
+        handle: message[2] as int,
+      );
+      _activeProxy = proxy;
+      exit.handler = (_) {
+        proxy._closed = true;
+        if (identical(_activeProxy, proxy)) _activeProxy = null;
+        _instance = null;
+        exit.close();
+      };
+      return proxy;
+    }
+    exit.close();
+    if (message is List && message.length >= 2 && message[0] == 'error') {
+      throw StateError('fd reactor failed to start: ${message[1]}');
+    }
+    throw StateError('fd reactor returned invalid startup message');
+  }
+
+  Future<int> register({
+    required int fd,
+    required int maxReadChunkSize,
+    required SendPort eventPort,
+  }) async {
+    final id = ++_nextTransportId;
+    final reply = ReceivePort();
     try {
-      await for (final message in commands) {
-        if (message is! List || message.isEmpty) continue;
-        if (message[0] == 'close') {
-          commands.close();
-          return;
-        }
-        if (message[0] != 'read') continue;
+      send(<Object>[
+        'register',
+        id,
+        fd,
+        maxReadChunkSize,
+        eventPort,
+        reply.sendPort,
+      ]);
+      final message = await reply.first.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw StateError('fd reactor register timed out'),
+      );
+      if (message == 'ok') return id;
+      throw StateError(message);
+    } finally {
+      reply.close();
+    }
+  }
 
-        int n;
-        while (true) {
-          n = _PosixBindings.instance.read(fd, buffer, maxReadChunkSize);
-          if (n >= 0) break;
-          final errno = _PosixBindings.instance.errno;
-          if (errno == _eintr) continue;
-          sendPort.send(<Object>['error', 'read syscall failed errno=$errno']);
-          commands.close();
-          return;
-        }
+  Future<PosixFdReactorSnapshot> snapshot() async {
+    final reply = ReceivePort();
+    try {
+      send(<Object>['snapshot', reply.sendPort]);
+      final message = await reply.first.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw StateError('fd reactor snapshot timed out'),
+      );
+      if (message is Map<Object?, Object?>) {
+        return PosixFdReactorSnapshot.fromMap(message);
+      }
+      throw StateError('fd reactor returned invalid snapshot');
+    } finally {
+      reply.close();
+    }
+  }
 
+  void send(List<Object> command) {
+    if (_closed) {
+      _instance = null;
+      throw StateError('fd reactor is stopped');
+    }
+    _commands.send(command);
+    final result = duneReactorWake(_handle);
+    if (result != 0) {
+      throw StateError('fd reactor wake failed');
+    }
+  }
+}
+
+void _fdReactorWorker(SendPort readyPort) {
+  final commands = RawReceivePort();
+  final pendingCommands = Queue<Object?>();
+  commands.handler = pendingCommands.add;
+
+  final handle = duneReactorCreate();
+  if (handle < 0) {
+    commands.close();
+    readyPort.send(<Object>['error', 'native reactor create failed']);
+    return;
+  }
+  readyPort.send(<Object>['ready', commands.sendPort, handle]);
+
+  unawaited(_runFdReactor(handle, commands, pendingCommands));
+}
+
+Future<void> _runFdReactor(
+  int handle,
+  RawReceivePort commands,
+  Queue<Object?> pendingCommands,
+) async {
+  final states = <int, _ReactorTransportState>{};
+  final metrics = _ReactorMetrics();
+  final events = calloc<_NativeReactorEvent>(_reactorMaxEvents);
+  var sawTransport = false;
+
+  try {
+    while (true) {
+      await Future<void>.delayed(Duration.zero);
+      sawTransport =
+          _processReactorCommands(handle, states, metrics, pendingCommands) ||
+          sawTransport;
+      if (sawTransport && states.isEmpty && pendingCommands.isEmpty) {
+        return;
+      }
+
+      final n = duneReactorWait(
+        handle,
+        events.cast<Void>(),
+        _reactorMaxEvents,
+        sawTransport && states.isEmpty ? 100 : -1,
+      );
+      await Future<void>.delayed(Duration.zero);
+      sawTransport =
+          _processReactorCommands(handle, states, metrics, pendingCommands) ||
+          sawTransport;
+      if (sawTransport && states.isEmpty && pendingCommands.isEmpty) {
+        return;
+      }
+
+      if (n < 0) {
+        final error = StateError('native reactor wait failed');
+        metrics.hardErrorCount++;
+        for (final state in List<_ReactorTransportState>.of(states.values)) {
+          _closeReactorState(handle, states, metrics, state, error: error);
+        }
+        return;
+      }
+
+      for (var i = 0; i < n; i++) {
+        final event = events[i];
+        if (event.events & _reactorEventWake != 0) {
+          metrics.wakeEvents++;
+          continue;
+        }
+        final state = states[event.id];
+        if (state == null || state.closed) continue;
+        if (event.events & _reactorEventRead != 0) {
+          _readReactorState(handle, states, metrics, state);
+        }
+        if (state.closed) continue;
+        if (event.events & _reactorEventWrite != 0) {
+          _flushReactorWrites(handle, states, metrics, state);
+        }
+        if (state.closed) continue;
+        if (event.events & (_reactorEventHup | _reactorEventError) != 0) {
+          _readReactorState(handle, states, metrics, state, eofOnAgain: true);
+        }
+      }
+    }
+  } finally {
+    for (final state in List<_ReactorTransportState>.of(states.values)) {
+      _closeReactorState(handle, states, metrics, state);
+    }
+    calloc.free(events);
+    commands.close();
+    duneReactorClose(handle);
+  }
+}
+
+bool _processReactorCommands(
+  int handle,
+  Map<int, _ReactorTransportState> states,
+  _ReactorMetrics metrics,
+  Queue<Object?> pendingCommands,
+) {
+  var registeredTransport = false;
+  while (pendingCommands.isNotEmpty) {
+    final message = pendingCommands.removeFirst();
+    if (message is! List || message.isEmpty) continue;
+    final kind = message[0];
+
+    if (kind == 'snapshot' && message.length == 2 && message[1] is SendPort) {
+      (message[1] as SendPort).send(_reactorSnapshot(states, metrics));
+      continue;
+    }
+
+    if (kind == 'register' && message.length == 6) {
+      final id = message[1] as int;
+      final fd = message[2] as int;
+      final maxReadChunkSize = message[3] as int;
+      final eventPort = message[4] as SendPort;
+      final replyPort = message[5] as SendPort;
+      if (states.length >= _reactorMaxRegisteredTransports) {
+        closePosixFdForCleanup(fd);
+        replyPort.send('fd reactor transport limit exceeded');
+        continue;
+      }
+      final result = duneReactorRegister(handle, fd, id, 0);
+      if (result != 0) {
+        closePosixFdForCleanup(fd);
+        replyPort.send('native reactor register failed');
+        continue;
+      }
+      states[id] = _ReactorTransportState(
+        id: id,
+        fd: fd,
+        maxReadChunkSize: maxReadChunkSize,
+        eventPort: eventPort,
+      );
+      registeredTransport = true;
+      replyPort.send('ok');
+      continue;
+    }
+
+    if (message.length < 2 || message[1] is! int) continue;
+    final id = message[1] as int;
+    final state = states[id];
+    if (state == null || state.closed) continue;
+
+    if (kind == 'enableRead') {
+      state.readEnabled = true;
+      _updateReactorInterest(handle, state);
+      continue;
+    }
+
+    if (kind == 'disableRead') {
+      state.readEnabled = false;
+      _updateReactorInterest(handle, state);
+      continue;
+    }
+
+    if (kind == 'write' &&
+        message.length == 4 &&
+        message[2] is int &&
+        message[3] is TransferableTypedData) {
+      final data = (message[3] as TransferableTypedData)
+          .materialize()
+          .asUint8List();
+      state.writes.add(_ReactorWrite(message[2] as int, data));
+      _flushReactorWrites(handle, states, metrics, state);
+      continue;
+    }
+
+    if (kind == 'shutdownWrite' && message.length == 3 && message[2] is int) {
+      state.closingWrite = true;
+      state.shutdownWriteId = message[2] as int;
+      _flushReactorWrites(handle, states, metrics, state);
+      continue;
+    }
+
+    if (kind == 'close') {
+      _closeReactorState(handle, states, metrics, state);
+      continue;
+    }
+  }
+  return registeredTransport;
+}
+
+void _readReactorState(
+  int handle,
+  Map<int, _ReactorTransportState> states,
+  _ReactorMetrics metrics,
+  _ReactorTransportState state, {
+  bool eofOnAgain = false,
+}) {
+  if (!state.readEnabled || state.readClosed || state.closed) return;
+
+  while (true) {
+    metrics.readSyscalls++;
+    final n = _PosixBindings.instance.read(
+      state.fd,
+      state.readBuffer,
+      state.maxReadChunkSize,
+    );
+    if (n > 0) {
+      final bytes = Uint8List.fromList(state.readBuffer.asTypedList(n));
+      state.eventPort.send(<Object>[
+        'data',
+        TransferableTypedData.fromList(<Uint8List>[bytes]),
+      ]);
+      return;
+    }
+    if (n == 0) {
+      state.readClosed = true;
+      state.readEnabled = false;
+      state.eventPort.send(<Object>['eof']);
+      _updateReactorInterest(handle, state);
+      _closeIfFullyDone(handle, states, metrics, state);
+      return;
+    }
+    final errno = _PosixBindings.instance.errno;
+    if (errno == _eintr) continue;
+    if (_isAgain(errno)) {
+      metrics.againCount++;
+      if (eofOnAgain) {
+        state.readClosed = true;
+        state.readEnabled = false;
+        state.eventPort.send(<Object>['eof']);
+        _updateReactorInterest(handle, state);
+        _closeIfFullyDone(handle, states, metrics, state);
+      }
+      return;
+    }
+    final error = StateError('read syscall failed errno=$errno');
+    metrics.hardErrorCount++;
+    state.eventPort.send(<Object>['readError', error.toString()]);
+    _closeReactorState(handle, states, metrics, state, error: error);
+    return;
+  }
+}
+
+void _flushReactorWrites(
+  int handle,
+  Map<int, _ReactorTransportState> states,
+  _ReactorMetrics metrics,
+  _ReactorTransportState state,
+) {
+  if (state.closed || state.writeClosed) return;
+
+  var budget = _reactorWriteBudgetBytes;
+  while (state.writes.isNotEmpty && budget > 0) {
+    final write = state.writes.first;
+    final remaining = write.data.length - write.offset;
+    final toWrite = remaining < budget ? remaining : budget;
+    final buffer = calloc<Uint8>(toWrite);
+    try {
+      buffer
+          .asTypedList(toWrite)
+          .setAll(
+            0,
+            Uint8List.sublistView(
+              write.data,
+              write.offset,
+              write.offset + toWrite,
+            ),
+          );
+      while (true) {
+        metrics.writeSyscalls++;
+        final n = _PosixBindings.instance.write(state.fd, buffer, toWrite);
+        if (n > 0) {
+          write.offset += n;
+          budget -= n;
+          if (write.offset == write.data.length) {
+            state.writes.removeFirst();
+            state.eventPort.send(<Object>['writeOk', write.id]);
+          }
+          break;
+        }
         if (n == 0) {
-          sendPort.send(null);
-          commands.close();
+          final error = StateError('write syscall returned 0');
+          metrics.hardErrorCount++;
+          state.eventPort.send(<Object>[
+            'writeError',
+            write.id,
+            error.toString(),
+          ]);
+          _closeReactorState(handle, states, metrics, state, error: error);
           return;
         }
-        final bytes = Uint8List.fromList(buffer.asTypedList(n));
-        sendPort.send(TransferableTypedData.fromList(<Uint8List>[bytes]));
+        final errno = _PosixBindings.instance.errno;
+        if (errno == _eintr) continue;
+        if (_isAgain(errno)) {
+          metrics.againCount++;
+          _updateReactorInterest(handle, state);
+          return;
+        }
+        final error = StateError('write syscall failed errno=$errno');
+        metrics.hardErrorCount++;
+        state.eventPort.send(<Object>[
+          'writeError',
+          write.id,
+          error.toString(),
+        ]);
+        _closeReactorState(handle, states, metrics, state, error: error);
+        return;
       }
     } finally {
       calloc.free(buffer);
     }
-  }());
-}
-
-void _fdWriteWorker(List<Object> args) {
-  final fd = args[0] as int;
-  final sendPort = args[1] as SendPort;
-  final commands = ReceivePort();
-  sendPort.send(<Object>['ready', commands.sendPort]);
-
-  unawaited(() async {
-    await for (final message in commands) {
-      if (message is! List || message.isEmpty) continue;
-      final kind = message[0];
-      if (kind == 'close') {
-        commands.close();
-        return;
-      }
-      if (message.length < 2 || message[1] is! int) continue;
-      final id = message[1] as int;
-
-      if (kind == 'write') {
-        if (message.length < 3 || message[2] is! TransferableTypedData) {
-          sendPort.send(<Object>['error', id, 'missing write payload']);
-          continue;
-        }
-        final data = (message[2] as TransferableTypedData)
-            .materialize()
-            .asUint8List();
-        final error = _writeAll(fd, data);
-        if (error == null) {
-          sendPort.send(<Object>['ok', id]);
-        } else {
-          sendPort.send(<Object>['error', id, error]);
-        }
-        continue;
-      }
-
-      if (kind == 'shutdownWrite') {
-        final result = _PosixBindings.instance.shutdown(
-          fd,
-          _ShutdownHow.write.value,
-        );
-        if (result == 0) {
-          sendPort.send(<Object>['ok', id]);
-        } else {
-          sendPort.send(<Object>[
-            'error',
-            id,
-            'shutdown(SHUT_WR) returned $result',
-          ]);
-        }
-      }
-    }
-  }());
-}
-
-String? _writeAll(int fd, Uint8List data) {
-  final buffer = calloc<Uint8>(data.length);
-  try {
-    buffer.asTypedList(data.length).setAll(0, data);
-    var offset = 0;
-    while (offset < data.length) {
-      final pointer = buffer + offset;
-      final n = _PosixBindings.instance.write(
-        fd,
-        pointer,
-        data.length - offset,
-      );
-      if (n < 0) {
-        final errno = _PosixBindings.instance.errno;
-        if (errno == _eintr) continue;
-        return 'write syscall failed errno=$errno';
-      }
-      if (n == 0) return 'write syscall returned 0';
-      offset += n;
-    }
-    return null;
-  } finally {
-    calloc.free(buffer);
   }
+
+  if (state.writes.isEmpty && state.closingWrite && !state.writeClosed) {
+    final result = _PosixBindings.instance.shutdown(
+      state.fd,
+      _ShutdownHow.write.value,
+    );
+    if (result == 0) {
+      state.writeClosed = true;
+      final id = state.shutdownWriteId;
+      if (id != null) state.eventPort.send(<Object>['writeOk', id]);
+      _closeIfFullyDone(handle, states, metrics, state);
+    } else {
+      final id = state.shutdownWriteId ?? 0;
+      final error = StateError('shutdown(SHUT_WR) failed');
+      metrics.hardErrorCount++;
+      state.eventPort.send(<Object>['writeError', id, error.toString()]);
+      _closeReactorState(handle, states, metrics, state, error: error);
+    }
+    return;
+  }
+
+  _updateReactorInterest(handle, state);
+}
+
+void _closeIfFullyDone(
+  int handle,
+  Map<int, _ReactorTransportState> states,
+  _ReactorMetrics metrics,
+  _ReactorTransportState state,
+) {
+  if (state.readClosed && state.writeClosed) {
+    _closeReactorState(handle, states, metrics, state);
+  }
+}
+
+void _closeReactorState(
+  int handle,
+  Map<int, _ReactorTransportState> states,
+  _ReactorMetrics metrics,
+  _ReactorTransportState state, {
+  Object? error,
+}) {
+  if (state.closed) return;
+  state.closed = true;
+  metrics.closeCount++;
+  states.remove(state.id);
+  duneReactorUnregister(handle, state.fd);
+  _PosixBindings.instance.shutdown(state.fd, _ShutdownHow.readWrite.value);
+  _PosixBindings.instance.close(state.fd);
+  calloc.free(state.readBuffer);
+  if (error != null) {
+    for (final write in state.writes) {
+      state.eventPort.send(<Object>['writeError', write.id, error.toString()]);
+    }
+  }
+  state.writes.clear();
+  state.eventPort.send(<Object>['closed']);
+}
+
+Map<String, int> _reactorSnapshot(
+  Map<int, _ReactorTransportState> states,
+  _ReactorMetrics metrics,
+) {
+  var queuedOutboundBytes = 0;
+  for (final state in states.values) {
+    for (final write in state.writes) {
+      queuedOutboundBytes += write.data.length - write.offset;
+    }
+  }
+  return <String, int>{
+    'registeredTransports': states.length,
+    'queuedOutboundBytes': queuedOutboundBytes,
+    'wakeEvents': metrics.wakeEvents,
+    'readSyscalls': metrics.readSyscalls,
+    'writeSyscalls': metrics.writeSyscalls,
+    'againCount': metrics.againCount,
+    'hardErrorCount': metrics.hardErrorCount,
+    'closeCount': metrics.closeCount,
+  };
+}
+
+void _updateReactorInterest(int handle, _ReactorTransportState state) {
+  if (state.closed) return;
+  var events = 0;
+  if (state.readEnabled && !state.readClosed) events |= _reactorEventRead;
+  if (state.writes.isNotEmpty) events |= _reactorEventWrite;
+  final result = duneReactorUpdate(handle, state.fd, state.id, events);
+  if (result != 0) {
+    final error = StateError('native reactor update failed');
+    state.eventPort.send(<Object>['readError', error.toString()]);
+  }
+}
+
+bool _isAgain(int errno) => errno == _eagainLinux || errno == _eagainDarwin;
+
+final class _ReactorTransportState {
+  _ReactorTransportState({
+    required this.id,
+    required this.fd,
+    required this.maxReadChunkSize,
+    required this.eventPort,
+  }) : readBuffer = calloc<Uint8>(maxReadChunkSize);
+
+  final int id;
+  final int fd;
+  final int maxReadChunkSize;
+  final SendPort eventPort;
+  final Pointer<Uint8> readBuffer;
+  final writes = Queue<_ReactorWrite>();
+
+  bool readEnabled = false;
+  bool readClosed = false;
+  bool closingWrite = false;
+  bool writeClosed = false;
+  bool closed = false;
+  int? shutdownWriteId;
+}
+
+final class _ReactorWrite {
+  _ReactorWrite(this.id, this.data);
+
+  final int id;
+  final Uint8List data;
+  int offset = 0;
+}
+
+final class _ReactorMetrics {
+  int wakeEvents = 0;
+  int readSyscalls = 0;
+  int writeSyscalls = 0;
+  int againCount = 0;
+  int hardErrorCount = 0;
+  int closeCount = 0;
+}
+
+final class _NativeReactorEvent extends Struct {
+  @Int64()
+  external int id;
+
+  @Int32()
+  external int events;
+
+  @Int32()
+  external int error;
 }
 
 final class _PosixBindings {

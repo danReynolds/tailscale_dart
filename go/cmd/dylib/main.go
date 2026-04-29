@@ -1,6 +1,13 @@
 package main
 
 // #include <stdlib.h>
+// #include <stdint.h>
+//
+// typedef struct {
+//   int64_t id;
+//   int32_t events;
+//   int32_t error;
+// } DuneReactorEvent;
 import "C"
 
 import (
@@ -192,6 +199,79 @@ func DuneUdpBindFd(host *C.char, port C.int) *C.char {
 		"localPort":    binding.LocalPort,
 	})
 	return C.CString(string(result))
+}
+
+//export DuneReactorCreate
+func DuneReactorCreate() C.longlong {
+	handle, err := tailscale.ReactorCreate()
+	if err != nil {
+		return -1
+	}
+	return C.longlong(handle)
+}
+
+//export DuneReactorClose
+func DuneReactorClose(handle C.longlong) C.int {
+	if err := tailscale.ReactorClose(int64(handle)); err != nil {
+		return -1
+	}
+	return 0
+}
+
+//export DuneReactorWake
+func DuneReactorWake(handle C.longlong) C.int {
+	if err := tailscale.ReactorWake(int64(handle)); err != nil {
+		return -1
+	}
+	return 0
+}
+
+//export DuneReactorRegister
+func DuneReactorRegister(handle C.longlong, fd C.int, transportID C.longlong, events C.int) C.int {
+	if err := tailscale.ReactorRegister(
+		int64(handle),
+		int(fd),
+		int64(transportID),
+		int(events),
+	); err != nil {
+		return -1
+	}
+	return 0
+}
+
+//export DuneReactorUpdate
+func DuneReactorUpdate(handle C.longlong, fd C.int, transportID C.longlong, events C.int) C.int {
+	if err := tailscale.ReactorUpdate(
+		int64(handle),
+		int(fd),
+		int64(transportID),
+		int(events),
+	); err != nil {
+		return -1
+	}
+	return 0
+}
+
+//export DuneReactorUnregister
+func DuneReactorUnregister(handle C.longlong, fd C.int) C.int {
+	if err := tailscale.ReactorUnregister(int64(handle), int(fd)); err != nil {
+		return -1
+	}
+	return 0
+}
+
+//export DuneReactorWait
+func DuneReactorWait(handle C.longlong, events unsafe.Pointer, maxEvents C.int, timeoutMillis C.int) C.int {
+	n, err := tailscale.ReactorWait(
+		int64(handle),
+		events,
+		int(maxEvents),
+		int(timeoutMillis),
+	)
+	if err != nil {
+		return -1
+	}
+	return C.int(n)
 }
 
 //export DuneWhoIs

@@ -173,6 +173,79 @@ void main() {
         await left.write(payload);
         expect(await receivedFuture, payload);
       });
+
+      test('closeWrite waits for queued bytes before EOF', () async {
+        final (:left, :right) = await _connectedPair(
+          maxPendingWriteBytes: 3 * 1024 * 1024,
+        );
+        addTearDown(() => _closeBoth(left, right));
+
+        final payload = Uint8List.fromList(
+          List<int>.generate(2 * 1024 * 1024, (index) => index & 0xff),
+        );
+        final write = left.write(payload);
+        final closeWrite = left.closeWrite();
+
+        final received = await right.input
+            .expand((chunk) => chunk)
+            .toList()
+            .timeout(const Duration(seconds: 10));
+
+        await write.timeout(const Duration(seconds: 10));
+        await closeWrite.timeout(const Duration(seconds: 10));
+        expect(received.length, payload.length);
+        expect(received, payload);
+      });
+
+      test('shared reactor supports many active transports', () async {
+        final pairs = <({PosixFdTransport left, PosixFdTransport right})>[];
+        addTearDown(() async {
+          await Future.wait(
+            pairs.map((pair) => _closeBoth(pair.left, pair.right)),
+          );
+        });
+
+        for (var i = 0; i < 100; i++) {
+          pairs.add(await _connectedPair());
+        }
+
+        final reads = <Future<List<int>>>[];
+        for (var i = 0; i < pairs.length; i++) {
+          reads.add(
+            pairs[i].right.input
+                .expand((chunk) => chunk)
+                .take(3)
+                .toList()
+                .timeout(const Duration(seconds: 10)),
+          );
+        }
+
+        await Future.wait(<Future<void>>[
+          for (var i = 0; i < pairs.length; i++)
+            pairs[i].left.write(Uint8List.fromList(<int>[i & 0xff, 1, 2])),
+        ]);
+
+        final received = await Future.wait(reads);
+        for (var i = 0; i < received.length; i++) {
+          expect(received[i], <int>[i & 0xff, 1, 2]);
+        }
+      });
+
+      test('shared reactor exposes internal diagnostic counters', () async {
+        final (:left, :right) = await _connectedPair();
+        addTearDown(() => _closeBoth(left, right));
+
+        await left.write(Uint8List.fromList(<int>[1, 2, 3]));
+        final rightInput = StreamIterator(right.input);
+        addTearDown(rightInput.cancel);
+        expect(await _moveNext(rightInput), isTrue);
+
+        final snapshot = await debugPosixFdReactorSnapshot();
+        expect(snapshot, isNotNull);
+        expect(snapshot!.registeredTransports, greaterThanOrEqualTo(2));
+        expect(snapshot.readSyscalls, greaterThan(0));
+        expect(snapshot.writeSyscalls, greaterThan(0));
+      });
     },
   );
 }

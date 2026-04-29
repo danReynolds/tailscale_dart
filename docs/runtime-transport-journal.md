@@ -208,6 +208,29 @@ The E2E run passed all 30 tests after adding UDP.
 
 - `/Users/dan/Coding/flutter_arm64/bin/dart analyze` in `packages/demo_core`
 
+## 2026-04-29: Shared POSIX fd reactor
+
+### Changes
+
+- Replaced the two-isolates-per-fd transport backend with a shared POSIX fd
+  reactor isolate.
+- Added native poller shims inside the existing Go native asset:
+  `kqueue`/`EVFILT_USER` on Darwin and `epoll`/`eventfd` on Linux/Android.
+- Kept `PosixFdTransport` as the internal facade used by TCP, UDP, and HTTP so
+  public package-native APIs do not change.
+- Preserved ordered writes, copy-before-async-write ownership, pause-aware
+  input, half-close, full close, and deterministic fd cleanup.
+- Added a private reactor diagnostic snapshot for tests and future debugging.
+- Tightened the shared reactor RFC around sharding, accept-loop ownership,
+  fairness, queue bounds, validation order, and observability.
+
+### Validation
+
+- `go test ./...` in `go`
+- `/Users/dan/Coding/flutter_arm64/bin/dart analyze`
+- `/Users/dan/Coding/flutter_arm64/bin/dart test --enable-experiment=native-assets`
+- `/Users/dan/Coding/flutter_arm64/bin/dart test --enable-experiment=native-assets test/integration/fd`
+
 ## 2026-04-24: Transport reliability hardening after mobile validation
 
 ### Context

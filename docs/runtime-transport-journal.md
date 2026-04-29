@@ -208,6 +208,28 @@ The E2E run passed all 30 tests after adding UDP.
 
 - `/Users/dan/Coding/flutter_arm64/bin/dart analyze` in `packages/demo_core`
 
+## 2026-04-29: Shared reactor benchmark harness
+
+### Changes
+
+- Added `benchmark/fd_transport.dart`, a local POSIX fd data-plane benchmark
+  that can run against both the pre-reactor backend and the shared-reactor
+  backend without using reactor-only debug hooks.
+- Added `benchmark/README.md` with before/after commands and interpretation
+  guidance for throughput and small-write latency.
+- Fixed a stale-reactor adoption race surfaced by the benchmark: after the last
+  fd closed, the reactor isolate could exit before the main isolate observed
+  the exit, leaving a dead proxy for the next immediate adoption. Adoption now
+  retries once and stores only the reactor proxy that actually registered the
+  fd.
+
+### Validation
+
+- `/Users/dan/Coding/flutter_arm64/bin/dart analyze`
+- `/Users/dan/Coding/flutter_arm64/bin/dart test --enable-experiment=native-assets`
+- `/Users/dan/Coding/flutter_arm64/bin/dart run --enable-experiment=native-assets benchmark/fd_transport.dart --pairs=1,10 --payload-mib=1 --latency-writes=20 --json`
+- `/Users/dan/Coding/flutter_arm64/bin/dart run --enable-experiment=native-assets benchmark/fd_transport.dart --json`
+
 ## 2026-04-29: Shared POSIX fd reactor
 
 ### Changes

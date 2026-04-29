@@ -113,12 +113,26 @@ final class PosixFdTransport {
     _events = RawReceivePort(_handleReactorEvent);
 
     try {
-      _reactor = await _SharedFdReactorProxy.instance;
-      _id = await _reactor.register(
-        fd: fd,
-        maxReadChunkSize: maxReadChunkSize,
-        eventPort: _events.sendPort,
-      );
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final reactor = await _SharedFdReactorProxy.instance;
+        try {
+          final id = await reactor.register(
+            fd: fd,
+            maxReadChunkSize: maxReadChunkSize,
+            eventPort: _events.sendPort,
+          );
+          _reactor = reactor;
+          _id = id;
+          return;
+        } on StateError catch (error) {
+          if (attempt == 0 &&
+              _SharedFdReactorProxy.isRegistrationRetryable(error)) {
+            continue;
+          }
+          rethrow;
+        }
+      }
+      throw StateError('fd reactor register retry exhausted');
     } catch (error) {
       _stopPorts();
       _closeInput();
@@ -610,7 +624,10 @@ final class _SharedFdReactorProxy {
       ]);
       final message = await reply.first.timeout(
         const Duration(seconds: 5),
-        onTimeout: () => throw StateError('fd reactor register timed out'),
+        onTimeout: () {
+          _markClosed();
+          throw StateError('fd reactor register timed out');
+        },
       );
       if (message == 'ok') return id;
       throw StateError(message);
@@ -644,9 +661,20 @@ final class _SharedFdReactorProxy {
     _commands.send(command);
     final result = duneReactorWake(_handle);
     if (result != 0) {
+      _markClosed();
       throw StateError('fd reactor wake failed');
     }
   }
+
+  void _markClosed() {
+    _closed = true;
+    if (identical(_activeProxy, this)) _activeProxy = null;
+    _instance = null;
+  }
+
+  static bool isRegistrationRetryable(StateError error) =>
+      error.message == 'fd reactor wake failed' ||
+      error.message == 'fd reactor register timed out';
 }
 
 void _fdReactorWorker(SendPort readyPort) {

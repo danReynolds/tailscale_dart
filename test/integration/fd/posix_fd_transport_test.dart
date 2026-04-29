@@ -95,6 +95,21 @@ void main() {
         await left.done.timeout(const Duration(seconds: 5));
       });
 
+      test('can adopt again immediately after the reactor goes idle', () async {
+        for (var i = 0; i < 5; i++) {
+          final (:left, :right) = await _connectedPair();
+          final rightInput = StreamIterator(right.input);
+          try {
+            await left.write(Uint8List.fromList(<int>[i]));
+            expect(await _moveNext(rightInput), isTrue);
+            expect(rightInput.current, <int>[i]);
+          } finally {
+            await rightInput.cancel();
+            await _closeBoth(left, right);
+          }
+        }
+      });
+
       test('rejects writes after the write side is closed', () async {
         final (:left, :right) = await _connectedPair();
         addTearDown(() => _closeBoth(left, right));

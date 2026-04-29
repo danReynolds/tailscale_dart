@@ -157,13 +157,20 @@ use `--jobs 3` for a faster local matrix once the individual targets are stable.
 
 Physical devices usually need a reachable host LAN URL. The runner exposes
 both the Headscale control plane and a small config-fetch HTTP server back to
-the smoke app, so override both:
+the smoke app, so override both and explicitly bind the runner server to a
+reachable interface:
 
 ```bash
 DUNE_SMOKE_CONTROL_URL_IOS=http://192.168.86.22:18080 \
 DUNE_SMOKE_RUNNER_URL_IOS=http://192.168.86.22:18099 \
-  tool/smoke/run_matrix.sh --targets ios
+  tool/smoke/run_matrix.sh --targets ios --runner-bind-address 0.0.0.0
 ```
+
+The runner HTTP server binds to `127.0.0.1` by default and protects `/config`
+and `/result` with a stable per-worktree token passed to the smoke app as a
+dart-define. Binding to `0.0.0.0` should be limited to physical-device smoke
+runs on trusted networks because `/config` carries a short-lived Headscale auth
+key.
 
 Real iOS/Android devices remain the release-confidence path because simulators
 and emulators do not fully cover ARM64 packaging, mobile networking, app

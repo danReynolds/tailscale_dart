@@ -3,10 +3,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 const _knownTargets = ['macos', 'ios', 'android', 'linux'];
 const _defaultTargets = ['macos', 'ios', 'android'];
 const _resultPrefix = 'DUNE_SMOKE_RESULT ';
+const _runnerTokenHeader = 'x-dune-smoke-token';
 
 Future<void> main(List<String> args) async {
   final config = _Config.parse(args);
@@ -29,6 +31,7 @@ final class _SmokeMatrixRunner {
   late final String demoCoreDir = '$root/packages/demo_core';
   late final String smokeAppDir = '$root/packages/demo_smoke_flutter';
   late final int _runStartMillis = DateTime.now().millisecondsSinceEpoch;
+  late final String _runnerToken = _loadOrCreateRunnerToken();
   Process? _launchedAndroidEmulator;
   HttpServer? _runnerServer;
   String? _currentAuthKey;
@@ -106,12 +109,16 @@ final class _SmokeMatrixRunner {
       // is reported. Detached docker continues teardown in the background.
       if (headscaleStarted && !config.keepHeadscale) {
         _log('detaching docker compose down -v in background');
-        await Process.start(
-          config.docker,
-          ['compose', '-f', composeFile, 'down', '-v'],
-          environment: {'HEADSCALE_PORT': config.headscalePort},
-          mode: ProcessStartMode.detached,
-        );
+        try {
+          await Process.start(
+            config.docker,
+            ['compose', '-f', composeFile, 'down', '-v'],
+            environment: {'HEADSCALE_PORT': config.headscalePort},
+            mode: ProcessStartMode.detached,
+          );
+        } catch (error) {
+          stderr.writeln('failed to detach docker compose down -v: $error');
+        }
       }
       await Future.wait(<Future<void>>[
         if (peer != null) peer.stop(),
@@ -138,13 +145,7 @@ final class _SmokeMatrixRunner {
         // Pre-build for the iOS simulator. If the user pinned an iOS device
         // override, fall back to flutter run's inline build (skip pre-build).
         if (config.deviceOverrides.containsKey('ios')) return null;
-        return [
-          'build',
-          'ios',
-          '--simulator',
-          '--debug',
-          '--no-codesign',
-        ];
+        return ['build', 'ios', '--simulator', '--debug', '--no-codesign'];
       case 'android':
         return ['build', 'apk', '--${config.androidRunMode}'];
       default:
@@ -203,10 +204,13 @@ final class _SmokeMatrixRunner {
 
   Future<void> _startRunnerServer() async {
     _runnerServer = await HttpServer.bind(
-      InternetAddress.anyIPv4,
+      config.runnerBindAddress,
       config.runnerPort,
     );
-    _log('runner HTTP server listening on port ${config.runnerPort}');
+    _log(
+      'runner HTTP server listening on '
+      '${config.runnerBindAddress}:${config.runnerPort}',
+    );
     unawaited(_serveRunnerRequests());
   }
 
@@ -240,6 +244,11 @@ final class _SmokeMatrixRunner {
   Future<void> _handleRunnerRequest(HttpRequest request) async {
     final session = request.uri.queryParameters['session'] ?? 'default';
     final path = request.uri.path;
+    if (!_isRunnerRequestAuthorized(request)) {
+      request.response.statusCode = HttpStatus.unauthorized;
+      await request.response.close();
+      return;
+    }
     if (request.method == 'GET' && path == '/config') {
       final body = <String, Object?>{
         'authKey': _currentAuthKey ?? '',
@@ -262,7 +271,10 @@ final class _SmokeMatrixRunner {
         data = jsonDecode(raw) as Map<String, Object?>;
       } catch (_) {}
       final completer = _resultCompleters[session];
-      if (data != null && completer != null && !completer.isCompleted) {
+      if (data != null &&
+          _isValidSmokeResult(data) &&
+          completer != null &&
+          !completer.isCompleted) {
         completer.complete(data);
       }
       request.response.statusCode = HttpStatus.noContent;
@@ -273,14 +285,55 @@ final class _SmokeMatrixRunner {
     await request.response.close();
   }
 
+  bool _isRunnerRequestAuthorized(HttpRequest request) {
+    final token =
+        request.headers.value(_runnerTokenHeader) ??
+        request.uri.queryParameters['token'];
+    return token == _runnerToken;
+  }
+
+  bool _isValidSmokeResult(Map<String, Object?> data) {
+    return data['ok'] is bool &&
+        data['startedAt'] is String &&
+        data['finishedAt'] is String &&
+        data['hostname'] is String &&
+        data['platform'] is String &&
+        data['targetIp'] is String;
+  }
+
   String _runnerUrlFor(String target) {
-    final specific = Platform
-        .environment['DUNE_SMOKE_RUNNER_URL_${target.toUpperCase()}'];
+    final specific =
+        Platform.environment['DUNE_SMOKE_RUNNER_URL_${target.toUpperCase()}'];
     if (specific != null && specific.isNotEmpty) return specific;
     final shared = Platform.environment['DUNE_SMOKE_RUNNER_URL'];
     if (shared != null && shared.isNotEmpty) return shared;
     if (target == 'android') return 'http://10.0.2.2:${config.runnerPort}';
     return 'http://localhost:${config.runnerPort}';
+  }
+
+  String _loadOrCreateRunnerToken() {
+    final fromEnv = Platform.environment['DUNE_SMOKE_RUNNER_TOKEN'];
+    if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+
+    final file = File('$root/.dart_tool/dune_smoke_runner_token');
+    try {
+      if (file.existsSync()) {
+        final existing = file.readAsStringSync().trim();
+        if (existing.isNotEmpty) return existing;
+      }
+      file.parent.createSync(recursive: true);
+      final token = _newRunnerToken();
+      file.writeAsStringSync('$token\n', flush: true);
+      return token;
+    } catch (_) {
+      return _newRunnerToken();
+    }
+  }
+
+  String _newRunnerToken() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+    return base64Url.encode(bytes).replaceAll('=', '');
   }
 
   String get _hostControlUrl => 'http://localhost:${config.headscalePort}';
@@ -396,7 +449,9 @@ final class _SmokeMatrixRunner {
         // settle for a physical device match — wait until an emulator
         // appears, otherwise an attached wireless iPhone gets picked even
         // when we explicitly asked for the simulator.
-        if (devices.any((device) => device.emulator && _matchesTarget(device, target))) {
+        if (devices.any(
+          (device) => device.emulator && _matchesTarget(device, target),
+        )) {
           return devices;
         }
       }
@@ -475,6 +530,7 @@ final class _SmokeMatrixRunner {
       if (binaryPath != null) ...['--use-application-binary', binaryPath],
       '--dart-define=DUNE_SMOKE_RUNNER_URL=$runnerUrl',
       '--dart-define=DUNE_SMOKE_SESSION=$target',
+      '--dart-define=DUNE_SMOKE_RUNNER_TOKEN=$_runnerToken',
     ], workingDirectory: smokeAppDir);
 
     final result = Completer<_TargetRun>();
@@ -693,9 +749,7 @@ final class _SmokeMatrixRunner {
     ]);
     if (result.exitCode != 0) {
       final err = (result.stderr as String? ?? '').trim();
-      throw StateError(
-        'failed to launch iOS Simulator $simulatorId: $err',
-      );
+      throw StateError('failed to launch iOS Simulator $simulatorId: $err');
     }
   }
 
@@ -914,6 +968,7 @@ final class _Config {
     required this.timeout,
     required this.headscalePort,
     required this.runnerPort,
+    required this.runnerBindAddress,
     required this.dart,
     required this.flutter,
     required this.docker,
@@ -935,6 +990,7 @@ final class _Config {
   final Duration timeout;
   final String headscalePort;
   final int runnerPort;
+  final String runnerBindAddress;
   final String dart;
   final String flutter;
   final String docker;
@@ -1046,6 +1102,10 @@ final class _Config {
           Platform.environment['HEADSCALE_PORT'] ??
           '18080',
       runnerPort: runnerPort,
+      runnerBindAddress:
+          options['runner-bind-address'] ??
+          Platform.environment['DUNE_SMOKE_RUNNER_BIND_ADDRESS'] ??
+          '127.0.0.1',
       dart: Platform.environment['DART'] ?? 'dart',
       flutter: Platform.environment['FLUTTER'] ?? 'flutter',
       docker: Platform.environment['DOCKER'] ?? 'docker',
@@ -1127,6 +1187,9 @@ Options:
   --runner-port N                     Local HTTP port the runner uses to serve
                                       smoke-app config and accept results.
                                       Default: 18099.
+  --runner-bind-address ADDRESS       Address for the runner HTTP server.
+                                      Default: 127.0.0.1. Use 0.0.0.0 only
+                                      when a physical device must reach it.
   --android-avd NAME                  Launch this Android AVD if no Android device is visible.
   --android-run-mode debug|profile    Android Flutter run mode. Default: profile.
   --keep-android-emulator             Leave an emulator launched by this runner alive.
@@ -1164,6 +1227,9 @@ Environment:
                                       for wireless iOS/Android needing a host
                                       LAN IP instead of localhost).
   DUNE_SMOKE_RUNNER_PORT              Same as --runner-port.
+  DUNE_SMOKE_RUNNER_BIND_ADDRESS      Same as --runner-bind-address.
+  DUNE_SMOKE_RUNNER_TOKEN             Optional stable runner auth token. When
+                                      unset, one is created under .dart_tool.
   DUNE_SMOKE_<TARGET>_DEVICE          Per-target Flutter device id.
 ''');
 }

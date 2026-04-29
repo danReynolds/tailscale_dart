@@ -17,6 +17,7 @@ Run the same command on both branches:
   --enable-experiment=native-assets \
   benchmark/fd_transport.dart \
   --pairs=1,10,50,100 \
+  --extra-pairs=1 \
   --payload-mib=4 \
   --latency-writes=200 \
   --json
@@ -29,6 +30,24 @@ Useful metrics:
 - `write_latency.p50_us`, `p95_us`, `p99_us`: completion latency for small
   writes, which is the best proxy for control responsiveness under concurrency.
 - `writes_per_second`: aggregate small-write completion rate.
+- `adoption_churn`: repeated create/use/close latency, useful for short TCP and
+  HTTP connection churn.
+- `throughput_full_duplex`: simultaneous bidirectional throughput, closer to
+  real TCP stream behavior than one-way transfer.
+- `fairness_under_load`: small-write latency while background streams are
+  moving larger payloads.
+- `http_shaped_requests`: two fd pairs per request, modeling request-body and
+  response-body transports.
+- `rss_*_mib`: process RSS deltas for coarse memory-growth comparison.
+
+The default run keeps the heavy scenarios bounded so the old isolate-per-fd
+backend can still finish. Use these knobs to scale targeted scenarios:
+
+- `--extra-pairs=1`: pair counts for full-duplex and fairness benchmarks.
+  Larger values are useful for targeted reactor stress runs, but the old
+  isolate-per-fd backend may be slow or time out under high full-duplex load.
+- `--churn-count=100`: number of create/use/close loops.
+- `--http-requests=100`: number of HTTP-shaped request/response loops.
 
 For a quick smoke run while iterating:
 
@@ -37,8 +56,11 @@ For a quick smoke run while iterating:
   --enable-experiment=native-assets \
   benchmark/fd_transport.dart \
   --pairs=1,10 \
+  --extra-pairs=1 \
   --payload-mib=1 \
-  --latency-writes=20
+  --latency-writes=20 \
+  --churn-count=20 \
+  --http-requests=20
 ```
 
 Interpretation guidance:

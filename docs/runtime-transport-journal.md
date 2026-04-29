@@ -216,19 +216,27 @@ The E2E run passed all 30 tests after adding UDP.
   that can run against both the pre-reactor backend and the shared-reactor
   backend without using reactor-only debug hooks.
 - Added `benchmark/README.md` with before/after commands and interpretation
-  guidance for throughput and small-write latency.
+  guidance for one-way throughput, small-write latency, churn, full-duplex
+  throughput, fairness under load, HTTP-shaped request/response loops, and RSS
+  deltas.
 - Fixed a stale-reactor adoption race surfaced by the benchmark: after the last
   fd closed, the reactor isolate could exit before the main isolate observed
   the exit, leaving a dead proxy for the next immediate adoption. Adoption now
   retries once and stores only the reactor proxy that actually registered the
   fd.
+- Changed reactor idle shutdown from immediate exit to a short grace period.
+  This preserves cleanup while avoiding avoidable stale-proxy retries during
+  normal connection churn.
 
 ### Validation
 
 - `/Users/dan/Coding/flutter_arm64/bin/dart analyze`
 - `/Users/dan/Coding/flutter_arm64/bin/dart test --enable-experiment=native-assets`
-- `/Users/dan/Coding/flutter_arm64/bin/dart run --enable-experiment=native-assets benchmark/fd_transport.dart --pairs=1,10 --payload-mib=1 --latency-writes=20 --json`
+- `/Users/dan/Coding/flutter_arm64/bin/dart run --enable-experiment=native-assets benchmark/fd_transport.dart --pairs=1,10 --extra-pairs=1,10 --payload-mib=1 --latency-writes=20 --churn-count=20 --http-requests=20 --json`
 - `/Users/dan/Coding/flutter_arm64/bin/dart run --enable-experiment=native-assets benchmark/fd_transport.dart --json`
+- Copied the benchmark into a detached `main` worktree and confirmed the
+  before/after-compatible smoke command runs there:
+  `/Users/dan/Coding/flutter_arm64/bin/dart run --enable-experiment=native-assets benchmark/fd_transport.dart --pairs=1,10 --extra-pairs=1 --payload-mib=1 --latency-writes=20 --churn-count=20 --http-requests=20 --json`
 
 ## 2026-04-29: Shared POSIX fd reactor
 

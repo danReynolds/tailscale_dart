@@ -376,6 +376,7 @@ const int _reactorEventWake = 1 << 4;
 const int _reactorMaxEvents = 128;
 const int _reactorMaxRegisteredTransports = 4096;
 const int _reactorWriteBudgetBytes = 1024 * 1024;
+const Duration _reactorIdleGrace = Duration(milliseconds: 250);
 
 bool _posixFdTransportProbeComplete = false;
 
@@ -701,6 +702,7 @@ Future<void> _runFdReactor(
   final states = <int, _ReactorTransportState>{};
   final metrics = _ReactorMetrics();
   final events = calloc<_NativeReactorEvent>(_reactorMaxEvents);
+  final idle = Stopwatch();
   var sawTransport = false;
 
   try {
@@ -709,22 +711,36 @@ Future<void> _runFdReactor(
       sawTransport =
           _processReactorCommands(handle, states, metrics, pendingCommands) ||
           sawTransport;
-      if (sawTransport && states.isEmpty && pendingCommands.isEmpty) {
-        return;
+      final idleBeforeWait =
+          sawTransport && states.isEmpty && pendingCommands.isEmpty;
+      if (idleBeforeWait) {
+        if (!idle.isRunning) idle.start();
+        if (idle.elapsed >= _reactorIdleGrace) return;
+      } else {
+        idle
+          ..stop()
+          ..reset();
       }
 
       final n = duneReactorWait(
         handle,
         events.cast<Void>(),
         _reactorMaxEvents,
-        sawTransport && states.isEmpty ? 100 : -1,
+        idleBeforeWait ? _remainingIdleMillis(idle.elapsed) : -1,
       );
       await Future<void>.delayed(Duration.zero);
       sawTransport =
           _processReactorCommands(handle, states, metrics, pendingCommands) ||
           sawTransport;
-      if (sawTransport && states.isEmpty && pendingCommands.isEmpty) {
-        return;
+      final idleAfterWait =
+          sawTransport && states.isEmpty && pendingCommands.isEmpty;
+      if (idleAfterWait) {
+        if (!idle.isRunning) idle.start();
+        if (idle.elapsed >= _reactorIdleGrace) return;
+      } else {
+        idle
+          ..stop()
+          ..reset();
       }
 
       if (n < 0) {
@@ -765,6 +781,12 @@ Future<void> _runFdReactor(
     commands.close();
     duneReactorClose(handle);
   }
+}
+
+int _remainingIdleMillis(Duration elapsed) {
+  final remaining = _reactorIdleGrace - elapsed;
+  if (remaining <= Duration.zero) return 0;
+  return remaining.inMilliseconds.clamp(1, _reactorIdleGrace.inMilliseconds);
 }
 
 bool _processReactorCommands(

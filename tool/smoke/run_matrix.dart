@@ -287,10 +287,16 @@ final class _SmokeMatrixRunner {
   }
 
   bool _isRunnerRequestAuthorized(HttpRequest request) {
-    final token =
-        request.headers.value(_runnerTokenHeader) ??
-        request.uri.queryParameters['token'];
-    return token == _runnerToken;
+    // Header-only: the runner logs every flutter run line verbatim, and a
+    // token in the query string would land in those logs (and any pasted
+    // bug report). The smoke app's runner_client uses the header path.
+    final token = request.headers.value(_runnerTokenHeader);
+    if (token == null || token.length != _runnerToken.length) return false;
+    var diff = 0;
+    for (var i = 0; i < token.length; i++) {
+      diff |= token.codeUnitAt(i) ^ _runnerToken.codeUnitAt(i);
+    }
+    return diff == 0;
   }
 
   bool _isValidSmokeResult(Map<String, Object?> data) {
@@ -514,8 +520,17 @@ final class _SmokeMatrixRunner {
     String? binaryPath;
     if (preBuildFuture != null) {
       try {
-        binaryPath = await preBuildFuture;
-        _log('$target using pre-built binary at $binaryPath');
+        final candidate = await preBuildFuture;
+        if (FileSystemEntity.typeSync(candidate) ==
+            FileSystemEntityType.notFound) {
+          _log(
+            '$target pre-built artifact missing at $candidate; '
+            'falling back to inline build',
+          );
+        } else {
+          binaryPath = candidate;
+          _log('$target using pre-built binary at $candidate');
+        }
       } catch (error) {
         _log('$target pre-build failed: $error; falling back to inline build');
       }

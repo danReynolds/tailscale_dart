@@ -172,6 +172,26 @@ void main() {
         expect(received.expand((chunk) => chunk).toList(), <int>[1, 2, 3]);
       });
 
+      test('inbound queue bound limits reactor read chunking', () async {
+        final (:left, :right) = await _connectedPair(maxInboundQueuedBytes: 1);
+        addTearDown(() => _closeBoth(left, right));
+
+        final chunks = <int>[];
+        final allChunks = Completer<void>();
+        final subscription = right.input.listen((chunk) {
+          chunks.add(chunk.length);
+          if (chunks.length == 3 && !allChunks.isCompleted) {
+            allChunks.complete();
+          }
+        });
+        addTearDown(subscription.cancel);
+
+        await left.write(Uint8List.fromList(<int>[1, 2, 3]));
+        await allChunks.future.timeout(const Duration(seconds: 5));
+
+        expect(chunks, <int>[1, 1, 1]);
+      });
+
       test('transfers large payloads without corruption', () async {
         final (:left, :right) = await _connectedPair();
         addTearDown(() => _closeBoth(left, right));
@@ -270,18 +290,21 @@ Future<bool> _moveNext(StreamIterator<Uint8List> iterator) =>
 
 Future<({PosixFdTransport left, PosixFdTransport right})> _connectedPair({
   int maxReadChunkSize = 64 * 1024,
+  int maxInboundQueuedBytes = 1024 * 1024,
   int maxPendingWriteBytes = 1024 * 1024,
 }) async {
   final (:leftFd, :rightFd) = _socketPair();
   final left = await PosixFdTransport.adopt(
     leftFd,
     maxReadChunkSize: maxReadChunkSize,
+    maxInboundQueuedBytes: maxInboundQueuedBytes,
     maxPendingWriteBytes: maxPendingWriteBytes,
   );
   try {
     final right = await PosixFdTransport.adopt(
       rightFd,
       maxReadChunkSize: maxReadChunkSize,
+      maxInboundQueuedBytes: maxInboundQueuedBytes,
       maxPendingWriteBytes: maxPendingWriteBytes,
     );
     return (left: left, right: right);

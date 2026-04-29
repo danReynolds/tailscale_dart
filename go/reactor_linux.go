@@ -3,6 +3,7 @@
 package tailscale
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"golang.org/x/sys/unix"
@@ -11,6 +12,7 @@ import (
 type epollReactorPoller struct {
 	epfd   int
 	wakeFd int
+	fdToID map[int]int64
 	closed bool
 }
 
@@ -24,10 +26,14 @@ func newReactorPoller() (reactorPoller, error) {
 		_ = unix.Close(epfd)
 		return nil, fmt.Errorf("eventfd: %w", err)
 	}
-	p := &epollReactorPoller{epfd: epfd, wakeFd: wakeFd}
+	p := &epollReactorPoller{
+		epfd:   epfd,
+		wakeFd: wakeFd,
+		fdToID: map[int]int64{},
+	}
 	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, wakeFd, &unix.EpollEvent{
 		Events: unix.EPOLLIN,
-		Fd:     -1,
+		Fd:     int32(wakeFd),
 	}); err != nil {
 		_ = unix.Close(wakeFd)
 		_ = unix.Close(epfd)
@@ -58,7 +64,7 @@ func (p *epollReactorPoller) Close() error {
 
 func (p *epollReactorPoller) Wake() error {
 	var buf [8]byte
-	buf[0] = 1
+	binary.LittleEndian.PutUint64(buf[:], 1)
 	_, err := unix.Write(p.wakeFd, buf[:])
 	if err == unix.EAGAIN {
 		return nil
@@ -70,15 +76,21 @@ func (p *epollReactorPoller) Wake() error {
 }
 
 func (p *epollReactorPoller) Register(fd int, id int64, events int) error {
-	return p.epollCtl(unix.EPOLL_CTL_ADD, fd, id, events)
+	if err := p.epollCtl(unix.EPOLL_CTL_ADD, fd, events); err != nil {
+		return err
+	}
+	p.fdToID[fd] = id
+	return nil
 }
 
 func (p *epollReactorPoller) Update(fd int, id int64, events int) error {
-	return p.epollCtl(unix.EPOLL_CTL_MOD, fd, id, events)
+	_ = id
+	return p.epollCtl(unix.EPOLL_CTL_MOD, fd, events)
 }
 
 func (p *epollReactorPoller) Unregister(fd int) error {
 	_ = unix.EpollCtl(p.epfd, unix.EPOLL_CTL_DEL, fd, nil)
+	delete(p.fdToID, fd)
 	return nil
 }
 
@@ -94,10 +106,15 @@ func (p *epollReactorPoller) Wait(out []ReactorEvent, timeoutMillis int) (int, e
 	count := 0
 	for i := 0; i < n; i++ {
 		ev := events[i]
-		if ev.Fd == -1 {
+		fd := int(ev.Fd)
+		if fd == p.wakeFd {
 			p.drainWake()
 			out[count] = ReactorEvent{Events: ReactorEventWake}
 			count++
+			continue
+		}
+		id, ok := p.fdToID[fd]
+		if !ok {
 			continue
 		}
 		flags := int32(0)
@@ -113,13 +130,13 @@ func (p *epollReactorPoller) Wait(out []ReactorEvent, timeoutMillis int) (int, e
 		if ev.Events&unix.EPOLLERR != 0 {
 			flags |= ReactorEventError
 		}
-		out[count] = ReactorEvent{ID: int64(ev.Fd), Events: flags}
+		out[count] = ReactorEvent{ID: id, Events: flags}
 		count++
 	}
 	return count, nil
 }
 
-func (p *epollReactorPoller) epollCtl(op int, fd int, id int64, events int) error {
+func (p *epollReactorPoller) epollCtl(op int, fd int, events int) error {
 	flags := uint32(unix.EPOLLERR | unix.EPOLLHUP | unix.EPOLLRDHUP)
 	if events&ReactorEventRead != 0 {
 		flags |= unix.EPOLLIN
@@ -129,7 +146,7 @@ func (p *epollReactorPoller) epollCtl(op int, fd int, id int64, events int) erro
 	}
 	if err := unix.EpollCtl(p.epfd, op, fd, &unix.EpollEvent{
 		Events: flags,
-		Fd:     int32(id),
+		Fd:     int32(fd),
 	}); err != nil {
 		return fmt.Errorf("epoll ctl fd %d: %w", fd, err)
 	}

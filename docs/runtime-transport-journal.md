@@ -4,6 +4,43 @@ This journal records implementation notes for the fd-backed runtime transport
 direction. It is intentionally practical: what changed, what was learned, what
 still needs a decision.
 
+## 2026-04-29: Shared reactor review tightening
+
+### Changes
+
+- Fixed the Linux epoll backend so readiness events carry the fd and resolve to
+  the full 64-bit transport id through an internal `fd -> id` map. This avoids
+  truncating ids through `EpollEvent.Fd` and removes the wake-event sentinel
+  collision.
+- Made `eventfd` wake writes explicit little-endian `uint64(1)`.
+- Moved inbound queue accounting into the reactor isolate. Read interest is now
+  disabled when a transport has `maxInboundQueuedBytes` outstanding and
+  re-enabled only after Dart acknowledges delivered input bytes.
+- Changed the read path from one read per readiness event to bounded draining
+  up to `_reactorReadBudgetBytes`, while still yielding after a fixed budget.
+- Reused per-transport write scratch buffers instead of allocating native
+  memory for every write chunk.
+- Added the internal sharding hook (`forTransport(fd)`) with shard count fixed
+  at one. This keeps today's behavior but preserves the ownership boundary for
+  future stress-driven sharding.
+- Added an inbound queue-bound regression test.
+
+### Decision
+
+- Kept the short idle-grace reactor shutdown. A permanent process-wide reactor
+  isolate would make CLI/tests/benchmarks harder to terminate cleanly without a
+  new explicit runtime shutdown path. Registration retry still handles the
+  narrow idle-exit race, and this can be revisited if `Tailscale.dispose()`
+  becomes the single owner of reactor lifetime.
+
+### Validation
+
+- `dart analyze`
+- `go test ./...` in `go/`
+- `dart test --enable-experiment=native-assets test/integration/fd/posix_fd_transport_test.dart -r expanded`
+- `dart test --enable-experiment=native-assets`
+- `dart --enable-experiment=native-assets benchmark/fd_transport.dart --json`
+
 ## 2026-04-23: POSIX fd foundation
 
 ### Context

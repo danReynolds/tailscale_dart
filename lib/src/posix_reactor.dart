@@ -68,7 +68,7 @@ final class _SharedFdReactorProxy {
     ready.close();
     if (message is List &&
         message.length == 3 &&
-        message[0] == 'ready' &&
+        message[0] == _Boot.ready &&
         message[1] is SendPort &&
         message[2] is int) {
       final proxy = _SharedFdReactorProxy._(
@@ -88,7 +88,7 @@ final class _SharedFdReactorProxy {
       return proxy;
     }
     exit.close();
-    if (message is List && message.length >= 2 && message[0] == 'error') {
+    if (message is List && message.length >= 2 && message[0] == _Boot.error) {
       throw StateError('fd reactor failed to start: ${message[1]}');
     }
     throw StateError('fd reactor returned invalid startup message');
@@ -112,10 +112,11 @@ final class _SharedFdReactorProxy {
         replyPort,
       ],
       timeoutMessage: 'fd reactor register timed out',
-      markClosedOnTimeout: true,
+      onTimeout: _markClosed,
       parse: (message) {
         if (message == 'ok') return id;
-        throw StateError('$message');
+        if (message is String) throw StateError(message);
+        throw StateError('fd reactor returned invalid register response');
       },
     );
   }
@@ -137,7 +138,7 @@ final class _SharedFdReactorProxy {
     required List<Object> Function(SendPort replyPort) command,
     required String timeoutMessage,
     required T Function(Object? message) parse,
-    bool markClosedOnTimeout = false,
+    void Function()? onTimeout,
   }) async {
     final reply = ReceivePort();
     try {
@@ -145,7 +146,7 @@ final class _SharedFdReactorProxy {
       final message = await reply.first.timeout(
         _reactorRequestTimeout,
         onTimeout: () {
-          if (markClosedOnTimeout) _markClosed();
+          onTimeout?.call();
           throw StateError(timeoutMessage);
         },
       );
@@ -193,10 +194,10 @@ void _fdReactorWorker(SendPort readyPort) {
   final handle = duneReactorCreate();
   if (handle < 0) {
     commands.close();
-    readyPort.send(<Object>['error', 'native reactor create failed']);
+    readyPort.send(<Object>[_Boot.error, 'native reactor create failed']);
     return;
   }
-  readyPort.send(<Object>['ready', commands.sendPort, handle]);
+  readyPort.send(<Object>[_Boot.ready, commands.sendPort, handle]);
 
   unawaited(_runFdReactor(handle, commands, pendingCommands));
 }

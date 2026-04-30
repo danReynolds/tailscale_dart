@@ -471,6 +471,12 @@ abstract final class _Cmd {
   static const String close = 'close';
 }
 
+/// Startup handshake kinds: reactor worker -> proxy start path.
+abstract final class _Boot {
+  static const String ready = 'ready';
+  static const String error = 'error';
+}
+
 /// Event kinds: reactor worker -> per-transport event port on the main isolate.
 abstract final class _Evt {
   static const String data = 'data';

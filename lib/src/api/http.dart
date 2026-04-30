@@ -87,6 +87,10 @@ abstract interface class TailscaleHttpServer {
   TailscaleEndpoint get tailnet;
 
   /// Single-subscription stream of inbound HTTP requests.
+  ///
+  /// Listening starts a background accept loop. Canceling the subscription
+  /// closes the server. Paused subscriptions use a bounded pending-accept
+  /// queue; if Go's native backlog fills, new wire clients receive HTTP 503.
   Stream<TailscaleHttpRequest> get requests;
 
   /// Stops accepting new HTTP requests.

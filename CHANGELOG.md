@@ -1,5 +1,13 @@
 ## Unreleased
 
+**Platform contract:**
+
+- `pubspec.yaml` now declares the supported v1 platforms: Android, iOS, Linux,
+  and macOS. Windows remains intentionally unsupported until a Windows-native
+  data-plane backend or fallback carrier is designed.
+- `Tailscale.onNodeChanges` has regression coverage for replaying the current
+  node snapshot to new subscribers before future inventory changes.
+
 **Breaking — node terminology:**
 
 - Public inventory APIs now use Tailscale's node terminology: `Tailscale.nodes()`, `Tailscale.nodeByIp(ip)`, `Tailscale.onNodeChanges`, `TailscaleNode`, and `TailscaleNodeIdentity`.

@@ -115,6 +115,10 @@ abstract interface class TailscaleListener {
   TailscaleEndpoint get local;
 
   /// Single-subscription stream of accepted connections.
+  ///
+  /// Listening starts a background accept loop. Canceling the subscription
+  /// closes the listener. Paused subscriptions use a bounded pending-accept
+  /// queue; overflow accepts are closed instead of buffered without limit.
   Stream<TailscaleConnection> get connections;
 
   /// Stops accepting connections.

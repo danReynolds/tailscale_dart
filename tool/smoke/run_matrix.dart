@@ -42,17 +42,18 @@ final class _SmokeMatrixRunner {
     final stateRoot = Directory.systemTemp.createTempSync('dune_smoke_matrix_');
     _ManagedPeer? peer;
     var headscaleStarted = false;
-    // Pre-builds run in parallel with peer setup since auth key + target IP
-    // are no longer compile-time constants. The futures resolve to the path
-    // of the built artifact, used by `flutter run --use-application-binary`.
     final preBuildFutures = <String, Future<String>>{};
-    if (config.preBuild) {
-      for (final target in config.targets) {
-        if (_buildArgsFor(target) == null) continue;
-        preBuildFutures[target] = _preBuildTarget(target);
-      }
-    }
     try {
+      await _preparePackageDependencies();
+      // Pre-builds run in parallel with peer setup since auth key + target IP
+      // are no longer compile-time constants. The futures resolve to the path
+      // of the built artifact, used by `flutter run --use-application-binary`.
+      if (config.preBuild) {
+        for (final target in config.targets) {
+          if (_buildArgsFor(target) == null) continue;
+          preBuildFutures[target] = _preBuildTarget(target);
+        }
+      }
       await _startRunnerServer();
       await _startHeadscale();
       headscaleStarted = true;
@@ -135,6 +136,14 @@ final class _SmokeMatrixRunner {
           future.then((_) {}, onError: (Object _) {}),
       ]);
     }
+  }
+
+  Future<void> _preparePackageDependencies() async {
+    _log('preparing demo package dependencies');
+    await Future.wait(<Future<ProcessResult>>[
+      _run(config.dart, ['pub', 'get'], workingDirectory: demoCoreDir),
+      _run(config.flutter, ['pub', 'get'], workingDirectory: smokeAppDir),
+    ]);
   }
 
   List<String>? _buildArgsFor(String target) {
@@ -1155,11 +1164,17 @@ final class _Config {
 Future<ProcessResult> _run(
   String executable,
   List<String> args, {
+  String? workingDirectory,
   Map<String, String>? environment,
   bool allowFailure = false,
 }) async {
   _log('\$ $executable ${args.join(' ')}');
-  final result = await Process.run(executable, args, environment: environment);
+  final result = await Process.run(
+    executable,
+    args,
+    workingDirectory: workingDirectory,
+    environment: environment,
+  );
   if (result.stdout case final String out when out.trim().isNotEmpty) {
     stdout.write(out);
   }

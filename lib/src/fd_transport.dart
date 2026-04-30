@@ -226,20 +226,13 @@ final class PosixFdTransport {
   /// Closes the descriptor and stops delivering input.
   Future<void> close() async {
     if (_closed) return;
-    _closed = true;
-    _readFinished = true;
-    _writeFinished = true;
 
     try {
       _reactor.send(<Object>[_Cmd.close, _transportId]);
     } catch (_) {
       closePosixFdForCleanup(fd);
     }
-    _fdFinalizer.detach(this);
-    _failPendingWrites(StateError('fd transport is closed'));
-    _closeInput();
-    _stopPorts();
-    if (!_done.isCompleted) _done.complete();
+    _teardown(pendingWriteError: StateError('fd transport is closed'));
   }
 
   void _handleReactorEvent(Object? message) {
@@ -263,7 +256,6 @@ final class PosixFdTransport {
       case _Evt.readError when message.length >= 2:
         final error = StateError('fd read failed: ${message[1]}');
         _input.addError(error);
-        _closeInput();
         _finishWithError(error);
         return;
       case _Evt.writeOk when message.length >= 2:
@@ -286,12 +278,7 @@ final class PosixFdTransport {
         _finishWithError(error);
         return;
       case _Evt.closed:
-        _closed = true;
-        _fdFinalizer.detach(this);
-        _failPendingWrites(StateError('fd transport is closed'));
-        _closeInput();
-        _stopPorts();
-        if (!_done.isCompleted) _done.complete();
+        _teardown(pendingWriteError: StateError('fd transport is closed'));
         return;
     }
   }
@@ -329,22 +316,40 @@ final class PosixFdTransport {
   void _maybeCompleteDone() {
     if (_closed) return;
     if (!_readFinished || !_writeFinished) return;
-    _closed = true;
-    _fdFinalizer.detach(this);
-    _stopPorts();
-    if (!_done.isCompleted) _done.complete();
+    _teardown(closeInput: false);
   }
 
   void _finishWithError(Object error) {
+    _teardown(doneError: error, pendingWriteError: error);
+  }
+
+  /// Single terminal path for the main-isolate side of an adopted fd.
+  ///
+  /// Native ownership is released either because the reactor closed the fd or
+  /// because `close()` sent the close command and falls back to direct cleanup
+  /// if the reactor is already gone. This method only resolves Dart-facing
+  /// resources: finalizer attachment, pending write futures, input stream,
+  /// event port, and `done`.
+  void _teardown({
+    Object? doneError,
+    Object? pendingWriteError,
+    bool closeInput = true,
+  }) {
     if (_closed) return;
     _closed = true;
     _readFinished = true;
     _writeFinished = true;
     _fdFinalizer.detach(this);
-    _failPendingWrites(error);
-    _closeInput();
+    if (pendingWriteError != null) _failPendingWrites(pendingWriteError);
+    if (closeInput) _closeInput();
     _stopPorts();
-    if (!_done.isCompleted) _done.completeError(error);
+    if (!_done.isCompleted) {
+      if (doneError == null) {
+        _done.complete();
+      } else {
+        _done.completeError(doneError);
+      }
+    }
   }
 
   void _failPendingWrites(Object error) {

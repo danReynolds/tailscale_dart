@@ -18,6 +18,11 @@ embedded Dart apps.
 **Convention:** all examples assume `final tsnet = Tailscale.instance;`
 and that [`Tailscale.init`](#lifecycle-top-level) has already been called.
 
+**Platform contract:** v1 is POSIX-only: Android, iOS, Linux, and macOS. The
+fd-backed data plane depends on native descriptors plus kqueue/epoll. Windows
+is intentionally unsupported until a Windows-native backend or fallback carrier
+is designed.
+
 **Implementation model:** this package aligns to both upstream
 `tsnet.Server` and upstream `local.Client`. Transport primitives such as
 HTTP, TCP, UDP, TLS, Funnel, and future service listeners follow

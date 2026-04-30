@@ -5,6 +5,12 @@ repository: https://github.com/danReynolds/tailscale_dart
 homepage: https://github.com/danReynolds/tailscale_dart
 issue_tracker: https://github.com/danReynolds/tailscale_dart/issues
 
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+
 environment:
   sdk: ^3.10.4
 

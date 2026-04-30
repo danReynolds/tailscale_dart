@@ -321,6 +321,15 @@ void main() {
     test('onNodeChanges is a broadcast stream', () {
       expect(Tailscale.instance.onNodeChanges.isBroadcast, isTrue);
     });
+
+    test('onNodeChanges emits current snapshot on listen', () async {
+      await expectLater(
+        Tailscale.instance.onNodeChanges.first.timeout(
+          const Duration(seconds: 1),
+        ),
+        completion(isEmpty),
+      );
+    });
   });
 
   group('status() before up()', () {

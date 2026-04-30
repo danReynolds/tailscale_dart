@@ -96,12 +96,17 @@ await tailscale.logout();
 
 ## Platform Support
 
+This release is POSIX-only. The fd-backed data plane uses native descriptors
+plus kqueue/epoll, so Android, iOS, macOS, and Linux are the supported platform
+set. Windows is intentionally excluded until the project either designs a
+Windows-native capability backend or chooses a separate Windows fallback.
+
 | Platform | Status | Notes |
 |----------|--------|-------|
 | iOS | Supported | Manual demo validation passed for HTTP, TCP, and UDP. No VPN entitlement needed. |
 | Android | Supported | Manual demo validation passed for HTTP, TCP, and UDP. Userspace mode, no root required. |
 | macOS | Supported | Manual demo validation passed for HTTP, TCP, and UDP. |
-| Linux | Supported | POSIX fd backend is implemented; real-tailnet validation is still recommended before broad release claims. |
+| Linux | Supported | Ubuntu CI runs Headscale E2E, exercising the Linux native asset and epoll reactor path. |
 | Windows | Unsupported | Not supported in v1. |
 
 ## API
@@ -127,6 +132,17 @@ await tailscale.logout();
 The `tls`, `funnel`, `taildrop`, `serve`, `exitNode`, `profiles`, and `prefs` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
 
 ## Transport Lifecycle
+
+`tcp.bind()` and `http.bind()` allocate native listeners and start background
+accept loops when their streams are listened to. Treat the returned
+`TailscaleListener` / `TailscaleHttpServer` as the owner of the tailnet port:
+call `close()` when finished. Canceling the single-subscription
+`connections`/`requests` stream also closes the listener/server.
+
+Accepted TCP connections and HTTP requests are delivered through bounded local
+queues while the Dart subscription is paused. If the application stops draining
+for long enough, overflow accepts are rejected or closed rather than buffered
+without limit.
 
 TCP connections expose separate read and write halves. `connection.input` is a
 single-subscription byte stream. `connection.output.close()` half-closes the

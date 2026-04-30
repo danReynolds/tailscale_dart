@@ -4,6 +4,40 @@ This journal records implementation notes for the fd-backed runtime transport
 direction. It is intentionally practical: what changed, what was learned, what
 still needs a decision.
 
+## 2026-04-30: Reactor readability cleanup
+
+### Changes
+
+- Split the reactor implementation out of `lib/src/fd_transport.dart` into
+  `lib/src/posix_reactor.dart` as a private Dart part. The transport facade now
+  stays focused on per-fd ownership and public stream semantics; the reactor
+  file owns shard lifecycle, command dispatch, native polling, and POSIX
+  syscall bindings.
+- Kept shared constants, command/event tags, probes, and test snapshots in the
+  main library so private names still compose without widening the public API.
+- Factored the reactor request/reply pattern into one helper for `register()`
+  and `snapshot()`.
+- Replaced the main-isolate event dispatch and reactor command dispatch chains
+  with `switch` statements.
+- Renamed `_PendingWrite.bytes` to `byteCount`, added partial-write
+  documentation, and grouped reactor scratch buffers behind a small owner class
+  with a single `dispose()`.
+- Added Go-side comments for the reactor FFI contract and platform poller
+  choices.
+
+### Decision
+
+- Deferred the enum state-machine refactor. The current booleans are now
+  documented, and changing lifecycle representation is invasive enough to
+  deserve its own focused PR if we still want it.
+
+### Validation
+
+- `dart analyze`
+- `go test ./...` in `go/`
+- `dart test --enable-experiment=native-assets test/integration/fd/posix_fd_transport_test.dart -r compact`
+- `dart test --enable-experiment=native-assets`
+
 ## 2026-04-29: Shared reactor review tightening
 
 ### Changes

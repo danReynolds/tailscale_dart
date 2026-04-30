@@ -9,6 +9,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// epollReactorPoller multiplexes one shard's fds via epoll on Linux/Android.
+//
+// EpollEvent only carries 32 bits of user data, but the public reactor API
+// hands out int64 transport ids (matching the kqueue Udata pointer width on
+// Darwin). We side-step the truncation by storing the id in fdToID and
+// recovering it on dispatch via the fd reported by epoll.
 type epollReactorPoller struct {
 	epfd   int
 	wakeFd int
@@ -31,6 +37,10 @@ func newReactorPoller() (reactorPoller, error) {
 		wakeFd: wakeFd,
 		fdToID: map[int]int64{},
 	}
+	// We stash the wake fd's own value in EpollEvent.Fd; on dispatch we
+	// recognise the wake by comparing ev.Fd == p.wakeFd. Real transport ids
+	// live in the fdToID side-table because EpollEvent.Fd is only int32 and
+	// transport ids are int64.
 	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, wakeFd, &unix.EpollEvent{
 		Events: unix.EPOLLIN,
 		Fd:     int32(wakeFd),

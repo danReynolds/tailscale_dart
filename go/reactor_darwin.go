@@ -10,8 +10,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// EVFILT_USER ident reserved for the self-wake. EVFILT_USER lives in a
+// distinct ident namespace from EVFILT_READ/EVFILT_WRITE (which key off fds),
+// so this value cannot collide with a real transport.
 const reactorWakeIdent = 1
 
+// kqueueReactorPoller multiplexes one shard's fds via kqueue on macOS/iOS.
+//
+// Wake-up uses EVFILT_USER + NOTE_TRIGGER (no fd burned). Transport ids ride
+// in the kevent's Udata field, which is pointer-width and accepts the full
+// int64 round-trip without the side-table the Linux poller needs.
 type kqueueReactorPoller struct {
 	kq     int
 	closed bool

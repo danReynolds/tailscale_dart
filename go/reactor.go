@@ -1,5 +1,15 @@
 //go:build !windows
 
+// Native side of the shared POSIX fd reactor. Each Dart "shard" gets one
+// reactorHandle that wraps a platform-specific reactorPoller (kqueue on
+// Darwin, epoll on Linux/Android). The Dart isolate owns the lifecycle and
+// drives Wait/Wake; this file is a thin, lock-protected registry that exposes
+// the poller through the cgo Dune* exports in cmd/dylib.
+//
+// The flag values and the ReactorEvent struct layout are part of the FFI
+// contract — keep them in sync with `lib/src/fd_transport.dart` and the
+// matching C typedef in `cmd/dylib/main.go`.
+
 package tailscale
 
 import (
@@ -18,12 +28,19 @@ const (
 	ReactorEventWake  = 1 << 4
 )
 
+// ReactorEvent is the dispatch record handed back to the Dart side per
+// readiness notification. Layout must match `_NativeReactorEvent` in
+// `lib/src/fd_transport.dart` and `DuneReactorEvent` in `cmd/dylib/main.go`.
 type ReactorEvent struct {
 	ID     int64
 	Events int32
 	Errno  int32
 }
 
+// reactorPoller is the platform abstraction over kqueue/epoll. Implementations
+// are not safe for concurrent use; the Dart-owned reactor isolate is the only
+// caller, with Wake() being the one exception (used to break a blocked Wait
+// when commands arrive on the isolate's command port).
 type reactorPoller interface {
 	Close() error
 	Wake() error

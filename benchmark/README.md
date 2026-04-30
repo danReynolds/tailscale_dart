@@ -40,6 +40,17 @@ Useful metrics:
   response-body transports.
 - `rss_*_mib`: process RSS deltas for coarse memory-growth comparison.
 
+The main optimization triggers are:
+
+- Wake coalescing: each public `write()` posts a reactor command and wakes the
+  poller. If `writes_per_second` or `write_latency.p99_us` regresses under many
+  small writes, coalescing multiple Dart-event-loop writes behind one native
+  wake is the likely next optimization.
+- More reactor shards: one shard means one isolate owns all fd readiness,
+  syscalls, copies, and SendPort delivery. If high pair counts show p99 latency
+  rising while CPU remains available on other cores, increasing the internal
+  shard count is the likely next optimization.
+
 The default run keeps the heavy scenarios bounded so the old isolate-per-fd
 backend can still finish. Use these knobs to scale targeted scenarios:
 

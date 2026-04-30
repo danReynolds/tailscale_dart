@@ -106,6 +106,10 @@ Flutter platform target. The app joins the Headscale tailnet, starts the demo
 HTTP/TCP/UDP services, probes the headless peer, and prints a
 `DUNE_SMOKE_RESULT` JSON line for the runner to parse.
 
+Before starting the tailnet, the runner refreshes dependencies for
+`packages/demo_core` and `packages/demo_smoke_flutter` so a clean worktree does
+not fail later with a missing `.dart_tool/package_config.json`.
+
 Smoke is a platform packaging/runtime check, not the canonical correctness
 suite. The detailed protocol and API assertions live in unit, integration, and
 Headscale E2E tests. The smoke matrix answers a narrower question: "Can this
@@ -122,9 +126,16 @@ tool/smoke/run_matrix.sh --targets macos,ios,android --jobs 3
 
 By default, unavailable targets are skipped so a local machine can run the
 subset it actually has: macOS desktop on macOS and any connected or booted
-iOS/Android devices known to `flutter devices`. Linux package behavior is
-covered by the Headscale E2E suite; Flutter Linux desktop smoke is available as
-an explicit `--targets linux` check, but is not part of the normal matrix.
+iOS/Android devices known to `flutter devices`. Flutter Linux desktop smoke is
+available as an explicit `--targets linux` check, but is not part of the normal
+matrix.
+
+Docker Headscale E2E and Linux validation are related but not identical.
+Headscale itself always runs in Docker; the embedded Dart nodes run on the host
+that invokes `dart test`. On Linux CI or a Linux VM, `test/e2e/run_e2e.sh`
+validates the Linux native-asset and epoll reactor path. On macOS, the same
+script still validates real Headscale tailnet behavior, but the fd backend under
+test is the macOS kqueue backend because the Dart nodes are macOS processes.
 
 For Android emulator, the runner defaults the app control URL to
 `http://10.0.2.2:$HEADSCALE_PORT` and waits for Android's package manager

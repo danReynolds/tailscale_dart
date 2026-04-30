@@ -386,7 +386,9 @@ const int _reactorMaxEvents = 128;
 const int _reactorMaxRegisteredTransports = 4096;
 const int _reactorShardCount = 1;
 const int _reactorReadBudgetBytes = 1024 * 1024;
+const int _reactorWriteChunkBytes = 64 * 1024;
 const int _reactorWriteBudgetBytes = 1024 * 1024;
+const Duration _reactorRequestTimeout = Duration(seconds: 1);
 const Duration _reactorIdleGrace = Duration(milliseconds: 250);
 
 bool _posixFdTransportProbeComplete = false;
@@ -697,7 +699,7 @@ final class _SharedFdReactorProxy {
         reply.sendPort,
       ]);
       final message = await reply.first.timeout(
-        const Duration(seconds: 5),
+        _reactorRequestTimeout,
         onTimeout: () {
           _markClosed();
           throw StateError('fd reactor register timed out');
@@ -715,7 +717,7 @@ final class _SharedFdReactorProxy {
     try {
       send(<Object>['snapshot', reply.sendPort]);
       final message = await reply.first.timeout(
-        const Duration(seconds: 5),
+        _reactorRequestTimeout,
         onTimeout: () => throw StateError('fd reactor snapshot timed out'),
       );
       if (message is Map<Object?, Object?>) {
@@ -1045,7 +1047,7 @@ void _flushReactorWrites(
     final write = state.writes.first;
     final remaining = write.data.length - write.offset;
     final toWrite = math.min(
-      state.maxReadChunkSize,
+      _reactorWriteChunkBytes,
       math.min(remaining, budget),
     );
     state.writeBuffer
@@ -1111,10 +1113,14 @@ void _flushReactorWrites(
       if (id != null) state.eventPort.send(<Object>['writeOk', id]);
       _closeIfFullyDone(handle, states, metrics, state);
     } else {
-      final id = state.shutdownWriteId ?? 0;
+      final id = state.shutdownWriteId;
       final error = StateError('shutdown(SHUT_WR) failed');
       metrics.hardErrorCount++;
-      state.eventPort.send(<Object>['writeError', id, error.toString()]);
+      if (id == null) {
+        state.eventPort.send(<Object>['readError', error.toString()]);
+      } else {
+        state.eventPort.send(<Object>['writeError', id, error.toString()]);
+      }
       _closeReactorState(handle, states, metrics, state, error: error);
     }
     return;
@@ -1210,7 +1216,7 @@ final class _ReactorTransportState {
     required this.maxInboundQueuedBytes,
     required this.eventPort,
   }) : readBuffer = calloc<Uint8>(maxReadChunkSize),
-       writeBuffer = calloc<Uint8>(maxReadChunkSize);
+       writeBuffer = calloc<Uint8>(_reactorWriteChunkBytes);
 
   final int id;
   final int fd;

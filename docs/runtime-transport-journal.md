@@ -24,6 +24,11 @@ still needs a decision.
   at one. This keeps today's behavior but preserves the ownership boundary for
   future stress-driven sharding.
 - Added an inbound queue-bound regression test.
+- Reduced local reactor request timeouts from 5s to 1s so a stale idle-exit
+  race cannot add a long adoption delay before the bounded retry path runs.
+- Decoupled the write scratch buffer size from `maxReadChunkSize`.
+- Made shutdown-write failure reporting robust even if an internal malformed
+  shutdown command lacks a completion id.
 
 ### Decision
 
@@ -32,6 +37,11 @@ still needs a decision.
   new explicit runtime shutdown path. Registration retry still handles the
   narrow idle-exit race, and this can be revisited if `Tailscale.dispose()`
   becomes the single owner of reactor lifetime.
+- Deferred a literal max-registered-transport overflow test. Exercising the
+  production limit requires thousands of socketpairs and is likely to hit host
+  fd limits before proving the reactor branch. If this becomes important, add a
+  test-only injectable limit rather than making the normal suite depend on a
+  high host `ulimit`.
 
 ### Validation
 

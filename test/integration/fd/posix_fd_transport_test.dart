@@ -95,6 +95,21 @@ void main() {
         await left.done.timeout(const Duration(seconds: 5));
       });
 
+      test('can adopt again immediately after the reactor goes idle', () async {
+        for (var i = 0; i < 5; i++) {
+          final (:left, :right) = await _connectedPair();
+          final rightInput = StreamIterator(right.input);
+          try {
+            await left.write(Uint8List.fromList(<int>[i]));
+            expect(await _moveNext(rightInput), isTrue);
+            expect(rightInput.current, <int>[i]);
+          } finally {
+            await rightInput.cancel();
+            await _closeBoth(left, right);
+          }
+        }
+      });
+
       test('rejects writes after the write side is closed', () async {
         final (:left, :right) = await _connectedPair();
         addTearDown(() => _closeBoth(left, right));
@@ -157,6 +172,26 @@ void main() {
         expect(received.expand((chunk) => chunk).toList(), <int>[1, 2, 3]);
       });
 
+      test('inbound queue bound limits reactor read chunking', () async {
+        final (:left, :right) = await _connectedPair(maxInboundQueuedBytes: 1);
+        addTearDown(() => _closeBoth(left, right));
+
+        final chunks = <int>[];
+        final allChunks = Completer<void>();
+        final subscription = right.input.listen((chunk) {
+          chunks.add(chunk.length);
+          if (chunks.length == 3 && !allChunks.isCompleted) {
+            allChunks.complete();
+          }
+        });
+        addTearDown(subscription.cancel);
+
+        await left.write(Uint8List.fromList(<int>[1, 2, 3]));
+        await allChunks.future.timeout(const Duration(seconds: 5));
+
+        expect(chunks, <int>[1, 1, 1]);
+      });
+
       test('transfers large payloads without corruption', () async {
         final (:left, :right) = await _connectedPair();
         addTearDown(() => _closeBoth(left, right));
@@ -173,6 +208,79 @@ void main() {
         await left.write(payload);
         expect(await receivedFuture, payload);
       });
+
+      test('closeWrite waits for queued bytes before EOF', () async {
+        final (:left, :right) = await _connectedPair(
+          maxPendingWriteBytes: 3 * 1024 * 1024,
+        );
+        addTearDown(() => _closeBoth(left, right));
+
+        final payload = Uint8List.fromList(
+          List<int>.generate(2 * 1024 * 1024, (index) => index & 0xff),
+        );
+        final write = left.write(payload);
+        final closeWrite = left.closeWrite();
+
+        final received = await right.input
+            .expand((chunk) => chunk)
+            .toList()
+            .timeout(const Duration(seconds: 10));
+
+        await write.timeout(const Duration(seconds: 10));
+        await closeWrite.timeout(const Duration(seconds: 10));
+        expect(received.length, payload.length);
+        expect(received, payload);
+      });
+
+      test('shared reactor supports many active transports', () async {
+        final pairs = <({PosixFdTransport left, PosixFdTransport right})>[];
+        addTearDown(() async {
+          await Future.wait(
+            pairs.map((pair) => _closeBoth(pair.left, pair.right)),
+          );
+        });
+
+        for (var i = 0; i < 100; i++) {
+          pairs.add(await _connectedPair());
+        }
+
+        final reads = <Future<List<int>>>[];
+        for (var i = 0; i < pairs.length; i++) {
+          reads.add(
+            pairs[i].right.input
+                .expand((chunk) => chunk)
+                .take(3)
+                .toList()
+                .timeout(const Duration(seconds: 10)),
+          );
+        }
+
+        await Future.wait(<Future<void>>[
+          for (var i = 0; i < pairs.length; i++)
+            pairs[i].left.write(Uint8List.fromList(<int>[i & 0xff, 1, 2])),
+        ]);
+
+        final received = await Future.wait(reads);
+        for (var i = 0; i < received.length; i++) {
+          expect(received[i], <int>[i & 0xff, 1, 2]);
+        }
+      });
+
+      test('shared reactor exposes internal diagnostic counters', () async {
+        final (:left, :right) = await _connectedPair();
+        addTearDown(() => _closeBoth(left, right));
+
+        await left.write(Uint8List.fromList(<int>[1, 2, 3]));
+        final rightInput = StreamIterator(right.input);
+        addTearDown(rightInput.cancel);
+        expect(await _moveNext(rightInput), isTrue);
+
+        final snapshot = await debugPosixFdReactorSnapshot();
+        expect(snapshot, isNotNull);
+        expect(snapshot!.registeredTransports, greaterThanOrEqualTo(2));
+        expect(snapshot.readSyscalls, greaterThan(0));
+        expect(snapshot.writeSyscalls, greaterThan(0));
+      });
     },
   );
 }
@@ -182,18 +290,21 @@ Future<bool> _moveNext(StreamIterator<Uint8List> iterator) =>
 
 Future<({PosixFdTransport left, PosixFdTransport right})> _connectedPair({
   int maxReadChunkSize = 64 * 1024,
+  int maxInboundQueuedBytes = 1024 * 1024,
   int maxPendingWriteBytes = 1024 * 1024,
 }) async {
   final (:leftFd, :rightFd) = _socketPair();
   final left = await PosixFdTransport.adopt(
     leftFd,
     maxReadChunkSize: maxReadChunkSize,
+    maxInboundQueuedBytes: maxInboundQueuedBytes,
     maxPendingWriteBytes: maxPendingWriteBytes,
   );
   try {
     final right = await PosixFdTransport.adopt(
       rightFd,
       maxReadChunkSize: maxReadChunkSize,
+      maxInboundQueuedBytes: maxInboundQueuedBytes,
       maxPendingWriteBytes: maxPendingWriteBytes,
     );
     return (left: left, right: right);

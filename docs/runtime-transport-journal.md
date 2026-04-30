@@ -4,6 +4,87 @@ This journal records implementation notes for the fd-backed runtime transport
 direction. It is intentionally practical: what changed, what was learned, what
 still needs a decision.
 
+## 2026-04-30: Reactor readability cleanup
+
+### Changes
+
+- Split the reactor implementation out of `lib/src/fd_transport.dart` into
+  `lib/src/posix_reactor.dart` as a private Dart part. The transport facade now
+  stays focused on per-fd ownership and public stream semantics; the reactor
+  file owns shard lifecycle, command dispatch, native polling, and POSIX
+  syscall bindings.
+- Kept shared constants, command/event tags, probes, and test snapshots in the
+  main library so private names still compose without widening the public API.
+- Factored the reactor request/reply pattern into one helper for `register()`
+  and `snapshot()`.
+- Replaced the main-isolate event dispatch and reactor command dispatch chains
+  with `switch` statements.
+- Renamed `_PendingWrite.bytes` to `byteCount`, added partial-write
+  documentation, and grouped reactor scratch buffers behind a small owner class
+  with a single `dispose()`.
+- Added Go-side comments for the reactor FFI contract and platform poller
+  choices.
+
+### Decision
+
+- Deferred the enum state-machine refactor. The current booleans are now
+  documented, and changing lifecycle representation is invasive enough to
+  deserve its own focused PR if we still want it.
+
+### Validation
+
+- `dart analyze`
+- `go test ./...` in `go/`
+- `dart test --enable-experiment=native-assets test/integration/fd/posix_fd_transport_test.dart -r compact`
+- `dart test --enable-experiment=native-assets`
+
+## 2026-04-29: Shared reactor review tightening
+
+### Changes
+
+- Fixed the Linux epoll backend so readiness events carry the fd and resolve to
+  the full 64-bit transport id through an internal `fd -> id` map. This avoids
+  truncating ids through `EpollEvent.Fd` and removes the wake-event sentinel
+  collision.
+- Made `eventfd` wake writes explicit little-endian `uint64(1)`.
+- Moved inbound queue accounting into the reactor isolate. Read interest is now
+  disabled when a transport has `maxInboundQueuedBytes` outstanding and
+  re-enabled only after Dart acknowledges delivered input bytes.
+- Changed the read path from one read per readiness event to bounded draining
+  up to `_reactorReadBudgetBytes`, while still yielding after a fixed budget.
+- Reused per-transport write scratch buffers instead of allocating native
+  memory for every write chunk.
+- Added the internal sharding hook (`forTransport(fd)`) with shard count fixed
+  at one. This keeps today's behavior but preserves the ownership boundary for
+  future stress-driven sharding.
+- Added an inbound queue-bound regression test.
+- Reduced local reactor request timeouts from 5s to 1s so a stale idle-exit
+  race cannot add a long adoption delay before the bounded retry path runs.
+- Decoupled the write scratch buffer size from `maxReadChunkSize`.
+- Made shutdown-write failure reporting robust even if an internal malformed
+  shutdown command lacks a completion id.
+
+### Decision
+
+- Kept the short idle-grace reactor shutdown. A permanent process-wide reactor
+  isolate would make CLI/tests/benchmarks harder to terminate cleanly without a
+  new explicit runtime shutdown path. Registration retry still handles the
+  narrow idle-exit race, and this can be revisited if `Tailscale.dispose()`
+  becomes the single owner of reactor lifetime.
+- Deferred a literal max-registered-transport overflow test. Exercising the
+  production limit requires thousands of socketpairs and is likely to hit host
+  fd limits before proving the reactor branch. If this becomes important, add a
+  test-only injectable limit rather than making the normal suite depend on a
+  high host `ulimit`.
+
+### Validation
+
+- `dart analyze`
+- `go test ./...` in `go/`
+- `dart test --enable-experiment=native-assets test/integration/fd/posix_fd_transport_test.dart -r expanded`
+- `dart test --enable-experiment=native-assets`
+- `dart --enable-experiment=native-assets benchmark/fd_transport.dart --json`
+
 ## 2026-04-23: POSIX fd foundation
 
 ### Context
@@ -207,6 +288,59 @@ The E2E run passed all 30 tests after adding UDP.
 ### Validation
 
 - `/Users/dan/Coding/flutter_arm64/bin/dart analyze` in `packages/demo_core`
+
+## 2026-04-29: Shared reactor benchmark harness
+
+### Changes
+
+- Added `benchmark/fd_transport.dart`, a local POSIX fd data-plane benchmark
+  that can run against both the pre-reactor backend and the shared-reactor
+  backend without using reactor-only debug hooks.
+- Added `benchmark/README.md` with before/after commands and interpretation
+  guidance for one-way throughput, small-write latency, churn, full-duplex
+  throughput, fairness under load, HTTP-shaped request/response loops, and RSS
+  deltas.
+- Fixed a stale-reactor adoption race surfaced by the benchmark: after the last
+  fd closed, the reactor isolate could exit before the main isolate observed
+  the exit, leaving a dead proxy for the next immediate adoption. Adoption now
+  retries once and stores only the reactor proxy that actually registered the
+  fd.
+- Changed reactor idle shutdown from immediate exit to a short grace period.
+  This preserves cleanup while avoiding avoidable stale-proxy retries during
+  normal connection churn.
+
+### Validation
+
+- `/Users/dan/Coding/flutter_arm64/bin/dart analyze`
+- `/Users/dan/Coding/flutter_arm64/bin/dart test --enable-experiment=native-assets`
+- `/Users/dan/Coding/flutter_arm64/bin/dart run --enable-experiment=native-assets benchmark/fd_transport.dart --pairs=1,10 --extra-pairs=1,10 --payload-mib=1 --latency-writes=20 --churn-count=20 --http-requests=20 --json`
+- `/Users/dan/Coding/flutter_arm64/bin/dart run --enable-experiment=native-assets benchmark/fd_transport.dart --json`
+- Copied the benchmark into a detached `main` worktree and confirmed the
+  before/after-compatible smoke command runs there:
+  `/Users/dan/Coding/flutter_arm64/bin/dart run --enable-experiment=native-assets benchmark/fd_transport.dart --pairs=1,10 --extra-pairs=1 --payload-mib=1 --latency-writes=20 --churn-count=20 --http-requests=20 --json`
+
+## 2026-04-29: Shared POSIX fd reactor
+
+### Changes
+
+- Replaced the two-isolates-per-fd transport backend with a shared POSIX fd
+  reactor isolate.
+- Added native poller shims inside the existing Go native asset:
+  `kqueue`/`EVFILT_USER` on Darwin and `epoll`/`eventfd` on Linux/Android.
+- Kept `PosixFdTransport` as the internal facade used by TCP, UDP, and HTTP so
+  public package-native APIs do not change.
+- Preserved ordered writes, copy-before-async-write ownership, pause-aware
+  input, half-close, full close, and deterministic fd cleanup.
+- Added a private reactor diagnostic snapshot for tests and future debugging.
+- Tightened the shared reactor RFC around sharding, accept-loop ownership,
+  fairness, queue bounds, validation order, and observability.
+
+### Validation
+
+- `go test ./...` in `go`
+- `/Users/dan/Coding/flutter_arm64/bin/dart analyze`
+- `/Users/dan/Coding/flutter_arm64/bin/dart test --enable-experiment=native-assets`
+- `/Users/dan/Coding/flutter_arm64/bin/dart test --enable-experiment=native-assets test/integration/fd`
 
 ## 2026-04-24: Transport reliability hardening after mobile validation
 

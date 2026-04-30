@@ -14,13 +14,12 @@ import 'package:ffi/ffi.dart';
 ///   {"ok": true} on success
 ///   {"error": "..."} on failure.
 @ffi.Native<
-  ffi.Pointer<Utf8> Function(
-    ffi.Pointer<Utf8>,
-    ffi.Pointer<Utf8>,
-    ffi.Pointer<Utf8>,
-    ffi.Pointer<Utf8>,
-  )
->(symbol: 'DuneStart')
+    ffi.Pointer<Utf8> Function(
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+    )>(symbol: 'DuneStart')
 external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> hostname,
   ffi.Pointer<Utf8> authKey,
@@ -34,15 +33,14 @@ external ffi.Pointer<Utf8> duneStart(
 ///   {"requestBodyFd": N|-1, "responseBodyFd": N} on success
 ///   {"error": "..."} on failure.
 @ffi.Native<
-  ffi.Pointer<Utf8> Function(
-    ffi.Pointer<Utf8>,
-    ffi.Pointer<Utf8>,
-    ffi.Pointer<Utf8>,
-    ffi.Int64,
-    ffi.Int32,
-    ffi.Int32,
-  )
->(symbol: 'DuneHttpStart')
+    ffi.Pointer<Utf8> Function(
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Int64,
+      ffi.Int32,
+      ffi.Int32,
+    )>(symbol: 'DuneHttpStart')
 external ffi.Pointer<Utf8> duneHttpStart(
   ffi.Pointer<Utf8> method,
   ffi.Pointer<Utf8> url,
@@ -90,8 +88,8 @@ external void duneHttpCloseBinding(int bindingId);
 ///
 /// POSIX-only backend primitive. Unsupported platforms fail explicitly.
 @ffi.Native<
-  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int64)
->(symbol: 'DuneTcpDialFd')
+    ffi.Pointer<Utf8> Function(
+        ffi.Pointer<Utf8>, ffi.Int32, ffi.Int64)>(symbol: 'DuneTcpDialFd')
 external ffi.Pointer<Utf8> duneTcpDialFd(
   ffi.Pointer<Utf8> host,
   int port,
@@ -135,6 +133,49 @@ external void duneTcpCloseFdListener(int listenerId);
 )
 external ffi.Pointer<Utf8> duneUdpBindFd(ffi.Pointer<Utf8> host, int port);
 
+/// Creates one native fd reactor poller and returns an opaque handle, or -1 on
+/// failure.
+@ffi.Native<ffi.Int64 Function()>(symbol: 'DuneReactorCreate')
+external int duneReactorCreate();
+
+/// Closes a native fd reactor poller.
+@ffi.Native<ffi.Int32 Function(ffi.Int64)>(symbol: 'DuneReactorClose')
+external int duneReactorClose(int handle);
+
+/// Wakes a native fd reactor poller blocked in wait.
+@ffi.Native<ffi.Int32 Function(ffi.Int64)>(symbol: 'DuneReactorWake')
+external int duneReactorWake(int handle);
+
+/// Registers one fd with the native fd reactor poller.
+@ffi.Native<ffi.Int32 Function(ffi.Int64, ffi.Int32, ffi.Int64, ffi.Int32)>(
+  symbol: 'DuneReactorRegister',
+)
+external int duneReactorRegister(
+    int handle, int fd, int transportId, int events);
+
+/// Updates one fd's read/write interest in the native fd reactor poller.
+@ffi.Native<ffi.Int32 Function(ffi.Int64, ffi.Int32, ffi.Int64, ffi.Int32)>(
+  symbol: 'DuneReactorUpdate',
+)
+external int duneReactorUpdate(int handle, int fd, int transportId, int events);
+
+/// Unregisters one fd from the native fd reactor poller.
+@ffi.Native<ffi.Int32 Function(ffi.Int64, ffi.Int32)>(
+  symbol: 'DuneReactorUnregister',
+)
+external int duneReactorUnregister(int handle, int fd);
+
+/// Blocks until native fd reactor events are available.
+@ffi.Native<
+    ffi.Int32 Function(ffi.Int64, ffi.Pointer<ffi.Void>, ffi.Int32,
+        ffi.Int32)>(symbol: 'DuneReactorWait')
+external int duneReactorWait(
+  int handle,
+  ffi.Pointer<ffi.Void> events,
+  int maxEvents,
+  int timeoutMillis,
+);
+
 /// Resolves a tailnet IP to its node identity via LocalAPI.
 ///
 /// Returns JSON:
@@ -165,8 +206,8 @@ external ffi.Pointer<Utf8> duneTlsDomains();
 ///     on success.
 ///   {"error": "..."} on failure.
 @ffi.Native<
-  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Pointer<Utf8>)
->(symbol: 'DuneDiagPing')
+    ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32,
+        ffi.Pointer<Utf8>)>(symbol: 'DuneDiagPing')
 external ffi.Pointer<Utf8> duneDiagPing(
   ffi.Pointer<Utf8> ip,
   int timeoutMillis,

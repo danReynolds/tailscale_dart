@@ -386,6 +386,8 @@ const int _reactorMaxEvents = 128;
 const int _reactorMaxRegisteredTransports = 4096;
 const int _reactorShardCount = 1;
 const int _reactorReadBudgetBytes = 1024 * 1024;
+// Internal write batching default. This intentionally does not follow
+// maxReadChunkSize; callers may tune read chunking without changing writes.
 const int _reactorWriteChunkBytes = 64 * 1024;
 const int _reactorWriteBudgetBytes = 1024 * 1024;
 const Duration _reactorRequestTimeout = Duration(seconds: 1);
@@ -1117,6 +1119,8 @@ void _flushReactorWrites(
       final error = StateError('shutdown(SHUT_WR) failed');
       metrics.hardErrorCount++;
       if (id == null) {
+        // Defensive fallback for malformed internal state: no public write
+        // completion can be matched, so surface the transport-level failure.
         state.eventPort.send(<Object>['readError', error.toString()]);
       } else {
         state.eventPort.send(<Object>['writeError', id, error.toString()]);

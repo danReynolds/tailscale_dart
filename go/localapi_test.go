@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/types/opt"
 )
 
 func TestPeerStatusAddrMatchesHostAndDNSName(t *testing.T) {
@@ -176,6 +178,99 @@ func TestIsNotFound_StringFallback(t *testing.T) {
 	}
 	if isNotFound(errors.New("unrelated error")) {
 		t.Error("non-404 error should not match")
+	}
+}
+
+func TestPrefsToJSONShape(t *testing.T) {
+	prefs := &ipn.Prefs{
+		RouteAll:      true,
+		ShieldsUp:     true,
+		AdvertiseTags: []string{"tag:server"},
+		WantRunning:   true,
+		Hostname:      "router",
+		ExitNodeID:    "n123",
+		AutoExitNode:  ipn.AnyExitNode,
+		AdvertiseRoutes: []netip.Prefix{
+			netip.MustParsePrefix("10.0.0.0/24"),
+		},
+		AutoUpdate: ipn.AutoUpdatePrefs{
+			Check: true,
+			Apply: opt.NewBool(true),
+		},
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(prefsToJSON(prefs)), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got := parsed["acceptRoutes"]; got != true {
+		t.Errorf("acceptRoutes = %v, want true", got)
+	}
+	if got := parsed["autoUpdate"]; got != true {
+		t.Errorf("autoUpdate = %v, want true", got)
+	}
+	if got := parsed["autoExitNode"]; got != true {
+		t.Errorf("autoExitNode = %v, want true", got)
+	}
+	if got := parsed["exitNodeId"]; got != "n123" {
+		t.Errorf("exitNodeId = %v, want n123", got)
+	}
+}
+
+func TestMaskedPrefsFromPayload(t *testing.T) {
+	acceptRoutes := true
+	shieldsUp := false
+	autoUpdate := true
+	hostname := " router "
+	exitNodeID := " n123 "
+	routes := []string{"10.0.0.7/24"}
+	tags := []string{"tag:server"}
+
+	masked, err := maskedPrefsFromPayload(prefsUpdatePayload{
+		AdvertisedRoutes: &routes,
+		AcceptRoutes:     &acceptRoutes,
+		ShieldsUp:        &shieldsUp,
+		AdvertisedTags:   &tags,
+		AutoUpdate:       &autoUpdate,
+		Hostname:         &hostname,
+		ExitNodeID:       &exitNodeID,
+	})
+	if err != nil {
+		t.Fatalf("maskedPrefsFromPayload: %v", err)
+	}
+
+	if !masked.AdvertiseRoutesSet || masked.AdvertiseRoutes[0].String() != "10.0.0.0/24" {
+		t.Fatalf("AdvertiseRoutes = %v, set=%v", masked.AdvertiseRoutes, masked.AdvertiseRoutesSet)
+	}
+	if !masked.RouteAllSet || !masked.RouteAll {
+		t.Fatalf("RouteAll = %v, set=%v", masked.RouteAll, masked.RouteAllSet)
+	}
+	if !masked.ShieldsUpSet || masked.ShieldsUp {
+		t.Fatalf("ShieldsUp = %v, set=%v", masked.ShieldsUp, masked.ShieldsUpSet)
+	}
+	if !masked.AdvertiseTagsSet || len(masked.AdvertiseTags) != 1 || masked.AdvertiseTags[0] != "tag:server" {
+		t.Fatalf("AdvertiseTags = %v, set=%v", masked.AdvertiseTags, masked.AdvertiseTagsSet)
+	}
+	if !masked.AutoUpdateSet.CheckSet || !masked.AutoUpdateSet.ApplySet || !masked.AutoUpdate.Check {
+		t.Fatalf("AutoUpdate = %+v, set=%+v", masked.AutoUpdate, masked.AutoUpdateSet)
+	}
+	if apply, ok := masked.AutoUpdate.Apply.Get(); !ok || !apply {
+		t.Fatalf("AutoUpdate.Apply = %v/%v, want true/true", apply, ok)
+	}
+	if !masked.HostnameSet || masked.Hostname != "router" {
+		t.Fatalf("Hostname = %q, set=%v", masked.Hostname, masked.HostnameSet)
+	}
+	if !masked.ExitNodeIDSet || !masked.ExitNodeIPSet || !masked.AutoExitNodeSet || string(masked.ExitNodeID) != "n123" {
+		t.Fatalf("Exit node fields: id=%q idSet=%v ipSet=%v autoSet=%v", masked.ExitNodeID, masked.ExitNodeIDSet, masked.ExitNodeIPSet, masked.AutoExitNodeSet)
+	}
+}
+
+func TestMaskedPrefsFromPayloadRejectsBadCIDR(t *testing.T) {
+	routes := []string{"not-a-cidr"}
+	if _, err := maskedPrefsFromPayload(prefsUpdatePayload{
+		AdvertisedRoutes: &routes,
+	}); err == nil {
+		t.Fatal("expected invalid CIDR error")
 	}
 }
 

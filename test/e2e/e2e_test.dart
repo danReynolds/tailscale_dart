@@ -93,6 +93,31 @@ void main() {
     expect(tsnet.http.client, isA<http.Client>());
   });
 
+  test('prefs writes round-trip through LocalAPI', () async {
+    final original = await tsnet.prefs.get();
+    addTearDown(() async {
+      await tsnet.prefs.updateMasked(
+        PrefsUpdate(
+          advertisedRoutes: original.advertisedRoutes,
+          acceptRoutes: original.acceptRoutes,
+          shieldsUp: original.shieldsUp,
+        ),
+      );
+    });
+
+    var updated = await tsnet.prefs.setShieldsUp(!original.shieldsUp);
+    expect(updated.shieldsUp, isNot(original.shieldsUp));
+
+    updated = await tsnet.prefs.setAcceptRoutes(!original.acceptRoutes);
+    expect(updated.acceptRoutes, isNot(original.acceptRoutes));
+
+    updated = await tsnet.prefs.setAdvertisedRoutes(['10.77.0.0/24']);
+    expect(updated.advertisedRoutes, contains('10.77.0.0/24'));
+
+    updated = await tsnet.prefs.setAdvertisedRoutes(const []);
+    expect(updated.advertisedRoutes, isEmpty);
+  });
+
   // Two-node groups spawn `dart run test/e2e/peer_main.dart` as a subprocess.
   // On Linux CI runners the Dart hooks framework re-invokes the package's
   // native build hook from the subprocess, which races the parent process's

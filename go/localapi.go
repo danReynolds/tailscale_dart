@@ -23,8 +23,10 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 )
 
 // lcOr returns the current LocalClient or an error if the embedded
@@ -192,6 +194,209 @@ func TlsDomains() string {
 		return jsonError(err)
 	}
 	return string(b)
+}
+
+type prefsUpdatePayload struct {
+	AdvertisedRoutes *[]string `json:"advertisedRoutes"`
+	AcceptRoutes     *bool     `json:"acceptRoutes"`
+	ShieldsUp        *bool     `json:"shieldsUp"`
+	AdvertisedTags   *[]string `json:"advertisedTags"`
+	WantRunning      *bool     `json:"wantRunning"`
+	AutoUpdate       *bool     `json:"autoUpdate"`
+	Hostname         *string   `json:"hostname"`
+	ExitNodeID       *string   `json:"exitNodeId"`
+}
+
+// PrefsGet returns the subset of ipn.Prefs exposed by Dart's TailscalePrefs.
+func PrefsGet() string {
+	lc, err := lcOr("PrefsGet")
+	if err != nil {
+		return jsonError(err)
+	}
+	prefs, err := lc.GetPrefs(context.Background())
+	if err != nil {
+		return localAPIError(err)
+	}
+	return prefsToJSON(prefs)
+}
+
+// PrefsUpdate applies a Dart PrefsUpdate JSON object using LocalAPI EditPrefs.
+func PrefsUpdate(updateJSON string) string {
+	var payload prefsUpdatePayload
+	dec := json.NewDecoder(strings.NewReader(updateJSON))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&payload); err != nil {
+		return jsonError(fmt.Errorf("invalid prefs update JSON: %w", err))
+	}
+
+	masked, err := maskedPrefsFromPayload(payload)
+	if err != nil {
+		return jsonError(err)
+	}
+
+	lc, err := lcOr("PrefsUpdate")
+	if err != nil {
+		return jsonError(err)
+	}
+	prefs, err := lc.EditPrefs(context.Background(), masked)
+	if err != nil {
+		return localAPIError(err)
+	}
+	return prefsToJSON(prefs)
+}
+
+// ExitNodeSuggest returns the stable node ID recommended by LocalAPI's
+// suggest-exit-node endpoint. Dart maps the ID back to its TailscaleNode.
+func ExitNodeSuggest() string {
+	lc, err := lcOr("ExitNodeSuggest")
+	if err != nil {
+		return jsonError(err)
+	}
+	suggestion, err := lc.SuggestExitNode(context.Background())
+	if err != nil {
+		return localAPIError(err)
+	}
+	out := map[string]any{
+		"nodeId": string(suggestion.ID),
+		"name":   suggestion.Name,
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return jsonError(err)
+	}
+	return string(b)
+}
+
+// ExitNodeUseAuto enables AutoExitNode=any, allowing tailscaled to pick and
+// re-pick the best eligible exit node.
+func ExitNodeUseAuto() string {
+	masked := ipn.MaskedPrefs{}
+	masked.ClearExitNode()
+	masked.AutoExitNode = ipn.AnyExitNode
+	masked.ExitNodeIDSet = true
+	masked.ExitNodeIPSet = true
+	masked.AutoExitNodeSet = true
+
+	lc, err := lcOr("ExitNodeUseAuto")
+	if err != nil {
+		return jsonError(err)
+	}
+	prefs, err := lc.EditPrefs(context.Background(), &masked)
+	if err != nil {
+		return localAPIError(err)
+	}
+	return prefsToJSON(prefs)
+}
+
+func prefsToJSON(prefs *ipn.Prefs) string {
+	if prefs == nil {
+		return jsonError(errors.New("LocalAPI returned nil prefs"))
+	}
+
+	advertisedRoutes := make([]string, 0, len(prefs.AdvertiseRoutes))
+	for _, prefix := range prefs.AdvertiseRoutes {
+		advertisedRoutes = append(advertisedRoutes, prefix.String())
+	}
+	advertisedTags := prefs.AdvertiseTags
+	if advertisedTags == nil {
+		advertisedTags = []string{}
+	}
+
+	autoUpdate := false
+	if apply, ok := prefs.AutoUpdate.Apply.Get(); ok {
+		autoUpdate = apply
+	}
+
+	var exitNodeID *string
+	if !prefs.ExitNodeID.IsZero() {
+		id := string(prefs.ExitNodeID)
+		exitNodeID = &id
+	}
+
+	out := map[string]any{
+		"advertisedRoutes": advertisedRoutes,
+		"acceptRoutes":     prefs.RouteAll,
+		"shieldsUp":        prefs.ShieldsUp,
+		"advertisedTags":   advertisedTags,
+		"wantRunning":      prefs.WantRunning,
+		"autoUpdate":       autoUpdate,
+		"hostname":         prefs.Hostname,
+		"exitNodeId":       exitNodeID,
+		"autoExitNode":     prefs.AutoExitNode.IsSet(),
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return jsonError(err)
+	}
+	return string(b)
+}
+
+func maskedPrefsFromPayload(payload prefsUpdatePayload) (*ipn.MaskedPrefs, error) {
+	masked := &ipn.MaskedPrefs{}
+	if payload.AdvertisedRoutes != nil {
+		prefixes, err := parsePrefixes(*payload.AdvertisedRoutes)
+		if err != nil {
+			return nil, err
+		}
+		masked.AdvertiseRoutes = prefixes
+		masked.AdvertiseRoutesSet = true
+	}
+	if payload.AcceptRoutes != nil {
+		masked.RouteAll = *payload.AcceptRoutes
+		masked.RouteAllSet = true
+	}
+	if payload.ShieldsUp != nil {
+		masked.ShieldsUp = *payload.ShieldsUp
+		masked.ShieldsUpSet = true
+	}
+	if payload.AdvertisedTags != nil {
+		masked.AdvertiseTags = append([]string(nil), (*payload.AdvertisedTags)...)
+		masked.AdvertiseTagsSet = true
+	}
+	if payload.WantRunning != nil {
+		masked.WantRunning = *payload.WantRunning
+		masked.WantRunningSet = true
+	}
+	if payload.AutoUpdate != nil {
+		masked.AutoUpdate = ipn.AutoUpdatePrefs{
+			Check: *payload.AutoUpdate,
+			Apply: opt.NewBool(*payload.AutoUpdate),
+		}
+		masked.AutoUpdateSet = ipn.AutoUpdatePrefsMask{
+			CheckSet: true,
+			ApplySet: true,
+		}
+	}
+	if payload.Hostname != nil {
+		masked.Hostname = strings.TrimSpace(*payload.Hostname)
+		masked.HostnameSet = true
+	}
+	if payload.ExitNodeID != nil {
+		masked.ClearExitNode()
+		masked.ExitNodeIDSet = true
+		masked.ExitNodeIPSet = true
+		masked.AutoExitNodeSet = true
+		if id := strings.TrimSpace(*payload.ExitNodeID); id != "" {
+			masked.ExitNodeID = tailcfg.StableNodeID(id)
+		}
+	}
+	return masked, nil
+}
+
+func parsePrefixes(cidrs []string) ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		trimmed := strings.TrimSpace(cidr)
+		if trimmed == "" {
+			return nil, errors.New("advertised route CIDR must not be empty")
+		}
+		prefix, err := netip.ParsePrefix(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("invalid advertised route %q: %w", cidr, err)
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes, nil
 }
 
 // DiagPing runs a Tailscale-level ping against the given tailnet IP

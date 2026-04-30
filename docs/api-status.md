@@ -46,9 +46,9 @@ module bump before they can land here.
 | [`funnel`](#funnel)     | Public-internet HTTPS via Tailscale Funnel                         | Optional  | Planned          |
 | [`taildrop`](#taildrop) | Node-to-node file transfer                                          | Optional  | Planned          |
 | [`serve`](#serve)       | Raw `tailscale serve` / `tailscale funnel` config                   | Optional  | Planned          |
-| [`exitNode`](#exitnode) | Route outbound traffic through another node                                | Advanced  | Planned          |
+| [`exitNode`](#exitnode) | Route outbound traffic through another node                                | Advanced  | Phase 6 ✅        |
 | [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Optional  | Planned          |
-| [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Advanced  | Planned          |
+| [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Advanced  | Phase 6 ✅        |
 | [`diag`](#diag)         | Ping, metrics, DERP map, update check                                | Core      | Phase 4 ✅        |
 | [`whois`](#whois-top-level) | Resolve a tailnet IP to node identity                             | Core      | Phase 4 ✅        |
 | [Errors](#errors)       | Structured exception taxonomy                                        | Core      | Phase 2 ✅        |
@@ -230,17 +230,18 @@ changes.
 Advanced node-control feature; useful, but not central to the core
 embedded-app value proposition.
 
-**Status:** planned.
+**Status:** implemented. Full `suggest` / `useAuto` behavior still needs live
+Tailscale validation because recommendation policy is control-plane-specific.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `exitNode.current()` → `Future<TailscaleNode?>` | ⛔ | Node currently used as exit, or null. | `final cur = await tsnet.exitNode.current();` |
-| `exitNode.suggest()` → `Future<TailscaleNode?>` | ⛔ | Control-plane-recommended exit (latency-based). | `final s = await tsnet.exitNode.suggest();` |
-| `exitNode.use(TailscaleNode)` | ⛔ | Route through this node. Type-safe. | `await tsnet.exitNode.use(node);` |
-| `exitNode.useById(stableNodeId)` | ⛔ | Escape hatch when only the stable ID is available. | `await tsnet.exitNode.useById('nAbCd');` |
-| `exitNode.useAuto()` | ⛔ | `AutoExitNode` mode — control plane picks and re-picks. | `await tsnet.exitNode.useAuto();` |
-| `exitNode.clear()` | ⛔ | Stop routing through an exit node. | `await tsnet.exitNode.clear();` |
-| `exitNode.onCurrentChange` → `Stream<TailscaleNode?>` | ⛔ | React to changes (incl. external, from another signed-in device). | `tsnet.exitNode.onCurrentChange.listen(update);` |
+| `exitNode.current()` → `Future<TailscaleNode?>` | ✅ | Node currently used as exit, or null. | `final cur = await tsnet.exitNode.current();` |
+| `exitNode.suggest()` → `Future<TailscaleNode?>` | ✅ | Control-plane-recommended exit (latency-based). | `final s = await tsnet.exitNode.suggest();` |
+| `exitNode.use(TailscaleNode)` | ✅ | Route through this node. Type-safe. | `await tsnet.exitNode.use(node);` |
+| `exitNode.useById(stableNodeId)` | ✅ | Escape hatch when only the stable ID is available. | `await tsnet.exitNode.useById('nAbCd');` |
+| `exitNode.useAuto()` | ✅ | `AutoExitNode` mode — control plane picks and re-picks. | `await tsnet.exitNode.useAuto();` |
+| `exitNode.clear()` | ✅ | Stop routing through an exit node. | `await tsnet.exitNode.clear();` |
+| `exitNode.onCurrentChange` → `Stream<TailscaleNode?>` | ✅ | React to runtime exit-node selection changes. | `tsnet.exitNode.onCurrentChange.listen(update);` |
 
 ## `profiles`
 
@@ -252,7 +253,8 @@ dev vs prod. `switchTo` accepts a `LoginProfile` (type-safe) or use
 Tracked as optional. If the package stays focused on "embed one node in
 one app", this may never be a common need.
 
-**Status:** planned.
+**Status:** implemented. Route approval and exit-node policy effects are still
+control-plane behavior; the API writes and reads LocalAPI prefs.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -277,13 +279,13 @@ Advanced node-control surface rather than core day-one app plumbing.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `prefs.get()` → `Future<TailscalePrefs>` | ⛔ | Current prefs snapshot. | `final p = await tsnet.prefs.get();` |
-| `prefs.setAdvertisedRoutes(cidrs)` | ⛔ | Replace advertised subnet routes. | `await tsnet.prefs.setAdvertisedRoutes(['10.0.0.0/24']);` |
-| `prefs.setAcceptRoutes(bool)` | ⛔ | Accept subnet routes from other nodes. | `await tsnet.prefs.setAcceptRoutes(true);` |
-| `prefs.setShieldsUp(bool)` | ⛔ | Block all inbound connections. | `await tsnet.prefs.setShieldsUp(true);` |
-| `prefs.setAutoUpdate(bool)` | ⛔ | Opt in/out of tsnet auto-update. | `await tsnet.prefs.setAutoUpdate(true);` |
-| `prefs.setAdvertisedTags(tags)` | ⛔ | Replace advertised ACL tags. | `await tsnet.prefs.setAdvertisedTags(['tag:prod']);` |
-| `prefs.updateMasked(PrefsUpdate)` | ⛔ | Atomic multi-field edit; unset fields stay as-is. | `await tsnet.prefs.updateMasked(PrefsUpdate(shieldsUp: true));` |
+| `prefs.get()` → `Future<TailscalePrefs>` | ✅ | Current prefs snapshot. | `final p = await tsnet.prefs.get();` |
+| `prefs.setAdvertisedRoutes(cidrs)` | ✅ | Replace advertised subnet routes. | `await tsnet.prefs.setAdvertisedRoutes(['10.0.0.0/24']);` |
+| `prefs.setAcceptRoutes(bool)` | ✅ | Accept subnet routes from other nodes. | `await tsnet.prefs.setAcceptRoutes(true);` |
+| `prefs.setShieldsUp(bool)` | ✅ | Block all inbound connections. | `await tsnet.prefs.setShieldsUp(true);` |
+| `prefs.setAutoUpdate(bool)` | ✅ | Opt in/out of tsnet auto-update. | `await tsnet.prefs.setAutoUpdate(true);` |
+| `prefs.setAdvertisedTags(tags)` | ✅ | Replace advertised ACL tags. | `await tsnet.prefs.setAdvertisedTags(['tag:prod']);` |
+| `prefs.updateMasked(PrefsUpdate)` | ✅ | Atomic multi-field edit; unset fields stay as-is. | `await tsnet.prefs.updateMasked(PrefsUpdate(shieldsUp: true));` |
 
 ## `diag`
 

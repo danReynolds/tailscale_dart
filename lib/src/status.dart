@@ -187,6 +187,8 @@ class TailscaleNode {
     required this.active,
     required this.rxBytes,
     required this.txBytes,
+    this.exitNode = false,
+    this.exitNodeOption = false,
     this.lastSeen,
     this.relay,
     this.curAddr,
@@ -238,6 +240,15 @@ class TailscaleNode {
   /// Bytes sent to this node.
   final int txBytes;
 
+  /// Whether this node is the currently selected exit node.
+  final bool exitNode;
+
+  /// Whether this node is eligible to be selected as an exit node.
+  ///
+  /// Upstream sets this only after the node advertises default routes and the
+  /// control plane approves it.
+  final bool exitNodeOption;
+
   /// When this node was last seen, or null if never.
   ///
   /// Most useful for offline nodes.
@@ -279,6 +290,8 @@ class TailscaleNode {
       active: json['Active'] as bool? ?? false,
       rxBytes: json['RxBytes'] as int? ?? 0,
       txBytes: json['TxBytes'] as int? ?? 0,
+      exitNode: json['ExitNode'] as bool? ?? false,
+      exitNodeOption: json['ExitNodeOption'] as bool? ?? false,
       lastSeen: _parseTime(json['LastSeen']),
       relay: json['Relay'] as String?,
       curAddr: json['CurAddr'] as String?,
@@ -299,6 +312,8 @@ class TailscaleNode {
           active == other.active &&
           rxBytes == other.rxBytes &&
           txBytes == other.txBytes &&
+          exitNode == other.exitNode &&
+          exitNodeOption == other.exitNodeOption &&
           lastSeen == other.lastSeen &&
           relay == other.relay &&
           curAddr == other.curAddr;
@@ -315,6 +330,8 @@ class TailscaleNode {
     active,
     rxBytes,
     txBytes,
+    exitNode,
+    exitNodeOption,
     lastSeen,
     relay,
     curAddr,
@@ -323,7 +340,8 @@ class TailscaleNode {
   @override
   String toString() =>
       'TailscaleNode(id: $stableNodeId, hostName: $hostName, '
-      'ips: $tailscaleIPs, online: $online)';
+      'ips: $tailscaleIPs, online: $online, '
+      'exitNode: $exitNode, exitNodeOption: $exitNodeOption)';
 }
 
 extension on List<String> {

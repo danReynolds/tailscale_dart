@@ -344,6 +344,58 @@ void _workerEntrypoint(SendPort sendPort) {
             );
           case _WorkerPeersCommand():
             sendPort.send(_WorkerPeersResponse(peers: _loadPeerSnapshot()));
+          case _WorkerPrefsGetCommand():
+            final result =
+                _callNativeJson(
+                      native.dunePrefsGet,
+                      onError: TailscalePrefsException.new,
+                    )
+                    as Map<String, dynamic>;
+            sendPort.send(
+              _WorkerPrefsResponse(
+                operation: _WorkerOperation.prefsGet,
+                prefs: _parsePrefs(result),
+              ),
+            );
+          case _WorkerPrefsUpdateCommand request:
+            final updatePtr = request.updateJson.toNativeUtf8();
+            try {
+              final result =
+                  _callNativeJson(
+                        () => native.dunePrefsUpdate(updatePtr),
+                        onError: TailscalePrefsException.new,
+                      )
+                      as Map<String, dynamic>;
+              sendPort.send(
+                _WorkerPrefsResponse(
+                  operation: _WorkerOperation.prefsUpdate,
+                  prefs: _parsePrefs(result),
+                ),
+              );
+            } finally {
+              calloc.free(updatePtr);
+            }
+          case _WorkerExitNodeSuggestCommand():
+            final result =
+                _callNativeJson(
+                      native.duneExitNodeSuggest,
+                      onError: TailscaleExitNodeException.new,
+                    )
+                    as Map<String, dynamic>;
+            final nodeId = result['nodeId'] as String?;
+            sendPort.send(
+              _WorkerExitNodeSuggestResponse(
+                nodeId: nodeId == null || nodeId.isEmpty ? null : nodeId,
+              ),
+            );
+          case _WorkerExitNodeUseAutoCommand():
+            _callNativeJson(
+              native.duneExitNodeUseAuto,
+              onError: TailscaleExitNodeException.new,
+            );
+            sendPort.send(
+              const _WorkerAckResponse(_WorkerOperation.exitNodeUseAuto),
+            );
           case _WorkerDownCommand():
             native.duneStopWatch();
             native.duneStop();
@@ -494,6 +546,17 @@ List<TailscaleNode> _loadPeerSnapshot() {
     if (error is TailscaleStatusException) rethrow;
     throw TailscaleStatusException(
       'Failed to decode native Tailscale peers.',
+      cause: error,
+    );
+  }
+}
+
+TailscalePrefs _parsePrefs(Map<String, dynamic> json) {
+  try {
+    return TailscalePrefs.fromJson(json);
+  } catch (error) {
+    throw TailscalePrefsException(
+      'Failed to decode native Tailscale prefs.',
       cause: error,
     );
   }

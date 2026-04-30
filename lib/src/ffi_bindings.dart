@@ -14,12 +14,13 @@ import 'package:ffi/ffi.dart';
 ///   {"ok": true} on success
 ///   {"error": "..."} on failure.
 @ffi.Native<
-    ffi.Pointer<Utf8> Function(
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-    )>(symbol: 'DuneStart')
+  ffi.Pointer<Utf8> Function(
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+  )
+>(symbol: 'DuneStart')
 external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> hostname,
   ffi.Pointer<Utf8> authKey,
@@ -33,14 +34,15 @@ external ffi.Pointer<Utf8> duneStart(
 ///   {"requestBodyFd": N|-1, "responseBodyFd": N} on success
 ///   {"error": "..."} on failure.
 @ffi.Native<
-    ffi.Pointer<Utf8> Function(
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-      ffi.Pointer<Utf8>,
-      ffi.Int64,
-      ffi.Int32,
-      ffi.Int32,
-    )>(symbol: 'DuneHttpStart')
+  ffi.Pointer<Utf8> Function(
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Int64,
+    ffi.Int32,
+    ffi.Int32,
+  )
+>(symbol: 'DuneHttpStart')
 external ffi.Pointer<Utf8> duneHttpStart(
   ffi.Pointer<Utf8> method,
   ffi.Pointer<Utf8> url,
@@ -88,8 +90,8 @@ external void duneHttpCloseBinding(int bindingId);
 ///
 /// POSIX-only backend primitive. Unsupported platforms fail explicitly.
 @ffi.Native<
-    ffi.Pointer<Utf8> Function(
-        ffi.Pointer<Utf8>, ffi.Int32, ffi.Int64)>(symbol: 'DuneTcpDialFd')
+  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int64)
+>(symbol: 'DuneTcpDialFd')
 external ffi.Pointer<Utf8> duneTcpDialFd(
   ffi.Pointer<Utf8> host,
   int port,
@@ -151,7 +153,11 @@ external int duneReactorWake(int handle);
   symbol: 'DuneReactorRegister',
 )
 external int duneReactorRegister(
-    int handle, int fd, int transportId, int events);
+  int handle,
+  int fd,
+  int transportId,
+  int events,
+);
 
 /// Updates one fd's read/write interest in the native fd reactor poller.
 @ffi.Native<ffi.Int32 Function(ffi.Int64, ffi.Int32, ffi.Int64, ffi.Int32)>(
@@ -167,8 +173,8 @@ external int duneReactorUnregister(int handle, int fd);
 
 /// Blocks until native fd reactor events are available.
 @ffi.Native<
-    ffi.Int32 Function(ffi.Int64, ffi.Pointer<ffi.Void>, ffi.Int32,
-        ffi.Int32)>(symbol: 'DuneReactorWait')
+  ffi.Int32 Function(ffi.Int64, ffi.Pointer<ffi.Void>, ffi.Int32, ffi.Int32)
+>(symbol: 'DuneReactorWait')
 external int duneReactorWait(
   int handle,
   ffi.Pointer<ffi.Void> events,
@@ -206,8 +212,8 @@ external ffi.Pointer<Utf8> duneTlsDomains();
 ///     on success.
 ///   {"error": "..."} on failure.
 @ffi.Native<
-    ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32,
-        ffi.Pointer<Utf8>)>(symbol: 'DuneDiagPing')
+  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Pointer<Utf8>)
+>(symbol: 'DuneDiagPing')
 external ffi.Pointer<Utf8> duneDiagPing(
   ffi.Pointer<Utf8> ip,
   int timeoutMillis,
@@ -252,6 +258,24 @@ external ffi.Pointer<Utf8> duneStatus();
 /// Returns the current node list as JSON.
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DunePeers')
 external ffi.Pointer<Utf8> dunePeers();
+
+/// Returns the current node preferences subset as JSON.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DunePrefsGet')
+external ffi.Pointer<Utf8> dunePrefsGet();
+
+/// Applies a JSON-encoded PrefsUpdate and returns the updated prefs JSON.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
+  symbol: 'DunePrefsUpdate',
+)
+external ffi.Pointer<Utf8> dunePrefsUpdate(ffi.Pointer<Utf8> updateJson);
+
+/// Returns LocalAPI's suggested exit-node stable ID as JSON.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneExitNodeSuggest')
+external ffi.Pointer<Utf8> duneExitNodeSuggest();
+
+/// Enables AutoExitNode=any and returns the updated prefs JSON.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneExitNodeUseAuto')
+external ffi.Pointer<Utf8> duneExitNodeUseAuto();
 
 /// Frees a pointer allocated by the Go layer.
 @ffi.Native<ffi.Void Function(ffi.Pointer<Utf8>)>(symbol: 'DuneFree')

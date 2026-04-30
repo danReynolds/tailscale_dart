@@ -177,6 +177,8 @@ void main() {
         'Active': true,
         'RxBytes': 1024,
         'TxBytes': 2048,
+        'ExitNode': true,
+        'ExitNodeOption': true,
         'LastSeen': '2026-04-08T12:00:00Z',
         'Relay': 'nyc',
         'CurAddr': '1.2.3.4:41641',
@@ -190,6 +192,8 @@ void main() {
       expect(node.ipv4, '100.64.0.2');
       expect(node.rxBytes, 1024);
       expect(node.txBytes, 2048);
+      expect(node.exitNode, isTrue);
+      expect(node.exitNodeOption, isTrue);
       expect(node.lastSeen, isNotNull);
       expect(node.relay, 'nyc');
       expect(node.curAddr, '1.2.3.4:41641');
@@ -250,9 +254,11 @@ void main() {
       final a = TailscaleNode.fromJson({...base});
       final b = TailscaleNode.fromJson({...base});
       final c = TailscaleNode.fromJson({...base, 'ID': 'n2'});
+      final d = TailscaleNode.fromJson({...base, 'ExitNode': true});
       expect(a, equals(b));
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(equals(c)));
+      expect(a, isNot(equals(d)));
     });
   });
 

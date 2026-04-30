@@ -343,6 +343,26 @@ func DunePeers() *C.char {
 	return C.CString(tailscale.DunePeers())
 }
 
+//export DunePrefsGet
+func DunePrefsGet() *C.char {
+	return C.CString(tailscale.PrefsGet())
+}
+
+//export DunePrefsUpdate
+func DunePrefsUpdate(updateJSON *C.char) *C.char {
+	return C.CString(tailscale.PrefsUpdate(C.GoString(updateJSON)))
+}
+
+//export DuneExitNodeSuggest
+func DuneExitNodeSuggest() *C.char {
+	return C.CString(tailscale.ExitNodeSuggest())
+}
+
+//export DuneExitNodeUseAuto
+func DuneExitNodeUseAuto() *C.char {
+	return C.CString(tailscale.ExitNodeUseAuto())
+}
+
 //export DuneFree
 func DuneFree(ptr *C.char) {
 	C.free(unsafe.Pointer(ptr))

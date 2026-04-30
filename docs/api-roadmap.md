@@ -350,23 +350,24 @@ exit-node APIs, not by `tsnet.Server`.
 
 | # | API                                                        | Purpose                                                                 | Done |
 | - | ---------------------------------------------------------- | ----------------------------------------------------------------------- | ---- |
-| 1 | `prefs.get()` → `TailscalePrefs`                           | Current preferences snapshot                                            | [ ]  |
-| 2 | `prefs.setAdvertisedRoutes(routes)`                        | Advertise subnet routes behind this node                                | [ ]  |
-| 3 | `prefs.setAcceptRoutes(bool)`                              | Accept subnet routes advertised by other nodes                          | [ ]  |
-| 4 | `prefs.setShieldsUp(bool)`                                 | Block all inbound connections                                            | [ ]  |
-| 5 | `prefs.setAutoUpdate(bool)`                                | Opt in/out of automatic tsnet updates                                   | [ ]  |
-| 6 | `prefs.setAdvertisedTags(tags)`                            | Replace advertised ACL tags                                             | [ ]  |
-| 7 | `prefs.updateMasked(PrefsUpdate)`                          | Atomic multi-field prefs edit                                            | [ ]  |
-| 8 | `exitNode.current()` → `TailscaleNode?`                       | Node currently being used as exit, or null                              | [ ]  |
-| 9 | `exitNode.suggest()` → `TailscaleNode?`                       | Control-plane-recommended exit node (latency-based)                     | [ ]  |
-| 10| `exitNode.use(TailscaleNode)`                                 | Route all outbound traffic through this node                            | [ ]  |
-| 11| `exitNode.useById(String stableNodeId)`                    | Same as `use`, but for the case where only the stable ID is known       | [ ]  |
-| 12| `exitNode.useAuto()`                                       | Set `AutoExitNode` / `auto:any` mode — let the control plane pick. Upstream prefs support this; future-proofs the API against requiring a user-facing "auto" button to land as a breaking redesign. | [ ]  |
-| 13| `exitNode.clear()`                                         | Stop routing through an exit node                                        | [ ]  |
-| 14| `exitNode.onCurrentChange` → `Stream<TailscaleNode?>`         | React to exit-node changes (including external)                          | [ ]  |
+| 1 | `prefs.get()` → `TailscalePrefs`                           | Current preferences snapshot                                            | [x]  |
+| 2 | `prefs.setAdvertisedRoutes(routes)`                        | Advertise subnet routes behind this node                                | [x]  |
+| 3 | `prefs.setAcceptRoutes(bool)`                              | Accept subnet routes advertised by other nodes                          | [x]  |
+| 4 | `prefs.setShieldsUp(bool)`                                 | Block all inbound connections                                            | [x]  |
+| 5 | `prefs.setAutoUpdate(bool)`                                | Opt in/out of automatic tsnet updates                                   | [x]  |
+| 6 | `prefs.setAdvertisedTags(tags)`                            | Replace advertised ACL tags                                             | [x]  |
+| 7 | `prefs.updateMasked(PrefsUpdate)`                          | Atomic multi-field prefs edit                                            | [x]  |
+| 8 | `exitNode.current()` → `TailscaleNode?`                       | Node currently being used as exit, or null                              | [x]  |
+| 9 | `exitNode.suggest()` → `TailscaleNode?`                       | Control-plane-recommended exit node (latency-based)                     | [x]  |
+| 10| `exitNode.use(TailscaleNode)`                                 | Route all outbound traffic through this node                            | [x]  |
+| 11| `exitNode.useById(String stableNodeId)`                    | Same as `use`, but for the case where only the stable ID is known       | [x]  |
+| 12| `exitNode.useAuto()`                                       | Set `AutoExitNode` / `auto:any` mode — let the control plane pick. Upstream prefs support this; future-proofs the API against requiring a user-facing "auto" button to land as a breaking redesign. | [x]  |
+| 13| `exitNode.clear()`                                         | Stop routing through an exit node                                        | [x]  |
+| 14| `exitNode.onCurrentChange` → `Stream<TailscaleNode?>`         | React to runtime exit-node selection changes                             | [x]  |
 
-**Exit criteria:** e2e covers advertising a route, using/clearing an
-exit node (manual + auto), and shields-up behavior.
+**Remaining validation:** Headscale should cover prefs write/read behavior that
+does not depend on route approval. Live Tailscale should cover
+`exitNode.suggest()` / `useAuto()` recommendation behavior.
 
 ---
 

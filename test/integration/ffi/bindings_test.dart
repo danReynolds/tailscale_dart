@@ -192,4 +192,24 @@ void main() {
       expect(parsed['error'], contains('UdpBindFd called before Start'));
     });
   });
+
+  group('routing control validation', () {
+    test('prefs get returns JSON error before server startup', () {
+      final resultPtr = native.dunePrefsGet();
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('PrefsGet called before Start'));
+    });
+
+    test('exit node suggest returns JSON error before server startup', () {
+      final resultPtr = native.duneExitNodeSuggest();
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('ExitNodeSuggest called before Start'));
+    });
+  });
 }

@@ -253,8 +253,7 @@ dev vs prod. `switchTo` accepts a `LoginProfile` (type-safe) or use
 Tracked as optional. If the package stays focused on "embed one node in
 one app", this may never be a common need.
 
-**Status:** implemented. Route approval and exit-node policy effects are still
-control-plane behavior; the API writes and reads LocalAPI prefs.
+**Status:** planned.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -275,7 +274,8 @@ setters (`set*` prefix for consistency); atomic multi-field edits use
 `updateMasked(PrefsUpdate)`.
 Advanced node-control surface rather than core day-one app plumbing.
 
-**Status:** planned.
+**Status:** implemented. Headscale covers LocalAPI prefs write/read behavior;
+live Tailscale validation is still needed for exit-node recommendation policy.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -285,6 +285,7 @@ Advanced node-control surface rather than core day-one app plumbing.
 | `prefs.setShieldsUp(bool)` | ✅ | Block all inbound connections. | `await tsnet.prefs.setShieldsUp(true);` |
 | `prefs.setAutoUpdate(bool)` | ✅ | Opt in/out of tsnet auto-update. | `await tsnet.prefs.setAutoUpdate(true);` |
 | `prefs.setAdvertisedTags(tags)` | ✅ | Replace advertised ACL tags. | `await tsnet.prefs.setAdvertisedTags(['tag:prod']);` |
+| `prefs.setHostname(hostname)` | ✅ | Change this node's tailnet-visible hostname. | `await tsnet.prefs.setHostname('router');` |
 | `prefs.updateMasked(PrefsUpdate)` | ✅ | Atomic multi-field edit; unset fields stay as-is. | `await tsnet.prefs.updateMasked(PrefsUpdate(shieldsUp: true));` |
 
 ## `diag`

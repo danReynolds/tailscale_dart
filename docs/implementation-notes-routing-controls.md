@@ -34,6 +34,6 @@ control-plane exit-node recommendation policy and route approval semantics.
 - [x] Public prefs and exit-node namespaces wired to `Tailscale.instance`.
 - [x] Value/model tests for prefs and node exit-node fields.
 - [x] FFI pre-start error-shape coverage.
-- [ ] Headscale E2E coverage for prefs updates that do not require route
+- [x] Headscale E2E coverage for prefs updates that do not require route
       approval.
 - [ ] Live Tailscale validation for `exitNode.suggest()` / `useAuto()`.

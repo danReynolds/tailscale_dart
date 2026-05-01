@@ -140,11 +140,13 @@ void main() {
       await prefs.setAcceptRoutes(true);
       await prefs.setAdvertisedRoutes(['10.0.0.0/24']);
       await prefs.setAdvertisedTags(['tag:server']);
+      await prefs.setHostname('router');
 
       expect(updates, [
         const PrefsUpdate(acceptRoutes: true),
         const PrefsUpdate(advertisedRoutes: ['10.0.0.0/24']),
         const PrefsUpdate(advertisedTags: ['tag:server']),
+        const PrefsUpdate(hostname: 'router'),
       ]);
     });
   });

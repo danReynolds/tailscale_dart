@@ -129,7 +129,7 @@ Windows-native capability backend or chooses a separate Windows fallback.
 | `tcp.bind({port, address})` | `Future<TailscaleListener>` | Accept raw TCP connections from tailnet nodes |
 | `udp.bind({port, address})` | `Future<TailscaleDatagramBinding>` | Send and receive UDP datagrams on a tailnet IP |
 
-The `tls`, `funnel`, `taildrop`, `serve`, `exitNode`, `profiles`, and `prefs` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
+The `tls`, `funnel`, `taildrop`, `serve`, and `profiles` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
 
 ## Transport Lifecycle
 

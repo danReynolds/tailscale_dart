@@ -78,7 +78,7 @@ ExitNode createExitNode({
   nodeChanges: nodeChanges,
 );
 
-final class _ExitNode implements ExitNode {
+final class _ExitNode extends ExitNode {
   _ExitNode({
     required ExitNodeCurrentFn currentFn,
     required ExitNodeSuggestFn suggestFn,
@@ -106,9 +106,6 @@ final class _ExitNode implements ExitNode {
 
   @override
   Future<TailscaleNode?> suggest() => _suggest();
-
-  @override
-  Future<void> use(TailscaleNode node) => useById(node.stableNodeId);
 
   @override
   Future<void> useById(String stableNodeId) {

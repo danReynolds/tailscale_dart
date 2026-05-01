@@ -258,7 +258,6 @@ func ExitNodeSuggest() string {
 	}
 	out := map[string]any{
 		"nodeId": string(suggestion.ID),
-		"name":   suggestion.Name,
 	}
 	b, err := json.Marshal(out)
 	if err != nil {
@@ -358,6 +357,9 @@ func maskedPrefsFromPayload(payload prefsUpdatePayload) (*ipn.MaskedPrefs, error
 		masked.WantRunningSet = true
 	}
 	if payload.AutoUpdate != nil {
+		// Dart intentionally exposes auto-update as one bool even though
+		// upstream tracks Check and Apply separately. The package-level
+		// control is "auto-update on/off", matching the CLI-level behavior.
 		masked.AutoUpdate = ipn.AutoUpdatePrefs{
 			Check: *payload.AutoUpdate,
 			Apply: opt.NewBool(*payload.AutoUpdate),

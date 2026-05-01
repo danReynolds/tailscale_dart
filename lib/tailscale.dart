@@ -543,6 +543,9 @@ class Tailscale implements TailscaleClient {
 
   Future<TailscaleNode?> _currentExitNode() async {
     _requireInitialized();
+    // LocalAPI exposes exit-node selection through prefs, while the public
+    // API returns a full TailscaleNode. Resolve against a near-current node
+    // snapshot; transient null is acceptable while netmap state catches up.
     final prefs = await _worker.prefsGet();
     final nodeSnapshot = await nodes();
 

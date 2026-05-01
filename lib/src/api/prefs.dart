@@ -141,11 +141,15 @@ class PrefsUpdate {
   final List<String>? advertisedTags;
   final bool? wantRunning;
   final bool? autoUpdate;
+
+  /// Tailnet-visible hostname to publish for this node.
   final String? hostname;
 
   /// Pass empty string to clear the current exit node; `null` leaves
   /// unchanged (Dart's single-null problem; use named setters on
-  /// [Prefs] or [ExitNode] for clarity).
+  /// [Prefs] or [ExitNode] for clarity). Any explicit update to this
+  /// field also disables automatic exit-node selection, matching
+  /// upstream `ipn.MaskedPrefs` semantics.
   final String? exitNodeId;
 
   @override
@@ -223,6 +227,9 @@ abstract class Prefs {
   /// this node advertises when registering.
   Future<TailscalePrefs> setAdvertisedTags(List<String> tags);
 
+  /// Changes the tailnet-visible hostname for this node.
+  Future<TailscalePrefs> setHostname(String hostname);
+
   /// Applies a [PrefsUpdate] atomically. Fields set on the update are
   /// written; fields left null are unchanged.
   Future<TailscalePrefs> updateMasked(PrefsUpdate update);
@@ -265,6 +272,10 @@ final class _Prefs implements Prefs {
   @override
   Future<TailscalePrefs> setAdvertisedTags(List<String> tags) =>
       updateMasked(PrefsUpdate(advertisedTags: List.unmodifiable(tags)));
+
+  @override
+  Future<TailscalePrefs> setHostname(String hostname) =>
+      updateMasked(PrefsUpdate(hostname: hostname));
 
   @override
   Future<TailscalePrefs> updateMasked(PrefsUpdate update) => _update(update);

@@ -549,18 +549,17 @@ class Tailscale implements TailscaleClient {
     final prefs = await _worker.prefsGet();
     final nodeSnapshot = await nodes();
 
+    for (final node in nodeSnapshot) {
+      if (node.exitNode) return node;
+    }
+
     final requestedId = prefs.exitNodeId;
     if (requestedId != null && requestedId.isNotEmpty) {
       for (final node in nodeSnapshot) {
         if (node.stableNodeId == requestedId) return node;
       }
-      return null;
     }
 
-    if (!prefs.autoExitNode) return null;
-    for (final node in nodeSnapshot) {
-      if (node.exitNode) return node;
-    }
     return null;
   }
 

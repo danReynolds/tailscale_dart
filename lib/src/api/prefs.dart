@@ -65,12 +65,14 @@ class TailscalePrefs {
 
   /// Parses the JSON shape returned by the native LocalAPI wrapper.
   factory TailscalePrefs.fromJson(Map<String, dynamic> json) => TailscalePrefs(
-    advertisedRoutes:
-        (json['advertisedRoutes'] as List?)?.cast<String>() ?? const [],
+    advertisedRoutes: List<String>.unmodifiable(
+      (json['advertisedRoutes'] as List?)?.cast<String>() ?? const [],
+    ),
     acceptRoutes: json['acceptRoutes'] as bool? ?? false,
     shieldsUp: json['shieldsUp'] as bool? ?? false,
-    advertisedTags:
-        (json['advertisedTags'] as List?)?.cast<String>() ?? const [],
+    advertisedTags: List<String>.unmodifiable(
+      (json['advertisedTags'] as List?)?.cast<String>() ?? const [],
+    ),
     wantRunning: json['wantRunning'] as bool? ?? false,
     autoUpdate: json['autoUpdate'] as bool? ?? false,
     hostname: json['hostname'] as String? ?? '',

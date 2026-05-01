@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -226,6 +227,13 @@ func PrefsUpdate(updateJSON string) string {
 	dec := json.NewDecoder(strings.NewReader(updateJSON))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&payload); err != nil {
+		return jsonError(fmt.Errorf("invalid prefs update JSON: %w", err))
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
 		return jsonError(fmt.Errorf("invalid prefs update JSON: %w", err))
 	}
 

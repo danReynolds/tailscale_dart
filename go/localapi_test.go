@@ -274,6 +274,17 @@ func TestMaskedPrefsFromPayloadRejectsBadCIDR(t *testing.T) {
 	}
 }
 
+func TestPrefsUpdateRejectsTrailingJSON(t *testing.T) {
+	result := PrefsUpdate(`{"shieldsUp":true} {"acceptRoutes":true}`)
+	var decoded map[string]string
+	if err := json.Unmarshal([]byte(result), &decoded); err != nil {
+		t.Fatalf("PrefsUpdate returned invalid JSON: %v", err)
+	}
+	if !strings.Contains(decoded["error"], "invalid prefs update JSON") {
+		t.Fatalf("PrefsUpdate error = %q, want invalid prefs JSON error", decoded["error"])
+	}
+}
+
 // Compile-time sanity check that the error class string constants we
 // emit match the Dart-side parser in lib/src/worker/entrypoint.dart.
 // If someone renames one, this test fails loudly.

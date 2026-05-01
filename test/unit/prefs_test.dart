@@ -47,7 +47,7 @@ void main() {
       expect(a, isNot(equals(different)));
     });
 
-    test('fromJson tolerates missing optional fields', () {
+    test('fromJson tolerates missing exit-node fields', () {
       final prefs = TailscalePrefs.fromJson({
         'advertisedRoutes': ['10.0.0.0/24'],
         'acceptRoutes': true,
@@ -56,14 +56,37 @@ void main() {
         'wantRunning': true,
         'autoUpdate': true,
         'hostname': 'router',
-        'autoExitNode': true,
-        'exitNodeId': 'n123',
       });
 
       expect(prefs.advertisedRoutes, ['10.0.0.0/24']);
       expect(prefs.acceptRoutes, isTrue);
       expect(prefs.autoUpdate, isTrue);
       expect(prefs.hostname, 'router');
+      expect(prefs.autoExitNode, isFalse);
+      expect(prefs.exitNodeId, isNull);
+      expect(
+        () => prefs.advertisedRoutes.add('10.0.1.0/24'),
+        throwsUnsupportedError,
+      );
+      expect(
+        () => prefs.advertisedTags.add('tag:client'),
+        throwsUnsupportedError,
+      );
+    });
+
+    test('fromJson parses exit-node fields', () {
+      final prefs = TailscalePrefs.fromJson({
+        'advertisedRoutes': <String>[],
+        'acceptRoutes': false,
+        'shieldsUp': false,
+        'advertisedTags': <String>[],
+        'wantRunning': true,
+        'autoUpdate': false,
+        'hostname': 'router',
+        'autoExitNode': true,
+        'exitNodeId': 'n123',
+      });
+
       expect(prefs.autoExitNode, isTrue);
       expect(prefs.exitNodeId, 'n123');
     });

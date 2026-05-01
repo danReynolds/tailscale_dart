@@ -366,9 +366,9 @@ exit-node APIs, not by `tsnet.Server`.
 | 14| `exitNode.clear()`                                         | Stop routing through an exit node                                        | [x]  |
 | 15| `exitNode.onCurrentChange` → `Stream<TailscaleNode?>`         | React to runtime exit-node selection changes                             | [x]  |
 
-**Remaining validation:** Headscale covers prefs write/read behavior that
-does not depend on route approval. Live Tailscale should cover
-`exitNode.suggest()` / `useAuto()` recommendation behavior.
+**Validation:** Headscale covers prefs write/read behavior that does not depend
+on route approval. `test/live_tailscale/` covers `exitNode.suggest()` /
+`useAuto()` recommendation behavior against live Tailscale.
 
 ---
 

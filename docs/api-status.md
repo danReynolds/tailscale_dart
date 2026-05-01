@@ -230,8 +230,9 @@ changes.
 Advanced node-control feature; useful, but not central to the core
 embedded-app value proposition.
 
-**Status:** implemented. Full `suggest` / `useAuto` behavior still needs live
-Tailscale validation because recommendation policy is control-plane-specific.
+**Status:** implemented. Headscale covers prefs write/read mechanics; the
+on-demand live Tailscale suite covers `suggest` / `useAuto` behavior because
+recommendation policy is control-plane-specific.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -275,7 +276,7 @@ setters (`set*` prefix for consistency); atomic multi-field edits use
 Advanced node-control surface rather than core day-one app plumbing.
 
 **Status:** implemented. Headscale covers LocalAPI prefs write/read behavior;
-live Tailscale validation is still needed for exit-node recommendation policy.
+the on-demand live Tailscale suite covers exit-node recommendation policy.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |

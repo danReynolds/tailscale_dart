@@ -22,10 +22,11 @@ Tailscale's LocalAPI; no new data-plane protocol is required.
 
 ## Testability
 
-Headscale can validate prefs transport, Shields Up, route advertisement shape,
-route acceptance toggles, and pinned exit-node prefs updates. Live Tailscale is
-still needed for full suggested/auto exit-node behavior because those depend on
-control-plane exit-node recommendation policy and route approval semantics.
+Headscale validates prefs transport, Shields Up, route advertisement shape,
+route acceptance toggles, and pinned exit-node prefs updates. The live
+Tailscale suite in `test/live_tailscale/` validates the remaining
+control-plane-specific exit-node behavior: route approval, `suggest()`,
+pinned `use()`, `useAuto()`, and `clear()`.
 
 ## Checklist
 
@@ -36,4 +37,4 @@ control-plane exit-node recommendation policy and route approval semantics.
 - [x] FFI pre-start error-shape coverage.
 - [x] Headscale E2E coverage for prefs updates that do not require route
       approval.
-- [ ] Live Tailscale validation for `exitNode.suggest()` / `useAuto()`.
+- [x] Live Tailscale validation for `exitNode.suggest()` / `useAuto()`.

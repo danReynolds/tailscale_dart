@@ -45,10 +45,12 @@ void main() {
 
   final suffix = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
   final hostname = 'dune-live-tls-$suffix';
+  final clientHostname = 'dune-live-tls-client-$suffix';
 
   LiveTailscaleApi? api;
   Tailscale? tsnet;
   String? stateDir;
+  String? clientStateDir;
   final deviceIdsToDelete = <String>{};
 
   Uri? controlUri() {
@@ -69,6 +71,10 @@ void main() {
       final dir = stateDir;
       if (dir != null) Directory(dir).deleteSync(recursive: true);
     } catch (_) {}
+    try {
+      final dir = clientStateDir;
+      if (dir != null) Directory(dir).deleteSync(recursive: true);
+    } catch (_) {}
     api?.close();
   });
 
@@ -82,6 +88,7 @@ void main() {
           .createTempSync('tailscale_live_tls_')
           .path;
       final authKey = await api!.createAuthKey();
+      final clientAuthKey = await api!.createAuthKey();
 
       Tailscale.init(stateDir: stateDir!);
       tsnet = Tailscale.instance;
@@ -104,19 +111,115 @@ void main() {
 
       final domains = await _waitForTlsDomains(tsnet!);
       final server = await tsnet!.tls.bind(port: 443);
-      addTearDown(server.close);
-
       final handled = _serveOnePlaintextHttpRequest(server);
-      final response = await tsnet!.http.client
-          .get(Uri.https(domains.first, '/live-tls'))
-          .timeout(const Duration(seconds: 45));
+      unawaited(handled.catchError((_) {}));
+      try {
+        clientStateDir = Directory.systemTemp
+            .createTempSync('tailscale_live_tls_client_')
+            .path;
+        final response = await _runClientFetch(
+          stateDir: clientStateDir!,
+          hostname: clientHostname,
+          authKey: clientAuthKey,
+          controlUrl: controlUrl,
+          url: Uri.https(domains.first, '/live-tls'),
+        );
 
-      expect(response.statusCode, 200);
-      expect(response.body, 'hello from tls');
-      await handled.timeout(const Duration(seconds: 15));
+        try {
+          final clientDevice = await api!.waitForDevice(
+            hostname: clientHostname,
+          );
+          deviceIdsToDelete.add(clientDevice.id);
+        } catch (_) {}
+
+        expect(response.statusCode, 200);
+        expect(response.body, 'hello from tls');
+        await handled.timeout(const Duration(seconds: 15));
+      } catch (_) {
+        await server.close();
+        await handled.catchError((_) {});
+        rethrow;
+      } finally {
+        await server.close();
+      }
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+}
+
+Future<({int statusCode, String body})> _runClientFetch({
+  required String stateDir,
+  required String hostname,
+  required String authKey,
+  required String? controlUrl,
+  required Uri url,
+}) async {
+  await detachLoadedNativeAssetForPeerSubprocesses();
+  final process = await Process.start(
+    Platform.resolvedExecutable,
+    [
+      'run',
+      '--enable-experiment=native-assets',
+      'test/live_tailscale/live_tls_fetch_main.dart',
+    ],
+    environment: {
+      ...Platform.environment,
+      'STATE_DIR': stateDir,
+      'HOSTNAME': hostname,
+      'AUTH_KEY': authKey,
+      'URL': url.toString(),
+      if (controlUrl != null && controlUrl.isNotEmpty)
+        'CONTROL_URL': controlUrl,
+    },
+  );
+
+  unawaited(
+    process.stderr
+        .transform(utf8.decoder)
+        .forEach((chunk) => stderr.write('[live tls client stderr] $chunk')),
+  );
+
+  final result = Completer<({int statusCode, String body})>();
+  unawaited(
+    process.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .forEach((line) {
+          stdout.writeln('[live tls client] $line');
+          if (result.isCompleted) return;
+          if (line.startsWith('FETCH_ERROR ')) {
+            final decoded =
+                jsonDecode(line.substring('FETCH_ERROR '.length))
+                    as Map<String, dynamic>;
+            result.completeError(
+              StateError(
+                'live TLS client failed: '
+                '${decoded['error'] as String? ?? 'unknown error'}',
+              ),
+            );
+            return;
+          }
+          if (!line.startsWith('FETCH_RESULT ')) return;
+          final decoded =
+              jsonDecode(line.substring('FETCH_RESULT '.length))
+                  as Map<String, dynamic>;
+          result.complete((
+            statusCode: decoded['status'] as int? ?? 0,
+            body: decoded['body'] as String? ?? '',
+          ));
+        }),
+  );
+
+  try {
+    return await result.future.timeout(const Duration(seconds: 90));
+  } finally {
+    try {
+      process.kill(ProcessSignal.sigterm);
+      await process.exitCode.timeout(const Duration(seconds: 15));
+    } catch (_) {
+      process.kill(ProcessSignal.sigkill);
+    }
+  }
 }
 
 Future<List<String>> _waitForTlsDomains(Tailscale tsnet) async {

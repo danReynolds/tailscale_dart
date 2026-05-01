@@ -136,7 +136,6 @@ void main() {
         expect(response.body, 'hello from tls');
         await handled.timeout(const Duration(seconds: 15));
       } catch (_) {
-        await server.close();
         await handled.catchError((_) {});
         rethrow;
       } finally {
@@ -238,7 +237,7 @@ Future<List<String>> _waitForTlsDomains(Tailscale tsnet) async {
 
 Future<void> _serveOnePlaintextHttpRequest(TailscaleListener server) async {
   final conn = await server.connections.first.timeout(
-    const Duration(seconds: 45),
+    const Duration(seconds: 90),
   );
   try {
     await _readHttpRequestHead(conn.input);

@@ -98,6 +98,7 @@ func TestClassifyLocalAPIError_FeatureDisabledFromMessage(t *testing.T) {
 		"Taildrop is disabled",
 		"funnel not enabled for this node",
 		"MagicDNS is disabled by operator",
+		"tsnet: you must enable HTTPS in the admin panel to proceed",
 	}
 	for _, msg := range cases {
 		t.Run(msg, func(t *testing.T) {

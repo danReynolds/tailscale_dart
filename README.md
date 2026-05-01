@@ -127,22 +127,24 @@ Windows-native capability backend or chooses a separate Windows fallback.
 | `http.bind({port})` | `Future<TailscaleHttpServer>` | Accept tailnet HTTP requests as package-native request/response objects |
 | `tcp.dial(host, port, {timeout})` | `Future<TailscaleConnection>` | Open a raw TCP byte stream to a tailnet node |
 | `tcp.bind({port, address})` | `Future<TailscaleListener>` | Accept raw TCP connections from tailnet nodes |
+| `tls.bind({port, address})` | `Future<TailscaleListener>` | Accept TLS-terminated tailnet connections as plaintext package-native streams |
+| `tls.domains()` | `Future<List<String>>` | Auto-provisioned certificate SANs; empty when MagicDNS/HTTPS is disabled |
 | `udp.bind({port, address})` | `Future<TailscaleDatagramBinding>` | Send and receive UDP datagrams on a tailnet IP |
 
-The `tls`, `funnel`, `taildrop`, `serve`, and `profiles` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
+The `funnel`, `taildrop`, `serve`, and `profiles` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
 
 ## Transport Lifecycle
 
-`tcp.bind()` and `http.bind()` allocate native listeners and start background
-accept loops when their streams are listened to. Treat the returned
+`tcp.bind()`, `tls.bind()`, and `http.bind()` allocate native listeners and
+start background accept loops when their streams are listened to. Treat the returned
 `TailscaleListener` / `TailscaleHttpServer` as the owner of the tailnet port:
 call `close()` when finished. Canceling the single-subscription
 `connections`/`requests` stream also closes the listener/server.
 
-Accepted TCP connections and HTTP requests are delivered through bounded local
-queues while the Dart subscription is paused. If the application stops draining
-for long enough, overflow accepts are rejected or closed rather than buffered
-without limit.
+Accepted TCP/TLS connections and HTTP requests are delivered through bounded
+local queues while the Dart subscription is paused. If the application stops
+draining for long enough, overflow accepts are rejected or closed rather than
+buffered without limit.
 
 TCP connections expose separate read and write halves. `connection.input` is a
 single-subscription byte stream. `connection.output.close()` half-closes the

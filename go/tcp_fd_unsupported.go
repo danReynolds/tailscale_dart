@@ -16,6 +16,10 @@ func TcpListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 	return nil, errors.New("TcpListenFd is not supported on Windows")
 }
 
+func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
+	return nil, errors.New("TlsListenFd is not supported on Windows")
+}
+
 func TcpAcceptFd(listenerID int64) (*TcpFdConn, bool, error) {
 	return nil, true, errors.New("TcpAcceptFd is not supported on Windows")
 }

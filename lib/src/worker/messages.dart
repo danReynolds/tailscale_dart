@@ -7,6 +7,7 @@ enum _WorkerOperation {
   tcpDialFd,
   tcpListenFd,
   tcpCloseFdListener,
+  tlsListenFd,
   udpBindFd,
   whois,
   tlsDomains,
@@ -23,28 +24,118 @@ enum _WorkerOperation {
   down,
   logout;
 
-  TailscaleException exceptionForMessage(String message) => switch (this) {
-    start => TailscaleUpException(message),
-    httpBind => TailscaleHttpException(message),
-    httpCloseBinding => TailscaleHttpException(message),
-    tcpDialFd => TailscaleTcpException(message),
-    tcpListenFd => TailscaleTcpException(message),
-    tcpCloseFdListener => TailscaleTcpException(message),
-    udpBindFd => TailscaleUdpException(message),
-    whois => TailscaleStatusException(message),
-    tlsDomains => TailscaleStatusException(message),
-    diagPing => TailscaleDiagException(message),
-    diagMetrics => TailscaleDiagException(message),
-    diagDERPMap => TailscaleDiagException(message),
-    diagCheckUpdate => TailscaleDiagException(message),
-    status => TailscaleStatusException(message),
-    peers => TailscaleStatusException(message),
-    prefsGet => TailscalePrefsException(message),
-    prefsUpdate => TailscalePrefsException(message),
-    exitNodeSuggest => TailscaleExitNodeException(message),
-    exitNodeUseAuto => TailscaleExitNodeException(message),
-    down => TailscaleOperationException('down', message),
-    logout => TailscaleLogoutException(message),
+  TailscaleException exceptionForMessage(
+    String message, {
+    TailscaleErrorCode code = TailscaleErrorCode.unknown,
+    int? statusCode,
+  }) => switch (this) {
+    start => TailscaleUpException(message, code: code, statusCode: statusCode),
+    httpBind => TailscaleHttpException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    httpCloseBinding => TailscaleHttpException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    tcpDialFd => TailscaleTcpException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    tcpListenFd => TailscaleTcpException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    tcpCloseFdListener => TailscaleTcpException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    tlsListenFd => TailscaleTlsException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    udpBindFd => TailscaleUdpException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    whois => TailscaleStatusException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    tlsDomains => TailscaleTlsException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    diagPing => TailscaleDiagException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    diagMetrics => TailscaleDiagException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    diagDERPMap => TailscaleDiagException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    diagCheckUpdate => TailscaleDiagException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    status => TailscaleStatusException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    peers => TailscaleStatusException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    prefsGet => TailscalePrefsException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    prefsUpdate => TailscalePrefsException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    exitNodeSuggest => TailscaleExitNodeException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    exitNodeUseAuto => TailscaleExitNodeException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    down => TailscaleOperationException(
+      'down',
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    logout => TailscaleLogoutException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
   };
 }
 
@@ -111,6 +202,16 @@ final class _WorkerTcpCloseFdListenerCommand extends _WorkerCommand {
     : super(_WorkerOperation.tcpCloseFdListener);
 
   final int listenerId;
+}
+
+final class _WorkerTlsListenFdCommand extends _WorkerCommand {
+  const _WorkerTlsListenFdCommand({
+    required this.tailnetPort,
+    required this.tailnetHost,
+  }) : super(_WorkerOperation.tlsListenFd);
+
+  final int tailnetPort;
+  final String tailnetHost;
 }
 
 final class _WorkerUdpBindFdCommand extends _WorkerCommand {
@@ -287,6 +388,18 @@ final class _WorkerTcpListenFdResponse extends _WorkerResponse {
   final int localPort;
 }
 
+final class _WorkerTlsListenFdResponse extends _WorkerResponse {
+  const _WorkerTlsListenFdResponse({
+    required this.listenerId,
+    required this.localAddress,
+    required this.localPort,
+  }) : super(_WorkerOperation.tlsListenFd);
+
+  final int listenerId;
+  final String localAddress;
+  final int localPort;
+}
+
 final class _WorkerUdpBindFdResponse extends _WorkerResponse {
   const _WorkerUdpBindFdResponse({
     required this.fd,
@@ -381,7 +494,11 @@ final class _WorkerFailureResponse extends _WorkerResponse {
   const _WorkerFailureResponse({
     required _WorkerOperation operation,
     required this.message,
+    this.code = TailscaleErrorCode.unknown,
+    this.statusCode,
   }) : super(operation);
 
   final String message;
+  final TailscaleErrorCode code;
+  final int? statusCode;
 }

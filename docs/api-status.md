@@ -41,7 +41,7 @@ module bump before they can land here.
 | [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Core      | Phase 1 ✅        |
 | [`http`](#http)         | Outbound HTTP client + inbound request server                     | Core      | Phase 1 ✅        |
 | [`tcp`](#tcp)           | Raw TCP between tailnet nodes                                      | Core      | Phase 3 ✅        |
-| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | `domains` ✅; `bind` planned |
+| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | ✅             |
 | [`udp`](#udp)           | UDP datagram bindings on a tailnet IP                               | Advanced  | Phase 5 ✅        |
 | [`funnel`](#funnel)     | Public-internet HTTPS via Tailscale Funnel                         | Optional  | Planned          |
 | [`taildrop`](#taildrop) | Node-to-node file transfer                                          | Optional  | Planned          |
@@ -122,13 +122,14 @@ plane. Handlers see plaintext bytes — TLS is terminated server-side.
 Useful for server-style apps, but not required for the package to be
 valuable.
 
-**Status:** `tls.domains()` is working. `tls.bind()` is planned.
+**Status:** implemented with package-native fd-backed listeners.
 **Requires:** MagicDNS **and** HTTPS enabled on the tailnet by the
-operator. Not covered by the Headscale CI — live-Tailscale test only.
+operator. Headscale CI covers only the clear unsupported failure path;
+successful TLS serving requires live Tailscale validation.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `tls.bind(port)` → `Future<SecureServerSocket>` | ⛔ | TLS-terminated listener with auto-cert. | `final srv = await tsnet.tls.bind(443);` |
+| `tls.bind({port, address})` → `Future<TailscaleListener>` | ✅ | TLS-terminated listener with auto-cert. Accepted connections are plaintext package-native streams. | `final l = await tsnet.tls.bind(port: 443);` |
 | `tls.domains()` → `Future<List<String>>` | ✅ | Cert SANs; preflight for `bind`. Empty = MagicDNS or HTTPS disabled on the tailnet. | `final sans = await tsnet.tls.domains();` |
 
 ## `udp`

@@ -35,6 +35,7 @@ void main() {
         TailscaleLogoutException('_'),
         TailscaleTcpException('_'),
         TailscaleUdpException('_'),
+        TailscaleTlsException('_'),
         TailscaleTaildropException('_'),
         TailscaleServeException('_'),
         TailscalePrefsException('_'),

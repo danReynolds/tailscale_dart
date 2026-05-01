@@ -33,6 +33,7 @@ layer that proves the behavior.
 | Local full suite | `tool/test_local_full.sh` | No, local/release confidence | Docker for Headscale | PR gate plus demo package tests and whitespace checks. |
 | Platform smoke matrix | `tool/smoke/run_matrix.sh` | No, local/release confidence | Docker plus local Flutter platforms/devices | Validates native asset packaging and HTTP/TCP/UDP smoke behavior on macOS/iOS/Android/etc. |
 | Live Tailscale routing controls | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_routing_controls_test.dart` | No, opt-in only | Tailscale SaaS + API key | Validates hosted-control-plane behavior Headscale cannot model: exit-node route approval, `suggest`, `useAuto`, and cleanup. |
+| Live Tailscale TLS | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_tls_listener_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS-enabled tailnet | Validates successful `tls.bind` serving. Headscale can only validate the clear failure path because it does not provision Tailscale HTTPS certificates. |
 
 The default development loop is therefore:
 
@@ -74,6 +75,8 @@ cd go && go test -count=1 ./...
 test/e2e/run_e2e.sh
 TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
   dart test test/live_tailscale/live_routing_controls_test.dart
+TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
+  dart test test/live_tailscale/live_tls_listener_test.dart
 tool/test_pr_gate.sh
 tool/test_local_full.sh
 cd packages/demo_core && dart test

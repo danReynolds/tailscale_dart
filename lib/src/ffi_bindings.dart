@@ -111,6 +111,23 @@ external ffi.Pointer<Utf8> duneTcpListenFd(
   ffi.Pointer<Utf8> tailnetHost,
 );
 
+/// Starts a POSIX fd-backed TLS listener.
+///
+/// Returns JSON:
+///   {"listenerId": N, "localAddress": "...", "localPort": N} on success.
+///   {"error": "..."} on failure.
+///
+/// Accepted connections are still retrieved through [duneTcpAcceptFd] because
+/// the native runtime terminates TLS and exposes the resulting plaintext stream
+/// as the same local fd capability used by TCP listeners.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Pointer<Utf8>)>(
+  symbol: 'DuneTlsListenFd',
+)
+external ffi.Pointer<Utf8> duneTlsListenFd(
+  int tailnetPort,
+  ffi.Pointer<Utf8> tailnetHost,
+);
+
 /// Blocks until a fd-backed listener accepts one connection or closes.
 ///
 /// Returns JSON:

@@ -180,6 +180,19 @@ void main() {
     });
   });
 
+  group('duneTlsListenFd validation', () {
+    test('returns JSON error before server startup', () {
+      final host = ''.toNativeUtf8();
+      final resultPtr = native.duneTlsListenFd(443, host);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(host);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('TlsListenFd called before Start'));
+    });
+  });
+
   group('duneUdpBindFd validation', () {
     test('returns JSON error before server startup', () {
       final host = '100.64.0.5'.toNativeUtf8();

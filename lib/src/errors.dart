@@ -140,6 +140,17 @@ final class TailscaleUdpException extends TailscaleOperationException {
   }) : super('udp', message);
 }
 
+/// Thrown when a `tls.*` call fails — certificate-domain discovery,
+/// TLS listener setup, or tailnet HTTPS precondition failures.
+final class TailscaleTlsException extends TailscaleOperationException {
+  const TailscaleTlsException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('tls', message);
+}
+
 /// Thrown when `status()` fails to decode or fetch native status.
 final class TailscaleStatusException extends TailscaleOperationException {
   const TailscaleStatusException(

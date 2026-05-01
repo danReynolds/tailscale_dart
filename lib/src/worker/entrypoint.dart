@@ -228,6 +228,37 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.tcpCloseFdListener),
             );
+          case _WorkerTlsListenFdCommand request:
+            final hostPtr = request.tailnetHost.toNativeUtf8();
+            try {
+              final result =
+                  _callNativeJson(
+                        () => native.duneTlsListenFd(
+                          request.tailnetPort,
+                          hostPtr,
+                        ),
+                        onError: TailscaleTlsException.new,
+                      )
+                      as Map<String, dynamic>;
+
+              final listenerId = result['listenerId'] as int?;
+              final localPort = result['localPort'] as int?;
+              if (listenerId == null || listenerId <= 0 || localPort == null) {
+                throw const TailscaleTlsException(
+                  'Native runtime did not return a usable TLS listener.',
+                );
+              }
+
+              sendPort.send(
+                _WorkerTlsListenFdResponse(
+                  listenerId: listenerId,
+                  localAddress: result['localAddress'] as String? ?? '',
+                  localPort: localPort,
+                ),
+              );
+            } finally {
+              calloc.free(hostPtr);
+            }
           case _WorkerUdpBindFdCommand request:
             final hostPtr = request.host.toNativeUtf8();
             try {
@@ -275,7 +306,7 @@ void _workerEntrypoint(SendPort sendPort) {
             final result =
                 _callNativeJson(
                       native.duneTlsDomains,
-                      onError: TailscaleStatusException.new,
+                      onError: TailscaleTlsException.new,
                     )
                     as Map<String, dynamic>;
             final domains =

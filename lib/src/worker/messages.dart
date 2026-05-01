@@ -7,6 +7,7 @@ enum _WorkerOperation {
   tcpDialFd,
   tcpListenFd,
   tcpCloseFdListener,
+  tlsListenFd,
   udpBindFd,
   whois,
   tlsDomains,
@@ -30,9 +31,10 @@ enum _WorkerOperation {
     tcpDialFd => TailscaleTcpException(message),
     tcpListenFd => TailscaleTcpException(message),
     tcpCloseFdListener => TailscaleTcpException(message),
+    tlsListenFd => TailscaleTlsException(message),
     udpBindFd => TailscaleUdpException(message),
     whois => TailscaleStatusException(message),
-    tlsDomains => TailscaleStatusException(message),
+    tlsDomains => TailscaleTlsException(message),
     diagPing => TailscaleDiagException(message),
     diagMetrics => TailscaleDiagException(message),
     diagDERPMap => TailscaleDiagException(message),
@@ -111,6 +113,16 @@ final class _WorkerTcpCloseFdListenerCommand extends _WorkerCommand {
     : super(_WorkerOperation.tcpCloseFdListener);
 
   final int listenerId;
+}
+
+final class _WorkerTlsListenFdCommand extends _WorkerCommand {
+  const _WorkerTlsListenFdCommand({
+    required this.tailnetPort,
+    required this.tailnetHost,
+  }) : super(_WorkerOperation.tlsListenFd);
+
+  final int tailnetPort;
+  final String tailnetHost;
 }
 
 final class _WorkerUdpBindFdCommand extends _WorkerCommand {
@@ -281,6 +293,18 @@ final class _WorkerTcpListenFdResponse extends _WorkerResponse {
     required this.localAddress,
     required this.localPort,
   }) : super(_WorkerOperation.tcpListenFd);
+
+  final int listenerId;
+  final String localAddress;
+  final int localPort;
+}
+
+final class _WorkerTlsListenFdResponse extends _WorkerResponse {
+  const _WorkerTlsListenFdResponse({
+    required this.listenerId,
+    required this.localAddress,
+    required this.localPort,
+  }) : super(_WorkerOperation.tlsListenFd);
 
   final int listenerId;
   final String localAddress;

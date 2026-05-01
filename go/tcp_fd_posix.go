@@ -105,13 +105,38 @@ func TcpListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 		return nil, fmt.Errorf("tsnet listen %s: %w", addr, err)
 	}
 
+	return registerTcpFdListener(ln, tailnetHost)
+}
+
+func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
+	if tailnetPort < 0 || tailnetPort > 65535 {
+		return nil, fmt.Errorf("invalid port %d", tailnetPort)
+	}
+
+	mu.Lock()
+	s := srv
+	mu.Unlock()
+	if s == nil {
+		return nil, errors.New("TlsListenFd called before Start")
+	}
+
+	addr := net.JoinHostPort(tailnetHost, strconv.Itoa(tailnetPort))
+	ln, err := s.ListenTLS("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("tsnet listen tls %s: %w", addr, err)
+	}
+
+	return registerTcpFdListener(ln, tailnetHost)
+}
+
+func registerTcpFdListener(ln net.Listener, fallbackAddress string) (*TcpFdListener, error) {
 	localAddress, localPort := endpointFromAddr(ln.Addr())
 	if localPort == 0 {
 		ln.Close()
 		return nil, fmt.Errorf("tsnet listen returned unresolved port")
 	}
 	if localAddress == "" {
-		localAddress = tailnetHost
+		localAddress = fallbackAddress
 	}
 
 	id := atomic.AddInt64(&tcpFdListenerID, 1)

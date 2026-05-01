@@ -371,6 +371,16 @@ void main() {
       // The important thing is no exception.
       expect(domains, isA<List<String>>());
     });
+
+    test(
+      'tls.bind fails clearly when Headscale cannot provision certs',
+      () async {
+        await expectLater(
+          tsnet.tls.bind(port: 443),
+          throwsA(isA<TailscaleTlsException>()),
+        );
+      },
+    );
   });
 
   group('peer reconnects with persisted credentials', () {

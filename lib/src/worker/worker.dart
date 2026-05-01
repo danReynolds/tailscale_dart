@@ -271,6 +271,25 @@ final class Worker {
     );
   }
 
+  Future<({int listenerId, TailscaleEndpoint local})> tlsListenFd({
+    required int tailnetPort,
+    required String tailnetHost,
+  }) async {
+    final response = await _request<_WorkerTlsListenFdResponse>(
+      _WorkerTlsListenFdCommand(
+        tailnetPort: tailnetPort,
+        tailnetHost: tailnetHost,
+      ),
+    );
+    return (
+      listenerId: response.listenerId,
+      local: TailscaleEndpoint(
+        address: response.localAddress,
+        port: response.localPort,
+      ),
+    );
+  }
+
   Future<({int fd, TailscaleEndpoint local})> udpBindFd({
     required String host,
     required int port,

@@ -158,6 +158,23 @@ func DuneTcpListenFd(tailnetPort C.int, tailnetHost *C.char) *C.char {
 	return C.CString(string(result))
 }
 
+//export DuneTlsListenFd
+func DuneTlsListenFd(tailnetPort C.int, tailnetHost *C.char) *C.char {
+	host := C.GoString(tailnetHost)
+	listener, err := tailscale.TlsListenFd(int(tailnetPort), host)
+	if err != nil {
+		m := map[string]string{"error": err.Error()}
+		b, _ := json.Marshal(m)
+		return C.CString(string(b))
+	}
+	result, _ := json.Marshal(map[string]any{
+		"listenerId":   listener.ID,
+		"localAddress": listener.LocalAddress,
+		"localPort":    listener.LocalPort,
+	})
+	return C.CString(string(result))
+}
+
 //export DuneTcpAcceptFd
 func DuneTcpAcceptFd(listenerID C.longlong) *C.char {
 	conn, closed, err := tailscale.TcpAcceptFd(int64(listenerID))

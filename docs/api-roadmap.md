@@ -320,14 +320,15 @@ path for each diagnostic.
 ### Phase 5 — Remaining transports
 
 **Goal:** extend the package-native transport model to remaining
-transports. UDP should preserve datagram boundaries; TLS/Funnel need a
-fresh surface decision rather than inheriting the old fake-socket model.
+transports. UDP should preserve datagram boundaries; TLS uses the
+package-native listener model, and Funnel still needs a fresh surface
+decision rather than inheriting the old fake-socket model.
 
 **Dependencies:** Phase 3.
 
 | # | API                                                          | Purpose                                                                   | Done |
 | - | ------------------------------------------------------------ | ------------------------------------------------------------------------- | ---- |
-| 1 | `tls.bind(port)` surface decision                             | Decide package-native TLS listener shape vs. a higher-level HTTP/TLS helper | [ ]  |
+| 1 | `tls.bind({port, address})` → `Future<TailscaleListener>`     | TLS-terminated tailnet listener with package-native plaintext connections | [x]  |
 | 2 | UDP datagram binding backend                                 | Preserve `[peerIP, peerPort, payload]` message boundaries without stream-shaped semantics | [x]  |
 | 3 | `udp.bind({port, address})` → `Future<TailscaleDatagramBinding>`  | UDP datagram listener on a tailnet IP                             | [x]  |
 | 4 | `funnel.bind(port, {funnelOnly})` surface decision            | Public-internet HTTPS via Funnel. **Advanced / optional:** keep the surface thin and close to upstream; do not block v1 on additional ergonomics. | [ ]  |
@@ -528,10 +529,9 @@ exercise Headscale-unsupported features need a separate path.
 | `serve.*`                         | ❌ (no Serve)     | ✅                                 |
 
 **Implementation.** Tests reaching Headscale-unsupported features are
-tagged `@Tags(['live-tailscale'])` and gated on a `TAILSCALE_AUTHKEY`
-env var. PR CI runs untagged tests. A scheduled CI job (or manual
-trigger) runs the tagged set against a real Tailscale tailnet using a
-service-account reusable preauth key.
+tagged `@Tags(['live-tailscale'])` and gated on `TAILSCALE_API_KEY` plus
+`TAILSCALE_TAILNET_ID`. PR CI runs untagged tests. A scheduled CI job
+or manual trigger can run the tagged set against a real Tailscale tailnet.
 
 **Exit criteria in later phases distinguish the two buckets**
 explicitly. If Phase 9 "passes CI" but nobody's run the live-tailscale

@@ -4,6 +4,26 @@ This journal records implementation notes for the fd-backed runtime transport
 direction. It is intentionally practical: what changed, what was learned, what
 still needs a decision.
 
+## 2026-05-01: TLS listener moves onto the fd transport
+
+### Changes
+
+- Replaced the old `SecureServerSocket`-shaped TLS stub with
+  `tls.bind({port, address}) -> Future<TailscaleListener>`.
+- Added `DuneTlsListenFd` over `tsnet.Server.ListenTLS`; accepted TLS
+  connections reuse the same listener registry and fd accept path as raw TCP.
+- Added a dedicated `TailscaleTlsException` and worker operation for TLS
+  listener/domain failures.
+- Updated docs to state the package-native TLS model: Go terminates TLS and
+  Dart handlers receive plaintext `TailscaleConnection` streams.
+
+### Validation
+
+- `dart analyze`
+- `dart test`
+- `go test -count=1 ./...` in `go/`
+- `test/e2e/run_e2e.sh`
+
 ## 2026-04-30: Reactor readability cleanup
 
 ### Changes

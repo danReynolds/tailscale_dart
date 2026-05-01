@@ -22,6 +22,36 @@ layer that proves the behavior.
   on-demand tests against Tailscale's hosted control plane for behavior
   Headscale cannot model, such as exit-node recommendations and route approval.
 
+## What Runs Where
+
+| Suite | Command | Runs by default? | External dependency | Purpose |
+| --- | --- | --- | --- | --- |
+| Static analysis | `dart analyze` | Yes, PR gate | None | Analyzer/type/lint correctness. |
+| Root Dart suite | `dart test` | Yes, PR gate | None by default | Unit, FFI, fd, runtime tests. `test/e2e/` and `test/live_tailscale/` register as skipped/no-op unless their required env vars are present. |
+| Go suite | `cd go && go test -count=1 ./...` | Yes, PR gate | None | Go wrappers, LocalAPI mapping helpers, native-side validation. |
+| Headscale E2E | `test/e2e/run_e2e.sh` | Yes, PR gate | Docker | Starts local Headscale, joins embedded nodes, verifies real tailnet behavior without a Tailscale account. |
+| Local full suite | `tool/test_local_full.sh` | No, local/release confidence | Docker for Headscale | PR gate plus demo package tests and whitespace checks. |
+| Platform smoke matrix | `tool/smoke/run_matrix.sh` | No, local/release confidence | Docker plus local Flutter platforms/devices | Validates native asset packaging and HTTP/TCP/UDP smoke behavior on macOS/iOS/Android/etc. |
+| Live Tailscale routing controls | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_routing_controls_test.dart` | No, opt-in only | Tailscale SaaS + API key | Validates hosted-control-plane behavior Headscale cannot model: exit-node route approval, `suggest`, `useAuto`, and cleanup. |
+
+The default development loop is therefore:
+
+```bash
+dart analyze
+dart test
+cd go && go test -count=1 ./...
+```
+
+The required PR-equivalent loop is:
+
+```bash
+tool/test_pr_gate.sh
+```
+
+The live Tailscale suite is deliberately outside default CI. It is repeatable,
+but it depends on hosted Tailscale state and a secret with permissions to create
+auth keys, list/delete devices, and approve routes.
+
 ## Placement Rules
 
 - If a socketpair or fake fd can reproduce the behavior faithfully, put the test

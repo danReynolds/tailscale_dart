@@ -448,15 +448,23 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(const _WorkerAckResponse(_WorkerOperation.logout));
         }
       } catch (error) {
-        final errorMessage = switch (error) {
-          TailscaleException _ => error.message,
-          _ => error.toString(),
+        final errorMessage = error is TailscaleException
+            ? error.message
+            : error.toString();
+        final (:code, :statusCode) = switch (error) {
+          TailscaleOperationException(:final code, :final statusCode) => (
+            code: code,
+            statusCode: statusCode,
+          ),
+          _ => (code: TailscaleErrorCode.unknown, statusCode: null),
         };
 
         return sendPort.send(
           _WorkerFailureResponse(
             operation: message.operation,
             message: errorMessage,
+            code: code,
+            statusCode: statusCode,
           ),
         );
       }

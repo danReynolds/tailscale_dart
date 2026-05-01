@@ -143,6 +143,7 @@ func classifyLocalAPIError(err error) (code string, status int) {
 		lower := strings.ToLower(err.Error())
 		switch {
 		case strings.Contains(lower, "not enabled"),
+			strings.Contains(lower, "must enable"),
 			strings.Contains(lower, "is disabled"),
 			strings.Contains(lower, "disabled by"):
 			code = "featureDisabled"
@@ -167,6 +168,14 @@ func localAPIError(err error) string {
 	}
 	b, _ := json.Marshal(m)
 	return string(b)
+}
+
+// ErrorJSON serializes runtime errors with the same stable shape used by
+// LocalAPI wrappers. FFI exports outside this file use it when an operation can
+// still fail for user-actionable tailnet policy reasons, such as HTTPS being
+// disabled for ListenTLS.
+func ErrorJSON(err error) string {
+	return localAPIError(err)
 }
 
 // TlsDomains returns the Subject Alternative Names baked into the

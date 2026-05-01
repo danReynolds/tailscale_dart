@@ -377,7 +377,13 @@ void main() {
       () async {
         await expectLater(
           tsnet.tls.bind(port: 443),
-          throwsA(isA<TailscaleTlsException>()),
+          throwsA(
+            isA<TailscaleTlsException>().having(
+              (e) => e.code,
+              'code',
+              TailscaleErrorCode.featureDisabled,
+            ),
+          ),
         );
       },
     );

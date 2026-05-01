@@ -34,7 +34,8 @@ abstract class Tls {
   ///
   /// Go terminates TLS using `tsnet.Server.ListenTLS`. Dart receives
   /// package-native plaintext [TailscaleConnection] objects, not
-  /// `dart:io` sockets.
+  /// `dart:io` sockets. Certificate acquisition and renewal stay inside the
+  /// embedded Go runtime; Dart does not receive cert-rotation events.
   Future<TailscaleListener> bind({required int port, String? address});
 
   /// Subject Alternative Names present in the auto-provisioned certificate —

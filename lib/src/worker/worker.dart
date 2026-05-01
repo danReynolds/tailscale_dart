@@ -172,7 +172,11 @@ final class Worker {
       sendPort.send(request);
       final response = await completer.future;
       if (response is _WorkerFailureResponse) {
-        throw response.operation.exceptionForMessage(response.message);
+        throw response.operation.exceptionForMessage(
+          response.message,
+          code: response.code,
+          statusCode: response.statusCode,
+        );
       }
       return response as TResponse;
     } catch (error) {
@@ -265,7 +269,7 @@ final class Worker {
     );
   }
 
-  Future<void> tcpCloseFdListener({required int listenerId}) async {
+  Future<void> closeFdListener({required int listenerId}) async {
     await _request<_WorkerAckResponse>(
       _WorkerTcpCloseFdListenerCommand(listenerId: listenerId),
     );

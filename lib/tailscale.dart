@@ -216,14 +216,14 @@ class Tailscale implements TailscaleClient {
     listenFn: (tailnetPort, tailnetHost) =>
         _worker.tcpListenFd(tailnetPort: tailnetPort, tailnetHost: tailnetHost),
     closeListenerFn: (listenerId) =>
-        _worker.tcpCloseFdListener(listenerId: listenerId),
+        _worker.closeFdListener(listenerId: listenerId),
   );
   @override
   late final Tls tls = createTls(
     listenFn: (tailnetPort, tailnetHost) =>
         _worker.tlsListenFd(tailnetPort: tailnetPort, tailnetHost: tailnetHost),
     closeListenerFn: (listenerId) =>
-        _worker.tcpCloseFdListener(listenerId: listenerId),
+        _worker.closeFdListener(listenerId: listenerId),
     domainsFn: _worker.tlsDomains,
   );
   @override

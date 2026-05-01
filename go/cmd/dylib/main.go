@@ -163,9 +163,7 @@ func DuneTlsListenFd(tailnetPort C.int, tailnetHost *C.char) *C.char {
 	host := C.GoString(tailnetHost)
 	listener, err := tailscale.TlsListenFd(int(tailnetPort), host)
 	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+		return C.CString(tailscale.ErrorJSON(err))
 	}
 	result, _ := json.Marshal(map[string]any{
 		"listenerId":   listener.ID,

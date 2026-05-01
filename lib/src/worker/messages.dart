@@ -16,6 +16,10 @@ enum _WorkerOperation {
   diagCheckUpdate,
   status,
   peers,
+  prefsGet,
+  prefsUpdate,
+  exitNodeSuggest,
+  exitNodeUseAuto,
   down,
   logout;
 
@@ -35,6 +39,10 @@ enum _WorkerOperation {
     diagCheckUpdate => TailscaleDiagException(message),
     status => TailscaleStatusException(message),
     peers => TailscaleStatusException(message),
+    prefsGet => TailscalePrefsException(message),
+    prefsUpdate => TailscalePrefsException(message),
+    exitNodeSuggest => TailscaleExitNodeException(message),
+    exitNodeUseAuto => TailscaleExitNodeException(message),
     down => TailscaleOperationException('down', message),
     logout => TailscaleLogoutException(message),
   };
@@ -157,6 +165,27 @@ final class _WorkerStatusCommand extends _WorkerCommand {
 
 final class _WorkerPeersCommand extends _WorkerCommand {
   const _WorkerPeersCommand() : super(_WorkerOperation.peers);
+}
+
+final class _WorkerPrefsGetCommand extends _WorkerCommand {
+  const _WorkerPrefsGetCommand() : super(_WorkerOperation.prefsGet);
+}
+
+final class _WorkerPrefsUpdateCommand extends _WorkerCommand {
+  const _WorkerPrefsUpdateCommand({required this.updateJson})
+    : super(_WorkerOperation.prefsUpdate);
+
+  final String updateJson;
+}
+
+final class _WorkerExitNodeSuggestCommand extends _WorkerCommand {
+  const _WorkerExitNodeSuggestCommand()
+    : super(_WorkerOperation.exitNodeSuggest);
+}
+
+final class _WorkerExitNodeUseAutoCommand extends _WorkerCommand {
+  const _WorkerExitNodeUseAutoCommand()
+    : super(_WorkerOperation.exitNodeUseAuto);
 }
 
 final class _WorkerDownCommand extends _WorkerCommand {
@@ -290,6 +319,22 @@ final class _WorkerWhoIsResponse extends _WorkerResponse {
 
   /// Null when LocalAPI reported the IP is not known on this tailnet.
   final TailscaleNodeIdentity? identity;
+}
+
+final class _WorkerPrefsResponse extends _WorkerResponse {
+  const _WorkerPrefsResponse({
+    required _WorkerOperation operation,
+    required this.prefs,
+  }) : super(operation);
+
+  final TailscalePrefs prefs;
+}
+
+final class _WorkerExitNodeSuggestResponse extends _WorkerResponse {
+  const _WorkerExitNodeSuggestResponse({required this.nodeId})
+    : super(_WorkerOperation.exitNodeSuggest);
+
+  final String? nodeId;
 }
 
 final class _WorkerTlsDomainsResponse extends _WorkerResponse {

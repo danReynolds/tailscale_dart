@@ -18,6 +18,39 @@ layer that proves the behavior.
   discovery and routing.
 - **E2E tests** live in `test/e2e/`. They start Headscale in Docker, join real
   embedded nodes, and verify assembled tailnet behavior.
+- **Live Tailscale tests** live in `test/live_tailscale/`. They are
+  on-demand tests against Tailscale's hosted control plane for behavior
+  Headscale cannot model, such as exit-node recommendations and route approval.
+
+## What Runs Where
+
+| Suite | Command | Runs by default? | External dependency | Purpose |
+| --- | --- | --- | --- | --- |
+| Static analysis | `dart analyze` | Yes, PR gate | None | Analyzer/type/lint correctness. |
+| Root Dart suite | `dart test` | Yes, PR gate | None by default | Unit, FFI, fd, runtime tests. `test/e2e/` and `test/live_tailscale/` register as skipped/no-op unless their required env vars are present. |
+| Go suite | `cd go && go test -count=1 ./...` | Yes, PR gate | None | Go wrappers, LocalAPI mapping helpers, native-side validation. |
+| Headscale E2E | `test/e2e/run_e2e.sh` | Yes, PR gate | Docker | Starts local Headscale, joins embedded nodes, verifies real tailnet behavior without a Tailscale account. |
+| Local full suite | `tool/test_local_full.sh` | No, local/release confidence | Docker for Headscale | PR gate plus demo package tests and whitespace checks. |
+| Platform smoke matrix | `tool/smoke/run_matrix.sh` | No, local/release confidence | Docker plus local Flutter platforms/devices | Validates native asset packaging and HTTP/TCP/UDP smoke behavior on macOS/iOS/Android/etc. |
+| Live Tailscale routing controls | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_routing_controls_test.dart` | No, opt-in only | Tailscale SaaS + API key | Validates hosted-control-plane behavior Headscale cannot model: exit-node route approval, `suggest`, `useAuto`, and cleanup. |
+
+The default development loop is therefore:
+
+```bash
+dart analyze
+dart test
+cd go && go test -count=1 ./...
+```
+
+The required PR-equivalent loop is:
+
+```bash
+tool/test_pr_gate.sh
+```
+
+The live Tailscale suite is deliberately outside default CI. It is repeatable,
+but it depends on hosted Tailscale state and a secret with permissions to create
+auth keys, list/delete devices, and approve routes.
 
 ## Placement Rules
 
@@ -25,6 +58,9 @@ layer that proves the behavior.
   in `test/integration/fd/`.
 - If the behavior depends on Headscale, netmap state, WireGuard routing,
   magicsock/DERP, peer identity, or another node, put it in `test/e2e/`.
+- If the behavior specifically depends on Tailscale SaaS policy or
+  recommendation behavior that Headscale does not implement, put it in
+  `test/live_tailscale/` and gate it behind environment variables.
 - If the behavior is a pure data model, parser, or error-shape contract, put it
   in `test/unit/`.
 - If the behavior is Go-only below FFI, prefer a Go test in `go/` first.
@@ -36,6 +72,8 @@ dart analyze
 dart test
 cd go && go test -count=1 ./...
 test/e2e/run_e2e.sh
+TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
+  dart test test/live_tailscale/live_routing_controls_test.dart
 tool/test_pr_gate.sh
 tool/test_local_full.sh
 cd packages/demo_core && dart test
@@ -165,6 +203,25 @@ checks rather than inner-loop debugging.
 `--jobs` runs platform targets concurrently after Headscale and the headless
 peer are ready. Keep it at the default `1` when debugging noisy platform issues;
 use `--jobs 3` for a faster local matrix once the individual targets are stable.
+
+### Live Tailscale Routing Controls
+
+The Headscale E2E suite proves that prefs and exit-node setters reach LocalAPI.
+It cannot prove Tailscale SaaS-specific exit-node recommendation policy. The
+live routing-controls suite fills that gap.
+
+```bash
+TAILSCALE_API_KEY=... \
+TAILSCALE_TAILNET_ID=... \
+  dart test test/live_tailscale/live_routing_controls_test.dart
+```
+
+The suite creates short-lived auth keys, starts two embedded nodes, makes one
+node advertise default routes, approves those routes with the Tailscale device
+routes API, and verifies `exitNode.suggest()`, `use(node)`, `useAuto()`, and
+`clear()`. The API key must be able to create auth keys, list devices, enable
+device routes, and delete test devices. Do not run this in PR CI; it depends on
+hosted control-plane state and a secret. Rotate the API key after sharing it.
 
 Physical devices usually need a reachable host LAN URL. The runner exposes
 both the Headscale control plane and a small config-fetch HTTP server back to

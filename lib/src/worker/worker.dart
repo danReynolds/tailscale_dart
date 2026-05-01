@@ -10,6 +10,7 @@ import 'package:ffi/ffi.dart';
 import '../api/diag.dart';
 import '../api/connection.dart';
 import '../api/identity.dart';
+import '../api/prefs.dart';
 import '../errors.dart';
 import '../ffi_bindings.dart' as native;
 import '../status.dart';
@@ -348,6 +349,31 @@ final class Worker {
       const _WorkerPeersCommand(),
     );
     return response.peers;
+  }
+
+  Future<TailscalePrefs> prefsGet() async {
+    final response = await _request<_WorkerPrefsResponse>(
+      const _WorkerPrefsGetCommand(),
+    );
+    return response.prefs;
+  }
+
+  Future<TailscalePrefs> prefsUpdate(PrefsUpdate update) async {
+    final response = await _request<_WorkerPrefsResponse>(
+      _WorkerPrefsUpdateCommand(updateJson: jsonEncode(update.toJson())),
+    );
+    return response.prefs;
+  }
+
+  Future<String?> exitNodeSuggest() async {
+    final response = await _request<_WorkerExitNodeSuggestResponse>(
+      const _WorkerExitNodeSuggestCommand(),
+    );
+    return response.nodeId;
+  }
+
+  Future<void> exitNodeUseAuto() async {
+    await _request<_WorkerAckResponse>(const _WorkerExitNodeUseAutoCommand());
   }
 
   Future<void> down() async {

@@ -13,10 +13,11 @@ final class PeerProcess {
 
   static Future<PeerProcess> spawn({
     required String stateDir,
-    required String controlUrl,
     required String hostname,
+    String? controlUrl,
     String? authKey,
     String? responseBody,
+    List<String> advertisedRoutes = const [],
   }) async {
     final process = await Process.start(
       Platform.resolvedExecutable,
@@ -24,10 +25,12 @@ final class PeerProcess {
       environment: {
         ...Platform.environment,
         'STATE_DIR': stateDir,
-        'CONTROL_URL': controlUrl,
         'HOSTNAME': hostname,
+        if (controlUrl != null) 'CONTROL_URL': controlUrl,
         if (authKey != null) 'AUTH_KEY': authKey,
         if (responseBody != null) 'RESPONSE_BODY': responseBody,
+        if (advertisedRoutes.isNotEmpty)
+          'ADVERTISED_ROUTES': advertisedRoutes.join(','),
       },
     );
 

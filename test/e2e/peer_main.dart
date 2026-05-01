@@ -10,10 +10,13 @@
 ///
 /// Configured via environment variables:
 ///   STATE_DIR       — directory the peer owns for its Tailscale state
-///   CONTROL_URL     — Headscale URL
+///   CONTROL_URL     — Headscale URL; omit for Tailscale's default control
+///                     plane
 ///   AUTH_KEY        — reusable preauth key (optional; omit to reconnect with
 ///                     previously persisted credentials in STATE_DIR)
 ///   HOSTNAME        — tailnet-visible hostname (default: dune-e2e-peer)
+///   ADVERTISED_ROUTES — optional comma-separated routes to advertise through
+///                     prefs before READY, e.g. `0.0.0.0/0,::/0`.
 ///   RESPONSE_BODY   — body returned by the tailnet HTTP server for GET
 ///                     (default: 'hello from peer'). POST requests echo the
 ///                     request body as `echo: <body>`.
@@ -34,9 +37,10 @@ Future<void> main(List<String> args) async {
   }
 
   final stateDir = _requiredEnv('STATE_DIR');
-  final controlUrl = _requiredEnv('CONTROL_URL');
+  final controlUrl = Platform.environment['CONTROL_URL'];
   final authKey = Platform.environment['AUTH_KEY'] ?? '';
   final hostname = Platform.environment['HOSTNAME'] ?? 'dune-e2e-peer';
+  final advertisedRoutes = _optionalCsvEnv('ADVERTISED_ROUTES');
   final responseBody =
       Platform.environment['RESPONSE_BODY'] ?? 'hello from peer';
 
@@ -48,9 +52,16 @@ Future<void> main(List<String> args) async {
   await tsnet.up(
     hostname: hostname,
     authKey: authKey.isEmpty ? null : authKey,
-    controlUrl: Uri.parse(controlUrl),
+    controlUrl: controlUrl == null || controlUrl.isEmpty
+        ? null
+        : Uri.parse(controlUrl),
   );
   await running.timeout(const Duration(seconds: 60));
+
+  if (advertisedRoutes.isNotEmpty) {
+    await tsnet.prefs.setAdvertisedRoutes(advertisedRoutes);
+  }
+
   final httpServer = await tsnet.http.bind(port: 80);
   httpServer.requests.listen((req) async {
     if (req.method == 'POST') {
@@ -120,4 +131,13 @@ String _requiredEnv(String name) {
     exit(2);
   }
   return v;
+}
+
+List<String> _optionalCsvEnv(String name) {
+  final value = Platform.environment[name];
+  if (value == null || value.trim().isEmpty) return const [];
+  return [
+    for (final item in value.split(','))
+      if (item.trim().isNotEmpty) item.trim(),
+  ];
 }

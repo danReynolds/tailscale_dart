@@ -21,8 +21,8 @@ Out of scope:
 
 - the old session/security protocol and stream multiplexer
 - Windows raw TCP/UDP backend
-- TLS listener, Funnel, Taildrop, Serve config, Profiles, Prefs, ExitNode, and
-  generic LocalAPI escape hatch
+- TLS listener, Funnel, Taildrop, Serve config, Profiles, and generic LocalAPI
+  escape hatch
 
 ## Reviewer Model
 

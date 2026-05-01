@@ -30,11 +30,18 @@ export 'src/api/diag.dart'
         DiagCheckUpdateFn;
 export 'src/api/connection.dart'
     hide createFdTailscaleConnection, createFdTailscaleListener;
-export 'src/api/exit_node.dart';
+export 'src/api/exit_node.dart'
+    hide
+        createExitNode,
+        ExitNodeCurrentFn,
+        ExitNodeSuggestFn,
+        ExitNodeUseByIdFn,
+        ExitNodeUseAutoFn,
+        ExitNodeClearFn;
 export 'src/api/funnel.dart' hide attachFunnelMetadata;
 export 'src/api/http.dart' hide createHttp, createHttpRequestForTesting;
 export 'src/api/identity.dart';
-export 'src/api/prefs.dart';
+export 'src/api/prefs.dart' hide createPrefs, PrefsGetFn, PrefsUpdateFn;
 export 'src/api/profiles.dart';
 export 'src/api/serve.dart';
 export 'src/api/taildrop.dart';
@@ -233,11 +240,25 @@ class Tailscale implements TailscaleClient {
   @override
   final Serve serve = Serve.instance;
   @override
-  final ExitNode exitNode = ExitNode.instance;
+  late final ExitNode exitNode = createExitNode(
+    currentFn: _currentExitNode,
+    suggestFn: _suggestExitNode,
+    useByIdFn: (stableNodeId) async {
+      await _worker.prefsUpdate(PrefsUpdate(exitNodeId: stableNodeId));
+    },
+    useAutoFn: _worker.exitNodeUseAuto,
+    clearFn: () async {
+      await _worker.prefsUpdate(const PrefsUpdate(exitNodeId: ''));
+    },
+    nodeChanges: onNodeChanges,
+  );
   @override
   final Profiles profiles = Profiles.instance;
   @override
-  final Prefs prefs = Prefs.instance;
+  late final Prefs prefs = createPrefs(
+    getFn: _worker.prefsGet,
+    updateFn: _worker.prefsUpdate,
+  );
 
   // ─── Diagnostics ────────────────────────────────────────────────────
   @override
@@ -509,6 +530,44 @@ class Tailscale implements TailscaleClient {
       if (node.tailscaleIPs.contains(target)) return node;
     }
     return null;
+  }
+
+  Future<TailscaleNode?> _nodeByStableNodeId(String stableNodeId) async {
+    final target = stableNodeId.trim();
+    if (target.isEmpty) return null;
+    for (final node in await nodes()) {
+      if (node.stableNodeId == target) return node;
+    }
+    return null;
+  }
+
+  Future<TailscaleNode?> _currentExitNode() async {
+    _requireInitialized();
+    // LocalAPI exposes exit-node selection through prefs, while the public
+    // API returns a full TailscaleNode. Resolve against a near-current node
+    // snapshot; transient null is acceptable while netmap state catches up.
+    final prefs = await _worker.prefsGet();
+    final nodeSnapshot = await nodes();
+
+    for (final node in nodeSnapshot) {
+      if (node.exitNode) return node;
+    }
+
+    final requestedId = prefs.exitNodeId;
+    if (requestedId != null && requestedId.isNotEmpty) {
+      for (final node in nodeSnapshot) {
+        if (node.stableNodeId == requestedId) return node;
+      }
+    }
+
+    return null;
+  }
+
+  Future<TailscaleNode?> _suggestExitNode() async {
+    _requireInitialized();
+    final nodeId = await _worker.exitNodeSuggest();
+    if (nodeId == null) return null;
+    return _nodeByStableNodeId(nodeId);
   }
 
   /// Resolves a tailnet IP to the node's identity — stable node ID,

@@ -2,6 +2,9 @@ import 'package:meta/meta.dart';
 
 import '../_equality.dart';
 
+typedef PrefsGetFn = Future<TailscalePrefs> Function();
+typedef PrefsUpdateFn = Future<TailscalePrefs> Function(PrefsUpdate update);
+
 /// Node preferences. Mirrors a subset of `ipn.Prefs` on the Go side.
 ///
 /// Fields cover the long tail of tsnet configuration that doesn't warrant
@@ -19,6 +22,7 @@ class TailscalePrefs {
     required this.wantRunning,
     required this.autoUpdate,
     required this.hostname,
+    this.autoExitNode = false,
     this.exitNodeId,
   });
 
@@ -49,8 +53,32 @@ class TailscalePrefs {
   /// The tailnet-visible hostname for this node.
   final String hostname;
 
+  /// Whether automatic exit-node selection is enabled.
+  ///
+  /// When true, tailscaled may select or re-select an eligible exit node based
+  /// on current policy and path quality. Use [ExitNode.current] to inspect the
+  /// node currently selected by the runtime.
+  final bool autoExitNode;
+
   /// Stable node ID currently in use as an exit node, or null if none.
   final String? exitNodeId;
+
+  /// Parses the JSON shape returned by the native LocalAPI wrapper.
+  factory TailscalePrefs.fromJson(Map<String, dynamic> json) => TailscalePrefs(
+    advertisedRoutes: List<String>.unmodifiable(
+      (json['advertisedRoutes'] as List?)?.cast<String>() ?? const [],
+    ),
+    acceptRoutes: json['acceptRoutes'] as bool? ?? false,
+    shieldsUp: json['shieldsUp'] as bool? ?? false,
+    advertisedTags: List<String>.unmodifiable(
+      (json['advertisedTags'] as List?)?.cast<String>() ?? const [],
+    ),
+    wantRunning: json['wantRunning'] as bool? ?? false,
+    autoUpdate: json['autoUpdate'] as bool? ?? false,
+    hostname: json['hostname'] as String? ?? '',
+    autoExitNode: json['autoExitNode'] as bool? ?? false,
+    exitNodeId: json['exitNodeId'] as String?,
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -63,6 +91,7 @@ class TailscalePrefs {
           wantRunning == other.wantRunning &&
           autoUpdate == other.autoUpdate &&
           hostname == other.hostname &&
+          autoExitNode == other.autoExitNode &&
           exitNodeId == other.exitNodeId;
 
   @override
@@ -74,6 +103,7 @@ class TailscalePrefs {
     wantRunning,
     autoUpdate,
     hostname,
+    autoExitNode,
     exitNodeId,
   );
 
@@ -83,6 +113,7 @@ class TailscalePrefs {
       'acceptRoutes: $acceptRoutes, shieldsUp: $shieldsUp, '
       'advertisedTags: $advertisedTags, wantRunning: $wantRunning, '
       'autoUpdate: $autoUpdate, hostname: $hostname, '
+      'autoExitNode: $autoExitNode, '
       'exitNodeId: $exitNodeId)';
 }
 
@@ -112,11 +143,15 @@ class PrefsUpdate {
   final List<String>? advertisedTags;
   final bool? wantRunning;
   final bool? autoUpdate;
+
+  /// Tailnet-visible hostname to publish for this node.
   final String? hostname;
 
   /// Pass empty string to clear the current exit node; `null` leaves
   /// unchanged (Dart's single-null problem; use named setters on
-  /// [Prefs] or [ExitNode] for clarity).
+  /// [Prefs] or [ExitNode] for clarity). Any explicit update to this
+  /// field also disables automatic exit-node selection, matching
+  /// upstream `ipn.MaskedPrefs` semantics.
   final String? exitNodeId;
 
   @override
@@ -151,6 +186,18 @@ class PrefsUpdate {
       'advertisedTags: $advertisedTags, wantRunning: $wantRunning, '
       'autoUpdate: $autoUpdate, hostname: $hostname, '
       'exitNodeId: $exitNodeId)';
+
+  /// Encodes only fields that should be modified.
+  Map<String, Object?> toJson() => {
+    if (advertisedRoutes != null) 'advertisedRoutes': advertisedRoutes,
+    if (acceptRoutes != null) 'acceptRoutes': acceptRoutes,
+    if (shieldsUp != null) 'shieldsUp': shieldsUp,
+    if (advertisedTags != null) 'advertisedTags': advertisedTags,
+    if (wantRunning != null) 'wantRunning': wantRunning,
+    if (autoUpdate != null) 'autoUpdate': autoUpdate,
+    if (hostname != null) 'hostname': hostname,
+    if (exitNodeId != null) 'exitNodeId': exitNodeId,
+  };
 }
 
 /// Low-level escape hatch for preferences that don't have a dedicated
@@ -158,43 +205,80 @@ class PrefsUpdate {
 ///
 /// Reached via [Tailscale.prefs]. For common single-field changes prefer
 /// the named setters; for atomic multi-field edits use [updateMasked].
-class Prefs {
-  /// Singleton namespace instance. Reach via `Tailscale.instance.prefs`.
-  static const instance = Prefs._();
-
-  const Prefs._();
-
+abstract class Prefs {
   /// Current preferences snapshot.
-  Future<TailscalePrefs> get() =>
-      throw UnimplementedError('prefs.get not yet implemented');
+  Future<TailscalePrefs> get();
 
   /// Replaces the set of CIDRs this node advertises as a subnet router.
   /// See <https://tailscale.com/kb/1019/subnets>. Still requires admin
   /// approval of each route in the control plane before other nodes use it.
-  Future<TailscalePrefs> setAdvertisedRoutes(List<String> cidrs) =>
-      throw UnimplementedError('prefs.setAdvertisedRoutes not yet implemented');
+  Future<TailscalePrefs> setAdvertisedRoutes(List<String> cidrs);
 
   /// Accept subnet routes advertised by other nodes on the tailnet.
-  Future<TailscalePrefs> setAcceptRoutes(bool enabled) =>
-      throw UnimplementedError('prefs.setAcceptRoutes not yet implemented');
+  Future<TailscalePrefs> setAcceptRoutes(bool enabled);
 
   /// Reject all inbound connections when true. See
   /// <https://tailscale.com/kb/1072/client-preferences#block-incoming-connections>.
-  Future<TailscalePrefs> setShieldsUp(bool enabled) =>
-      throw UnimplementedError('prefs.setShieldsUp not yet implemented');
+  Future<TailscalePrefs> setShieldsUp(bool enabled);
 
   /// Opt in or out of automatic tsnet version updates from the control
   /// plane.
-  Future<TailscalePrefs> setAutoUpdate(bool enabled) =>
-      throw UnimplementedError('prefs.setAutoUpdate not yet implemented');
+  Future<TailscalePrefs> setAutoUpdate(bool enabled);
 
   /// Replaces the set of [ACL tags](https://tailscale.com/kb/1068/tags)
   /// this node advertises when registering.
-  Future<TailscalePrefs> setAdvertisedTags(List<String> tags) =>
-      throw UnimplementedError('prefs.setAdvertisedTags not yet implemented');
+  Future<TailscalePrefs> setAdvertisedTags(List<String> tags);
+
+  /// Changes the tailnet-visible hostname for this node.
+  Future<TailscalePrefs> setHostname(String hostname);
 
   /// Applies a [PrefsUpdate] atomically. Fields set on the update are
   /// written; fields left null are unchanged.
-  Future<TailscalePrefs> updateMasked(PrefsUpdate update) =>
-      throw UnimplementedError('prefs.updateMasked not yet implemented');
+  Future<TailscalePrefs> updateMasked(PrefsUpdate update);
+}
+
+/// Library-internal factory. Reach via `Tailscale.instance.prefs`.
+@internal
+Prefs createPrefs({
+  required PrefsGetFn getFn,
+  required PrefsUpdateFn updateFn,
+}) => _Prefs(getFn: getFn, updateFn: updateFn);
+
+final class _Prefs implements Prefs {
+  _Prefs({required PrefsGetFn getFn, required PrefsUpdateFn updateFn})
+    : _get = getFn,
+      _update = updateFn;
+
+  final PrefsGetFn _get;
+  final PrefsUpdateFn _update;
+
+  @override
+  Future<TailscalePrefs> get() => _get();
+
+  @override
+  Future<TailscalePrefs> setAdvertisedRoutes(List<String> cidrs) =>
+      updateMasked(PrefsUpdate(advertisedRoutes: List.unmodifiable(cidrs)));
+
+  @override
+  Future<TailscalePrefs> setAcceptRoutes(bool enabled) =>
+      updateMasked(PrefsUpdate(acceptRoutes: enabled));
+
+  @override
+  Future<TailscalePrefs> setShieldsUp(bool enabled) =>
+      updateMasked(PrefsUpdate(shieldsUp: enabled));
+
+  @override
+  Future<TailscalePrefs> setAutoUpdate(bool enabled) =>
+      updateMasked(PrefsUpdate(autoUpdate: enabled));
+
+  @override
+  Future<TailscalePrefs> setAdvertisedTags(List<String> tags) =>
+      updateMasked(PrefsUpdate(advertisedTags: List.unmodifiable(tags)));
+
+  @override
+  Future<TailscalePrefs> setHostname(String hostname) =>
+      updateMasked(PrefsUpdate(hostname: hostname));
+
+  @override
+  Future<TailscalePrefs> updateMasked(PrefsUpdate update) => _update(update);
 }

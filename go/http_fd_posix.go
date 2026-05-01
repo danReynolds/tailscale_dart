@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/net/tlsdial"
 	"tailscale.com/tsnet"
 )
 
@@ -275,8 +276,7 @@ func runHttpFdRequest(
 	req.Header = headers.Clone()
 	req.ContentLength = contentLength
 
-	baseClient := s.HTTPClient()
-	client := *baseClient
+	client := tailnetHTTPClient(s.HTTPClient())
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if !followRedirects {
 			return http.ErrUseLastResponse
@@ -305,6 +305,18 @@ func runHttpFdRequest(
 	if _, err := io.Copy(responseConn, resp.Body); err != nil {
 		logInfo("HTTP fd response body copy failed: %v", err)
 	}
+}
+
+func tailnetHTTPClient(baseClient *http.Client) http.Client {
+	client := *baseClient
+	if transport, ok := baseClient.Transport.(*http.Transport); ok {
+		cloned := transport.Clone()
+		// Match Tailscale's own outbound TLS policy: system roots first, then
+		// baked-in Let's Encrypt roots as a fallback for constrained platforms.
+		cloned.TLSClientConfig = tlsdial.Config(nil, cloned.TLSClientConfig)
+		client.Transport = cloned
+	}
+	return client
 }
 
 func serveHTTPFdRequest(state *httpBindingState, w http.ResponseWriter, r *http.Request) {

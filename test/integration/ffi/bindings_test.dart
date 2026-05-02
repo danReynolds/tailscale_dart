@@ -243,6 +243,24 @@ void main() {
       expect(parsed['error'], contains('ServeForward called before Start'));
     });
 
+    test('funnel forward returns JSON error before server startup', () {
+      final payload = jsonEncode({
+        'tailnetPort': 443,
+        'localPort': 3000,
+        'localAddress': '127.0.0.1',
+        'path': '/',
+        'https': true,
+        'funnel': true,
+      }).toNativeUtf8();
+      final resultPtr = native.duneServeForward(payload);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(payload);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('FunnelForward called before Start'));
+    });
+
     test('serve clear returns JSON error before server startup', () {
       final payload = jsonEncode({
         'tailnetPort': 443,

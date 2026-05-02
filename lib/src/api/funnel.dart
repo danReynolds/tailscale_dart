@@ -1,4 +1,4 @@
-import 'dart:io' show Platform;
+import 'dart:io' show InternetAddress, Platform;
 
 import 'package:meta/meta.dart';
 
@@ -28,8 +28,9 @@ abstract class Funnel {
   /// [TailscaleFunnelException] with a structured error code where the native
   /// runtime can classify it.
   ///
-  /// Bind the local service to `127.0.0.1` unless you intentionally want other
-  /// host-local processes or interfaces to reach it directly.
+  /// [localAddress] must be loopback (`127.0.0.1`, `::1`, or `localhost`).
+  /// This prevents accidentally publishing arbitrary LAN or metadata-service
+  /// endpoints to the public internet.
   Future<TailscalePublishedService> forward({
     required int localPort,
     int publicPort = 443,
@@ -132,7 +133,19 @@ String _normalizeLocalAddress(String localAddress) {
       'must not be empty',
     );
   }
+  if (!_isLoopbackAddress(trimmed)) {
+    throw ArgumentError.value(
+      localAddress,
+      'localAddress',
+      'must be a loopback address such as 127.0.0.1, ::1, or localhost',
+    );
+  }
   return trimmed;
+}
+
+bool _isLoopbackAddress(String address) {
+  if (address.toLowerCase() == 'localhost') return true;
+  return InternetAddress.tryParse(address)?.isLoopback ?? false;
 }
 
 String _normalizePath(String path) {

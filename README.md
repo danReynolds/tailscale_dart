@@ -162,13 +162,15 @@ multi-value headers such as `set-cookie`.
 
 `serve.forward(...)` and `funnel.forward(...)` are different from
 `http.bind(...)`: they proxy to an existing local HTTP server, typically bound
-to `127.0.0.1`. This is the right shape for reusing Shelf or `dart:io`
-servers. `http.bind(...)` is stronger when the handler lives inside this
-process because it avoids opening a loopback TCP port at all. `funnel.forward`
-uses Tailscale's native Funnel listener for the public edge and then proxies to
-the local server. Publications created by this package are process-scoped:
-close the returned `TailscalePublishedService` when done, and `down()` removes
-package-created publications best-effort before stopping the embedded node.
+to `127.0.0.1`. The target address must be loopback, which prevents
+accidentally publishing arbitrary LAN or metadata-service endpoints. This is the
+right shape for reusing Shelf or `dart:io` servers. `http.bind(...)` is stronger
+when the handler lives inside this process because it avoids opening a loopback
+TCP port at all. `funnel.forward` uses Tailscale's native Funnel listener for
+the public edge and then proxies to the local server. Publications created by
+this package are process-scoped: close the returned
+`TailscalePublishedService` when done, and `down()` removes package-created
+publications best-effort before stopping the embedded node.
 
 ## Validation Demo
 

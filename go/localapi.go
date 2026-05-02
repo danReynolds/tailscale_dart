@@ -367,10 +367,6 @@ func ServeForward(payloadJSON string) string {
 		return jsonError(fmt.Errorf("invalid serve forward JSON: %w", err))
 	}
 
-	lc, err := lcOr("ServeForward")
-	if err != nil {
-		return jsonError(err)
-	}
 	if payload.Funnel {
 		publication, err := startFunnelForward(payload)
 		if err != nil {
@@ -381,6 +377,10 @@ func ServeForward(payloadJSON string) string {
 			return jsonError(err)
 		}
 		return string(b)
+	}
+	lc, err := lcOr("ServeForward")
+	if err != nil {
+		return jsonError(err)
 	}
 	ctx := context.Background()
 	st, err := lc.StatusWithoutPeers(ctx)
@@ -433,7 +433,7 @@ func ServeClear(payloadJSON string) string {
 		return jsonError(err)
 	}
 	if payload.Funnel {
-		if err := clearFunnelForward(lc, payload); err != nil {
+		if err := clearFunnelForward(payload); err != nil {
 			return localAPIError(err)
 		}
 		return `{"ok":true}`
@@ -541,6 +541,9 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 	localAddress := strings.TrimSpace(payload.LocalAddress)
 	if localAddress == "" {
 		localAddress = "127.0.0.1"
+	}
+	if err := validateServeLocalAddress(localAddress); err != nil {
+		return servePublication{}, err
 	}
 	mount, err := normalizeServePath(payload.Path)
 	if err != nil {
@@ -662,6 +665,17 @@ func validateServePort(name string, port int) (uint16, error) {
 		return 0, fmt.Errorf("invalid %s %d: must be 1..65535", name, port)
 	}
 	return uint16(port), nil
+}
+
+func validateServeLocalAddress(address string) error {
+	if strings.EqualFold(address, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(address)
+	if ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("serve localAddress %q must be a loopback address", address)
 }
 
 func normalizeServePath(raw string) (string, error) {

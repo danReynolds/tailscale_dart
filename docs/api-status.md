@@ -202,9 +202,11 @@ Programmatic access to what `tailscale serve` / `tailscale funnel` do
 on the CLI: HTTP routing and public-internet publishing.
 
 `serve.forward` publishes an existing loopback HTTP server inside the
-tailnet. `http.bind()` remains the package-native in-process HTTP server
-and should be preferred when the handler lives in Dart and does not need a
-local TCP listener.
+tailnet. `localAddress` must be loopback (`127.0.0.1`, `::1`, or
+`localhost`) so callers cannot accidentally publish arbitrary host-reachable
+endpoints. `http.bind()` remains the package-native in-process HTTP server and
+should be preferred when the handler lives in Dart and does not need a local TCP
+listener.
 
 Serve/Funnel publications created by this package are process-scoped rather
 than persistent `tailscale serve --bg` configuration. Close the returned

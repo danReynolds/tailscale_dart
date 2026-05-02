@@ -1,4 +1,4 @@
-import 'dart:io' show Platform;
+import 'dart:io' show InternetAddress, Platform;
 
 import 'package:meta/meta.dart';
 
@@ -119,8 +119,9 @@ abstract class Serve {
   /// to true, so the tailnet URL is `https://<node>...` and Tailscale
   /// terminates TLS before forwarding plaintext HTTP to the local service.
   ///
-  /// Bind the local service to `127.0.0.1` unless you intentionally want other
-  /// host-local processes or interfaces to reach it directly.
+  /// [localAddress] must be loopback (`127.0.0.1`, `::1`, or `localhost`).
+  /// This prevents accidentally publishing arbitrary LAN or metadata-service
+  /// endpoints through the tailnet.
   Future<TailscalePublishedService> forward({
     required int tailnetPort,
     required int localPort,
@@ -265,7 +266,19 @@ String _normalizeLocalAddress(String localAddress) {
       'must not be empty',
     );
   }
+  if (!_isLoopbackAddress(trimmed)) {
+    throw ArgumentError.value(
+      localAddress,
+      'localAddress',
+      'must be a loopback address such as 127.0.0.1, ::1, or localhost',
+    );
+  }
   return trimmed;
+}
+
+bool _isLoopbackAddress(String address) {
+  if (address.toLowerCase() == 'localhost') return true;
+  return InternetAddress.tryParse(address)?.isLoopback ?? false;
 }
 
 String _normalizePath(String path) {

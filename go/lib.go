@@ -92,7 +92,7 @@ func stopLocked() {
 	closeAllServePublications(lc)
 	closeAllTcpFdListeners()
 	closeAllHttpBindings()
-	closeAllFunnelForwarders(lc)
+	closeAllFunnelForwarders()
 
 	if srv != nil {
 		srv.Close()

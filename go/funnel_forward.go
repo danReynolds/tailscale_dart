@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 )
@@ -55,6 +54,9 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	if localAddress == "" {
 		localAddress = "127.0.0.1"
 	}
+	if err := validateServeLocalAddress(localAddress); err != nil {
+		return servePublication{}, err
+	}
 	mount, err := normalizeServePath(payload.Path)
 	if err != nil {
 		return servePublication{}, err
@@ -64,7 +66,7 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	s := srv
 	mu.Unlock()
 	if s == nil {
-		return servePublication{}, errors.New("ServeForward called before Start")
+		return servePublication{}, errors.New("FunnelForward called before Start")
 	}
 
 	st, err := s.Up(context.Background())
@@ -134,7 +136,7 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	}, nil
 }
 
-func clearFunnelForward(lc *local.Client, payload serveClearPayload) error {
+func clearFunnelForward(payload serveClearPayload) error {
 	port, err := validateServePort("tailnetPort", payload.TailnetPort)
 	if err != nil {
 		return err
@@ -167,29 +169,8 @@ func clearFunnelForward(lc *local.Client, payload serveClearPayload) error {
 	if removePort {
 		_ = ff.server.Close()
 		_ = ff.listener.Close()
-		return clearFunnelServeConfig(lc, domain, port)
 	}
 	return nil
-}
-
-func clearFunnelServeConfig(lc *local.Client, domain string, port uint16) error {
-	if domain == "" {
-		return nil
-	}
-	// startFunnelForward activates public ingress through tsnet.ListenFunnel
-	// rather than ServeConfig. This defensive sweep still clears stale
-	// AllowFunnel state left by older package versions or external tailscale
-	// serve/funnel commands for the same host:port.
-	ctx := context.Background()
-	sc, err := lc.GetServeConfig(ctx)
-	if err != nil {
-		return err
-	}
-	if sc == nil {
-		return nil
-	}
-	sc.SetFunnel(domain, port, false)
-	return lc.SetServeConfig(ctx, sc)
 }
 
 func trackFunnelPublication(key servePublicationKey) {
@@ -226,7 +207,7 @@ func takeFunnelPublications() []servePublicationKey {
 	return keys
 }
 
-func closeAllFunnelForwarders(lc *local.Client) {
+func closeAllFunnelForwarders() {
 	funnelMu.Lock()
 	keys := make([]servePublicationKey, 0)
 	for port, ff := range funnelForwarders {
@@ -248,12 +229,6 @@ func closeAllFunnelForwarders(lc *local.Client) {
 		keys = takeFunnelPublications()
 	} else {
 		untrackFunnelPublications(keys)
-	}
-	if lc == nil || len(keys) == 0 {
-		return
-	}
-	for _, key := range keys {
-		_ = clearFunnelServeConfig(lc, key.host, key.port)
 	}
 }
 

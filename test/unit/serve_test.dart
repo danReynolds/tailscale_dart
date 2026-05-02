@@ -100,6 +100,14 @@ void main() {
           () => serve.forward(
             tailnetPort: 443,
             localPort: 3000,
+            localAddress: '169.254.169.254',
+          ),
+          throwsA(isA<ArgumentError>()),
+        );
+        expect(
+          () => serve.forward(
+            tailnetPort: 443,
+            localPort: 3000,
             path: '/api/../admin',
           ),
           throwsA(isA<ArgumentError>()),

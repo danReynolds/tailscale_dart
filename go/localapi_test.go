@@ -422,6 +422,23 @@ func TestNormalizeServePathRejectsTraversalSegments(t *testing.T) {
 	}
 }
 
+func TestValidateServeLocalAddressRequiresLoopback(t *testing.T) {
+	for _, address := range []string{"127.0.0.1", "127.12.34.56", "::1", "localhost", "LOCALHOST"} {
+		t.Run("allow "+address, func(t *testing.T) {
+			if err := validateServeLocalAddress(address); err != nil {
+				t.Fatalf("validateServeLocalAddress(%q): %v", address, err)
+			}
+		})
+	}
+	for _, address := range []string{"169.254.169.254", "192.168.1.1", "example.com", ""} {
+		t.Run("reject "+address, func(t *testing.T) {
+			if err := validateServeLocalAddress(address); err == nil {
+				t.Fatalf("validateServeLocalAddress(%q) succeeded, want error", address)
+			}
+		})
+	}
+}
+
 func serveTestStatus() *ipnstate.Status {
 	return &ipnstate.Status{
 		Self: &ipnstate.PeerStatus{

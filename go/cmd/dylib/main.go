@@ -378,6 +378,16 @@ func DuneExitNodeUseAuto() *C.char {
 	return C.CString(tailscale.ExitNodeUseAuto())
 }
 
+//export DuneServeForward
+func DuneServeForward(payloadJSON *C.char) *C.char {
+	return C.CString(tailscale.ServeForward(C.GoString(payloadJSON)))
+}
+
+//export DuneServeClear
+func DuneServeClear(payloadJSON *C.char) *C.char {
+	return C.CString(tailscale.ServeClear(C.GoString(payloadJSON)))
+}
+
 //export DuneFree
 func DuneFree(ptr *C.char) {
 	C.free(unsafe.Pointer(ptr))

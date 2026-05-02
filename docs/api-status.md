@@ -43,9 +43,9 @@ module bump before they can land here.
 | [`tcp`](#tcp)           | Raw TCP between tailnet nodes                                      | Core      | Phase 3 ✅        |
 | [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | ✅             |
 | [`udp`](#udp)           | UDP datagram bindings on a tailnet IP                               | Advanced  | Phase 5 ✅        |
-| [`funnel`](#funnel)     | Public-internet HTTPS via Tailscale Funnel                         | Optional  | Planned          |
+| [`funnel`](#funnel)     | Public-internet HTTPS forwarding via Tailscale Funnel              | Optional  | ✅               |
 | [`taildrop`](#taildrop) | Node-to-node file transfer                                          | Optional  | Planned          |
-| [`serve`](#serve)       | Raw `tailscale serve` / `tailscale funnel` config                   | Optional  | Planned          |
+| [`serve`](#serve)       | Tailnet publication for existing local HTTP services                | Optional  | ✅               |
 | [`exitNode`](#exitnode) | Route outbound traffic through another node                                | Advanced  | Phase 6 ✅        |
 | [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Optional  | Planned          |
 | [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Advanced  | Phase 6 ✅        |
@@ -149,24 +149,24 @@ remote tailnet endpoint on each delivery.
 
 ## `funnel`
 
-Public-internet HTTPS via Tailscale Funnel: the node is reachable from
-the open internet at its Funnel hostname, with edge TLS termination.
-The Funnel edge attaches `publicSrc` + `sni` metadata to each accepted
-socket; read it via the `Socket.funnel` extension — this lets `bind`
-return a standard `SecureServerSocket` instead of a `dart:io` subclass.
+Public-internet HTTPS via Tailscale Funnel: publish an existing local
+HTTP service at this node's Funnel hostname. The package uses upstream
+`tsnet.ListenFunnel` for the public listener and proxies requests to the
+loopback service.
 
 This is explicitly optional: useful for some hosted/server apps, but
 not part of the core embedded-private-network story.
 
-**Status:** planned. **Requires:** operator has enabled Funnel
-in ACLs for this node and an allowed Funnel port (443, 8443, 10000).
-Headscale doesn't support Funnel; live-Tailscale test only.
+**Status:** implemented for local HTTP forwarding. **Requires:** operator
+has enabled HTTPS and Funnel for this node and an allowed Funnel port
+(usually 443, 8443, or 10000). Headscale doesn't support Funnel; live
+Tailscale test only.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `funnel.bind(port, {funnelOnly})` → `Future<SecureServerSocket>` | ⛔ | Public-internet TLS listener. `funnelOnly: true` rejects same-tailnet clients. | `final srv = await tsnet.funnel.bind(443);` |
-| `FunnelMetadata` value type (`publicSrc`, `sni`) | ✅ | Metadata the Funnel edge attached to a socket. | `const FunnelMetadata(publicSrc: ...);` |
-| `Socket.funnel` extension getter | ✅ | Read `FunnelMetadata` off an accepted socket; null if not from Funnel. | `final meta = conn.funnel;` |
+| `funnel.forward({publicPort, localPort, localAddress, path})` → `Future<TailscalePublishedService>` | ✅ | Publicly publish a local HTTP service through Funnel. | `final p = await tsnet.funnel.forward(localPort: 3000);` |
+| `funnel.clear({publicPort, path})` | ✅ | Remove a Funnel publication. | `await tsnet.funnel.clear();` |
+| `TailscalePublishedService.close()` | ✅ | Remove the publication created by `forward`. Idempotent per handle. | `await p.close();` |
 
 ## `taildrop`
 
@@ -199,26 +199,28 @@ LocalAPI-backed byte stream.
 ## `serve`
 
 Programmatic access to what `tailscale serve` / `tailscale funnel` do
-on the CLI: HTTP routing and public-internet publishing. `ServeConfig`
-carries an opaque `etag` for optimistic concurrency — if another
-writer lands first, `setConfig` throws `TailscaleServeException` with
-`TailscaleErrorCode.conflict`.
+on the CLI: HTTP routing and public-internet publishing.
 
-This is tracked as an optional raw-config surface, not as a rich Dart
-builder API. `http.bind()` remains the main package-native HTTP-publish
-feature for typical Dart apps.
+`serve.forward` publishes an existing loopback HTTP server inside the
+tailnet. `localAddress` must be loopback (`127.0.0.1`, `::1`, or
+`localhost`) so callers cannot accidentally publish arbitrary host-reachable
+endpoints. `http.bind()` remains the package-native in-process HTTP server and
+should be preferred when the handler lives in Dart and does not need a local TCP
+listener.
 
-**Status:** planned. **Depends on:** Phase 2 (value types).
-**Also:** Phase 9 bumps the `tailscale.com` Go module pin to pick up
-`Services` / `AllowFunnel` / `Foreground` and the newer
-service-adjacent APIs. Headscale doesn't support Serve; live-Tailscale
-test only.
+Serve/Funnel publications created by this package are process-scoped rather
+than persistent `tailscale serve --bg` configuration. Close the returned
+`TailscalePublishedService` explicitly; `Tailscale.down()` also removes
+package-created publications best-effort before stopping the embedded node.
+
+**Status:** implemented for local HTTP forwarding. Raw `ServeConfig`
+get/set remains a possible future escape hatch.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `serve.getConfig()` → `Future<ServeConfig>` | ⛔ | Current serve/funnel config for this node. | `final cfg = await tsnet.serve.getConfig();` |
-| `serve.setConfig(ServeConfig)` | ⛔ | Replace atomically; throws on ETag mismatch. | `await tsnet.serve.setConfig(updated);` |
-| `ServeConfig` value type (with `etag`) | ✅ | Immutable config object; handler modeling lands in Phase 9. | `const ServeConfig(etag: 'v1');` |
+| `serve.forward({tailnetPort, localPort, localAddress, path, https})` → `Future<TailscalePublishedService>` | ✅ | Publish a local HTTP service inside the tailnet. | `final p = await tsnet.serve.forward(tailnetPort: 443, localPort: 3000);` |
+| `serve.clear({tailnetPort, path})` | ✅ | Remove a tailnet Serve publication. | `await tsnet.serve.clear(tailnetPort: 443);` |
+| `TailscalePublishedService` | ✅ | Publication handle with `url`, local target metadata, and `close()`. | `print(p.url); await p.close();` |
 
 ## `exitNode`
 

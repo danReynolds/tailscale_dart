@@ -121,7 +121,7 @@ v1:
 - `udp.bind`
 - `prefs.*`
 - `exitNode.*`
-- `funnel.bind` as a thin transport surface, not a marquee feature
+- `funnel.forward` as a publication/proxy surface, not a socket listener
 
 ### Optional / demand-gated
 
@@ -224,7 +224,7 @@ one sweep, so later phases don't re-open the same debates.
 
 | # | Item                                                    | Purpose                                                                             | Done |
 | - | ------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---- |
-| 1 | `==` / `hashCode` / `toString` on value types           | Hand-rolled equality + debuggability. Covers TailscaleStatus, TailscaleNode, TailscaleNodeIdentity, WaitingFile, FileTarget, LoginProfile, PingResult, DERPMap/Region/Node, ClientVersion, TailscalePrefs, PrefsUpdate, FunnelMetadata | [x]  |
+| 1 | `==` / `hashCode` / `toString` on value types           | Hand-rolled equality + debuggability. Covers TailscaleStatus, TailscaleNode, TailscaleNodeIdentity, WaitingFile, FileTarget, LoginProfile, PingResult, DERPMap/Region/Node, ClientVersion, TailscalePrefs, PrefsUpdate | [x]  |
 | 2 | Add `stableNodeId` to `TailscaleNode`                       | Upstream `ipnstate.PeerStatus` has `ID tailcfg.StableNodeID`; we dropped it. Required for type-safe `exitNode.use(node)` | [x]  |
 | 3 | `Tailscale.whois(ip)` returns `Future<TailscaleNodeIdentity?>`   | Unknown IP returns null instead of forcing try/catch                                | [x]  |
 | 4 | `profiles.current()` returns `Future<LoginProfile?>`    | Fresh install has no current profile — express it in the type                        | [x]  |
@@ -331,8 +331,8 @@ decision rather than inheriting the old fake-socket model.
 | 1 | `tls.bind({port, address})` → `Future<TailscaleListener>`     | TLS-terminated tailnet listener with package-native plaintext connections | [x]  |
 | 2 | UDP datagram binding backend                                 | Preserve `[peerIP, peerPort, payload]` message boundaries without stream-shaped semantics | [x]  |
 | 3 | `udp.bind({port, address})` → `Future<TailscaleDatagramBinding>`  | UDP datagram listener on a tailnet IP                             | [x]  |
-| 4 | `funnel.bind(port, {funnelOnly})` surface decision            | Public-internet HTTPS via Funnel. **Advanced / optional:** keep the surface thin and close to upstream; do not block v1 on additional ergonomics. | [ ]  |
-| 5 | Funnel request metadata                                      | Expose original public-client source IP + SNI target on whichever listener/request type Phase 5 settles. | [ ]  |
+| 4 | `funnel.forward({publicPort, localPort})`                    | Public-internet HTTPS via Funnel for an existing local HTTP service. | [x]  |
+| 5 | Funnel request metadata                                      | Not exposed in the forwarding API; local HTTP servers should use standard forwarded headers only when they trust the loopback source. | [ ]  |
 | 6 | Example: all-transports demo                                 | `/example/transports.dart` exercising TCP + TLS + UDP + Funnel            | [ ]  |
 
 **Exit criteria:** demo runs against a live tailnet; CI e2e covers
@@ -433,30 +433,31 @@ on both sides.
 
 ---
 
-### Phase 9 — Optional: Serve raw config
+### Phase 9 — Optional: Serve raw config / advanced services
 
 **Goal:** programmatic access to what `tailscale serve` / `tailscale
-funnel` do on the CLI.
+funnel` do on the CLI beyond the high-level forwarding helpers.
 
-**Dependencies:** Phase 2. **Also:** upgrade `tailscale.com` Go module
-pin to the latest stable at the time Phase 9 starts (current pin
-`v1.92.2` is missing `Services`, `AllowFunnel`, `Foreground`,
-`ListenService`, and per-service ETag introduced in later upstream
-versions). Bump + audit the diff before modelling `ServeConfig`.
+**Dependencies:** Phase 2. The current `tailscale.com` pin already has
+the Serve config fields needed for high-level local HTTP forwarding.
+Upgrade to the latest stable before modelling the full raw config or
+adding Tailscale Services primitives.
 
 **Demand gate:** not on the core v1 path. The goal here is raw
-`ServeConfig` access, not a broad Dart DSL for every Serve/Funnel
-handler combination. `http.bind()` already covers the common Dart
-"handle private HTTP traffic in-process" case.
+`ServeConfig` access and advanced service hosting, not a broad Dart DSL
+for every Serve/Funnel handler combination. `http.bind()` covers
+in-process private HTTP handling; `serve.forward` / `funnel.forward`
+cover existing loopback HTTP services.
 
 | # | API                                        | Purpose                                                                    | Done |
 | - | ------------------------------------------ | -------------------------------------------------------------------------- | ---- |
-| 1 | Upgrade `tailscale.com` pin                 | Audit upstream changelog between pinned version and latest stable; fold new `ipn.ServeConfig` fields into our model       | [ ]  |
-| 2 | `ServeConfig` value type                   | Full Dart mirror of `ipn.ServeConfig`: TCP handlers, web handlers, Funnel enablement per port, `Services`, `AllowFunnel`, `Foreground`, `ETag` | [ ]  |
-| 3 | `serve.getConfig()` → `ServeConfig`         | Current serve config (populates ETag)                                      | [ ]  |
-| 4 | `serve.setConfig(config)`                   | Replace config atomically; throws on ETag mismatch                         | [ ]  |
-| 5 | `TailscaleConflictException`                | Thrown when `setConfig` detects a concurrent modification                  | [ ]  |
-| 6 | `tcp.listenService(name, mode)`             | Direct Dart mirror of `tsnet.Server.ListenService` for advertising Tailscale Services hosts. Depends on bumping `tailscale.com` to a release that includes `ListenService` (added upstream in `v1.94.1`). Keep this under `tcp`; do not create a speculative `services` namespace for a single listener primitive. | [ ]  |
+| 1 | `serve.forward({tailnetPort, localPort})`   | Publish an existing loopback HTTP service inside the tailnet               | [x]  |
+| 2 | `funnel.forward({publicPort, localPort})`   | Publish an existing loopback HTTP service on the public internet through Funnel | [x]  |
+| 3 | `ServeConfig` value type                   | Full Dart mirror of `ipn.ServeConfig`: TCP handlers, web handlers, Funnel enablement per port, `Services`, `AllowFunnel`, `Foreground`, `ETag` | [ ]  |
+| 4 | `serve.getConfig()` → `ServeConfig`         | Current serve config (populates ETag)                                      | [ ]  |
+| 5 | `serve.setConfig(config)`                   | Replace config atomically; throws on ETag mismatch                         | [ ]  |
+| 6 | `TailscaleConflictException`                | Thrown when `setConfig` detects a concurrent modification                  | [ ]  |
+| 7 | `tcp.listenService(name, mode)`             | Direct Dart mirror of `tsnet.Server.ListenService` for advertising Tailscale Services hosts. Depends on bumping `tailscale.com` to a release that includes `ListenService` (added upstream in `v1.94.1`). Keep this under `tcp`; do not create a speculative `services` namespace for a single listener primitive. | [ ]  |
 
 **Note on Services:** `Services` / `AllowFunnel` / `Foreground` are
 fields in `ipn.ServeConfig`, not a separate product surface — they live
@@ -525,8 +526,8 @@ exercise Headscale-unsupported features need a separate path.
 | `taildrop.*`                      | ✅                | ✅                                 |
 | `profiles.*`                      | ✅                | ✅                                 |
 | `tls.bind` / `tls.domains`        | ❌ (no HTTPS)     | ✅                                 |
-| `funnel.bind`                     | ❌ (no Funnel)    | ✅                                 |
-| `serve.*`                         | ❌ (no Serve)     | ✅                                 |
+| `funnel.forward`                  | ❌ (no Funnel)    | ✅                                 |
+| `serve.forward`                   | ⚠️ HTTP-only likely; HTTPS/Funnel unsupported | ✅              |
 
 **Implementation.** Tests reaching Headscale-unsupported features are
 tagged `@Tags(['live-tailscale'])` and gated on `TAILSCALE_API_KEY` plus

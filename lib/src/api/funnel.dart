@@ -1,96 +1,179 @@
-import 'dart:io';
+import 'dart:io' show InternetAddress, Platform;
 
 import 'package:meta/meta.dart';
 
-/// Metadata attached by the Funnel edge to each accepted connection —
-/// the public source address observed on the internet-facing side, and
-/// the TLS SNI the client used to reach this node.
+import '../errors.dart';
+import 'serve.dart';
+
+/// Public-internet publication for an existing local HTTP service.
 ///
-/// Access via `socket.funnel` (see the [FunnelSocket] extension) on a
-/// [Socket] obtained from the [SecureServerSocket] returned by
-/// [Funnel.bind]. Null when the socket came from somewhere else.
-@immutable
-class FunnelMetadata {
-  const FunnelMetadata({required this.publicSrc, this.sni});
-
-  /// Public `host:port` the Funnel edge observed. Use this for rate
-  /// limiting / geo lookups, not the socket's local address.
-  final String publicSrc;
-
-  /// SNI (server-name indication) presented by the client during the
-  /// TLS handshake, or null if none.
-  final String? sni;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is FunnelMetadata &&
-          publicSrc == other.publicSrc &&
-          sni == other.sni;
-
-  @override
-  int get hashCode => Object.hash(publicSrc, sni);
-
-  @override
-  String toString() => 'FunnelMetadata(publicSrc: $publicSrc, sni: $sni)';
-}
-
-/// Side-channel Expando keyed by accepted [Socket]. Private so consumers
-/// can only read it through the [FunnelSocket] extension; writes go
-/// through [attachFunnelMetadata] which is marked `@internal`.
-final _funnelMetadata = Expando<FunnelMetadata>('FunnelMetadata');
-
-/// Attach [metadata] to an accepted Funnel [socket] so callers can read
-/// it via `socket.funnel`.
+/// Reached via [Tailscale.funnel]. Funnel is the public counterpart to
+/// [Serve.forward]: Tailscale publishes this node's MagicDNS HTTPS name to the
+/// open internet, then proxies requests through the tailnet to the local
+/// loopback HTTP service you own.
 ///
-/// Library-internal — called by this package's Phase 5 Funnel
-/// implementation when yielding accepted sockets on the
-/// [SecureServerSocket] stream. Consumers never need to call this.
-@internal
-void attachFunnelMetadata(Socket socket, FunnelMetadata metadata) {
-  _funnelMetadata[socket] = metadata;
-}
-
-/// Read-only accessor for Funnel metadata on an accepted [Socket].
-extension FunnelSocket on Socket {
-  /// The [FunnelMetadata] observed by the Funnel edge for this
-  /// connection, or null when the socket was not accepted via
-  /// [Funnel.bind].
-  FunnelMetadata? get funnel => _funnelMetadata[this];
-}
-
-/// Public-internet HTTPS via Tailscale Funnel: expose this node to the
-/// open internet (not just the tailnet) at `https://<node>.<tailnet>.ts.net`,
-/// with edge TLS termination by Tailscale's Funnel relay. The cert is
-/// auto-provisioned (same mechanism as [Tls]), and traffic is proxied
-/// from the Funnel edge through the tailnet to this node.
+/// Requirements are controlled by the tailnet operator: HTTPS must be enabled,
+/// the node must have the Funnel node attribute, and the requested port must be
+/// allowed by policy.
 ///
-/// See <https://tailscale.com/kb/1223/funnel> for the full feature
-/// (ACL configuration, allowed ports, rate limits).
-///
-/// Reached via [Tailscale.funnel]. Requires:
-/// - Funnel enabled for this node in the tailnet's
-///   [ACLs](https://tailscale.com/kb/1018/acls) (operator action —
-///   check with an admin if [bind] returns a `featureDisabled` error).
-/// - One of Tailscale's allowed Funnel ports: **443**, **8443**,
-///   or **10000**.
-///
-/// Accepted sockets carry a [FunnelMetadata] side-channel accessible
-/// via `socket.funnel` (see [FunnelSocket]) — use that to get the
-/// internet-facing source address and TLS SNI without subclassing
-/// `dart:io` types.
-class Funnel {
-  /// Singleton namespace instance. Reach via `Tailscale.instance.funnel`.
-  static const instance = Funnel._();
-
-  const Funnel._();
-
-  /// Binds a TLS listener to the public internet at the node's Funnel
-  /// hostname. Wraps `tsnet.Server.ListenFunnel`.
+/// Funnel publications are process-scoped in this package. Close returned
+/// handles explicitly; `Tailscale.down()` also tears down package-created
+/// Funnel listeners and clears their Funnel config best-effort.
+abstract class Funnel {
+  /// Publishes `http://[localAddress]:[localPort]` on the public internet.
   ///
-  /// If [funnelOnly] is true, connections originating from the local
-  /// tailnet are rejected — use when the endpoint is intended only for
-  /// external traffic. Matches Go's `FunnelOnly()` option.
-  Future<SecureServerSocket> bind(int port, {bool funnelOnly = false}) =>
-      throw UnimplementedError('funnel.bind not yet implemented');
+  /// [publicPort] defaults to 443. Tailscale currently allows Funnel only on
+  /// policy-approved ports (commonly 443, 8443, and 10000; see
+  /// https://tailscale.com/kb/1223/funnel); unsupported ports throw
+  /// [TailscaleFunnelException] with a structured error code where the native
+  /// runtime can classify it.
+  ///
+  /// [localAddress] must be loopback (`127.0.0.1`, `::1`, or `localhost`).
+  /// This prevents accidentally publishing arbitrary LAN or metadata-service
+  /// endpoints to the public internet.
+  Future<TailscalePublishedService> forward({
+    required int localPort,
+    int publicPort = 443,
+    String localAddress = '127.0.0.1',
+    String path = '/',
+  });
+
+  /// Removes a Funnel publication for [publicPort] and [path].
+  ///
+  /// Idempotent: clearing an absent mapping succeeds. This removes the
+  /// underlying Serve path as well; use [Serve.forward] when you want tailnet-
+  /// only publication.
+  Future<void> clear({int publicPort = 443, String path = '/'});
+}
+
+/// Library-internal factory. Reach via `Tailscale.instance.funnel`.
+@internal
+Funnel createFunnel({
+  required ServeForwardFn forwardFn,
+  required ServeClearFn clearFn,
+}) => _Funnel(forwardFn: forwardFn, clearFn: clearFn);
+
+final class _Funnel implements Funnel {
+  _Funnel({required ServeForwardFn forwardFn, required ServeClearFn clearFn})
+    : _forward = forwardFn,
+      _clear = clearFn;
+
+  final ServeForwardFn _forward;
+  final ServeClearFn _clear;
+
+  @override
+  Future<TailscalePublishedService> forward({
+    required int localPort,
+    int publicPort = 443,
+    String localAddress = '127.0.0.1',
+    String path = '/',
+  }) async {
+    if (Platform.isWindows) {
+      throw const TailscaleFunnelException('Windows is not supported.');
+    }
+    final normalizedPath = _normalizePath(path);
+    final normalizedAddress = _normalizeLocalAddress(localAddress);
+    _validatePort(publicPort, 'publicPort');
+    _validatePort(localPort, 'localPort');
+
+    try {
+      final published = await _forward(
+        tailnetPort: publicPort,
+        localPort: localPort,
+        localAddress: normalizedAddress,
+        path: normalizedPath,
+        https: true,
+        funnel: true,
+      );
+      return createPublishedServiceForFunnel(
+        published: published,
+        closeFn: () => clear(publicPort: published.port, path: published.path),
+      );
+    } catch (e) {
+      if (e is TailscaleException) rethrow;
+      throw TailscaleFunnelException(
+        'funnel.forward failed for public port $publicPort',
+        cause: e,
+      );
+    }
+  }
+
+  @override
+  Future<void> clear({int publicPort = 443, String path = '/'}) async {
+    if (Platform.isWindows) {
+      throw const TailscaleFunnelException('Windows is not supported.');
+    }
+    final normalizedPath = _normalizePath(path);
+    _validatePort(publicPort, 'publicPort');
+    try {
+      await _clear(tailnetPort: publicPort, path: normalizedPath, funnel: true);
+    } catch (e) {
+      if (e is TailscaleException) rethrow;
+      throw TailscaleFunnelException(
+        'funnel.clear failed for public port $publicPort',
+        cause: e,
+      );
+    }
+  }
+}
+
+int _validatePort(int port, String name) {
+  if (port < 1 || port > 65535) {
+    throw RangeError.range(port, 1, 65535, name);
+  }
+  return port;
+}
+
+String _normalizeLocalAddress(String localAddress) {
+  final trimmed = localAddress.trim();
+  if (trimmed.isEmpty) {
+    throw ArgumentError.value(
+      localAddress,
+      'localAddress',
+      'must not be empty',
+    );
+  }
+  if (!_isLoopbackAddress(trimmed)) {
+    throw ArgumentError.value(
+      localAddress,
+      'localAddress',
+      'must be a loopback address such as 127.0.0.1, ::1, or localhost',
+    );
+  }
+  return trimmed;
+}
+
+bool _isLoopbackAddress(String address) {
+  if (address.toLowerCase() == 'localhost') return true;
+  return InternetAddress.tryParse(address)?.isLoopback ?? false;
+}
+
+String _normalizePath(String path) {
+  final trimmed = path.trim();
+  if (trimmed.isEmpty) return '/';
+  if (!trimmed.startsWith('/')) {
+    throw ArgumentError.value(path, 'path', 'must start with /');
+  }
+  if (trimmed.contains('?') || trimmed.contains('#')) {
+    throw ArgumentError.value(
+      path,
+      'path',
+      'must not include query or fragment',
+    );
+  }
+  if (_containsPathTraversal(trimmed)) {
+    throw ArgumentError.value(
+      path,
+      'path',
+      'must not include . or .. segments',
+    );
+  }
+  return trimmed;
+}
+
+bool _containsPathTraversal(String path) {
+  for (final segment in path.split('/')) {
+    if (segment == '.' || segment == '..') return true;
+  }
+  return false;
 }

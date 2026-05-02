@@ -31,6 +31,42 @@ still needs a decision.
 - Live Tailscale TLS: `tls.bind(port: 443)` served a verified HTTPS request
   from a second embedded tsnet node on a hosted HTTPS-enabled tailnet.
 
+## 2026-05-01: Serve/Funnel become publication APIs
+
+### Changes
+
+- Replaced the stale `SecureServerSocket`-shaped Funnel plan with
+  `funnel.forward({publicPort, localPort}) -> TailscalePublishedService`.
+- Added `serve.forward({tailnetPort, localPort})` for publishing an existing
+  loopback HTTP service inside the tailnet.
+- Added `DuneServeForward` / `DuneServeClear` over LocalAPI `ServeConfig`.
+  Dart does not model raw `ipn.ServeConfig` yet; the high-level helpers mutate
+  the minimal web-proxy config needed for loopback HTTP forwarding.
+- Implemented `funnel.forward` with upstream `tsnet.ListenFunnel` plus a
+  package-owned Go reverse proxy to the loopback target. The LocalAPI
+  `ServeConfig` path is reliable for tailnet Serve, but public Funnel
+  activation needs the same ingress/listener path upstream uses.
+- Treat Serve/Funnel publications as process-scoped package resources:
+  returned handles are explicitly closable, and `Stop` / `down()` drains the
+  package-owned publication registries best-effort before closing the embedded
+  node. This avoids stale background config pointing at a dead loopback server.
+- Kept the security boundary explicit: `http.bind()` remains the fd-native
+  in-process server with no loopback TCP port, while Serve/Funnel forward to an
+  app-owned local HTTP server, typically on `127.0.0.1`.
+
+### Validation
+
+- `dart analyze`
+- `go test ./...` in `go/`
+- `dart test test/unit/serve_test.dart test/unit/funnel_test.dart test/unit/errors_test.dart`
+- `dart test test/integration/ffi/bindings_test.dart`
+- Live Tailscale Serve: `serve.forward` proxied a loopback HTTP server and a
+  second embedded tsnet node fetched `https://<node>.<tailnet>.ts.net/...`.
+- Live Tailscale Funnel: `funnel.forward` proxied a loopback HTTP server through
+  the public Funnel URL on a hosted HTTPS/Funnel-enabled tailnet. The test uses
+  DNS-over-HTTPS plus `curl --resolve` to avoid local negative DNS caching while
+  preserving SNI/Host.
+
 ## 2026-04-30: Reactor readability cleanup
 
 ### Changes

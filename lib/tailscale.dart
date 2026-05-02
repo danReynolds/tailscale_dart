@@ -38,12 +38,17 @@ export 'src/api/exit_node.dart'
         ExitNodeUseByIdFn,
         ExitNodeUseAutoFn,
         ExitNodeClearFn;
-export 'src/api/funnel.dart' hide attachFunnelMetadata;
+export 'src/api/funnel.dart' hide createFunnel;
 export 'src/api/http.dart' hide createHttp, createHttpRequestForTesting;
 export 'src/api/identity.dart';
 export 'src/api/prefs.dart' hide createPrefs, PrefsGetFn, PrefsUpdateFn;
 export 'src/api/profiles.dart';
-export 'src/api/serve.dart';
+export 'src/api/serve.dart'
+    hide
+        createServe,
+        createPublishedServiceForFunnel,
+        ServeForwardFn,
+        ServeClearFn;
 export 'src/api/taildrop.dart';
 export 'src/api/tcp.dart'
     hide createTcp, TcpDialFn, TcpListenFn, TcpCloseListenerFn;
@@ -232,7 +237,10 @@ class Tailscale implements TailscaleClient {
     defaultAddressFn: () async => (await status()).ipv4,
   );
   @override
-  final Funnel funnel = Funnel.instance;
+  late final Funnel funnel = createFunnel(
+    forwardFn: _worker.serveForward,
+    clearFn: _worker.serveClear,
+  );
   @override
   late final Http http = createHttp(
     clientGetter: () => _http,
@@ -245,7 +253,10 @@ class Tailscale implements TailscaleClient {
   @override
   final Taildrop taildrop = Taildrop.instance;
   @override
-  final Serve serve = Serve.instance;
+  late final Serve serve = createServe(
+    forwardFn: _worker.serveForward,
+    clearFn: _worker.serveClear,
+  );
   @override
   late final ExitNode exitNode = createExitNode(
     currentFn: _currentExitNode,

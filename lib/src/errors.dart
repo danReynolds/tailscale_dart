@@ -182,7 +182,7 @@ final class TailscaleTaildropException extends TailscaleOperationException {
 }
 
 /// Thrown when a `serve.*` call fails — most notably a conflicting
-/// [ServeConfig] write (the ETag didn't match).
+/// Serve config write or unsupported tailnet publication.
 final class TailscaleServeException extends TailscaleOperationException {
   const TailscaleServeException(
     String message, {
@@ -190,6 +190,17 @@ final class TailscaleServeException extends TailscaleOperationException {
     super.statusCode,
     super.cause,
   }) : super('serve', message);
+}
+
+/// Thrown when a `funnel.*` call fails — most notably missing Funnel policy,
+/// unsupported public ports, or tailnet HTTPS preconditions.
+final class TailscaleFunnelException extends TailscaleOperationException {
+  const TailscaleFunnelException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('funnel', message);
 }
 
 /// Thrown when a `prefs.*` call fails.

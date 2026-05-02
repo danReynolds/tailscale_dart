@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
@@ -84,8 +85,14 @@ func Stop() {
 
 // stopLocked tears down the server and all listeners. Caller must hold mu.
 func stopLocked() {
+	var lc *local.Client
+	if srv != nil {
+		lc, _ = srv.LocalClient()
+	}
+	closeAllServePublications(lc)
 	closeAllTcpFdListeners()
 	closeAllHttpBindings()
+	closeAllFunnelForwarders(lc)
 
 	if srv != nil {
 		srv.Close()

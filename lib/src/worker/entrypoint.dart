@@ -427,6 +427,47 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.exitNodeUseAuto),
             );
+          case _WorkerServeForwardCommand request:
+            final payloadPtr = request.payloadJson.toNativeUtf8();
+            try {
+              final result =
+                  _callNativeJson(
+                        () => native.duneServeForward(payloadPtr),
+                        onError:
+                            request.operation == _WorkerOperation.funnelForward
+                            ? TailscaleFunnelException.new
+                            : TailscaleServeException.new,
+                      )
+                      as Map<String, dynamic>;
+
+              sendPort.send(
+                _WorkerServePublicationResponse(
+                  operation: request.operation,
+                  url: Uri.parse(result['url'] as String? ?? ''),
+                  port: result['port'] as int? ?? 0,
+                  localAddress: result['localAddress'] as String? ?? '',
+                  localPort: result['localPort'] as int? ?? 0,
+                  path: result['path'] as String? ?? '/',
+                  https: result['https'] as bool? ?? true,
+                  funnel: result['funnel'] as bool? ?? false,
+                ),
+              );
+            } finally {
+              calloc.free(payloadPtr);
+            }
+          case _WorkerServeClearCommand request:
+            final payloadPtr = request.payloadJson.toNativeUtf8();
+            try {
+              _callNativeJson(
+                () => native.duneServeClear(payloadPtr),
+                onError: request.operation == _WorkerOperation.funnelClear
+                    ? TailscaleFunnelException.new
+                    : TailscaleServeException.new,
+              );
+              sendPort.send(_WorkerAckResponse(request.operation));
+            } finally {
+              calloc.free(payloadPtr);
+            }
           case _WorkerDownCommand():
             native.duneStopWatch();
             native.duneStop();

@@ -17,10 +17,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"tailscale.com/client/local"
@@ -142,8 +145,11 @@ func classifyLocalAPIError(err error) (code string, status int) {
 	if code == "" {
 		lower := strings.ToLower(err.Error())
 		switch {
+		case strings.Contains(lower, "not allowed for funnel"):
+			code = "forbidden"
 		case strings.Contains(lower, "not enabled"),
 			strings.Contains(lower, "must enable"),
+			strings.Contains(lower, "not available"),
 			strings.Contains(lower, "is disabled"),
 			strings.Contains(lower, "disabled by"):
 			code = "featureDisabled"
@@ -302,6 +308,401 @@ func ExitNodeUseAuto() string {
 		return localAPIError(err)
 	}
 	return prefsToJSON(prefs)
+}
+
+type serveForwardPayload struct {
+	TailnetPort  int    `json:"tailnetPort"`
+	LocalAddress string `json:"localAddress"`
+	LocalPort    int    `json:"localPort"`
+	Path         string `json:"path"`
+	HTTPS        bool   `json:"https"`
+	Funnel       bool   `json:"funnel"`
+}
+
+type serveClearPayload struct {
+	TailnetPort int    `json:"tailnetPort"`
+	Path        string `json:"path"`
+	Funnel      bool   `json:"funnel"`
+}
+
+type servePublication struct {
+	URL          string `json:"url"`
+	Port         int    `json:"port"`
+	LocalAddress string `json:"localAddress"`
+	LocalPort    int    `json:"localPort"`
+	Path         string `json:"path"`
+	HTTPS        bool   `json:"https"`
+	Funnel       bool   `json:"funnel"`
+}
+
+var (
+	servePublicationMu sync.Mutex
+	servePublications  = map[servePublicationKey]struct{}{}
+)
+
+type servePublicationKey struct {
+	host string
+	port uint16
+	path string
+}
+
+// ServeForward publishes a local loopback HTTP service. Serve uses LocalAPI
+// ServeConfig; Funnel uses tsnet.ListenFunnel plus a package-owned reverse
+// proxy because public ingress activation follows the listener path upstream.
+func ServeForward(payloadJSON string) string {
+	var payload serveForwardPayload
+	dec := json.NewDecoder(strings.NewReader(payloadJSON))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&payload); err != nil {
+		return jsonError(fmt.Errorf("invalid serve forward JSON: %w", err))
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		return jsonError(fmt.Errorf("invalid serve forward JSON: %w", err))
+	}
+
+	lc, err := lcOr("ServeForward")
+	if err != nil {
+		return jsonError(err)
+	}
+	if payload.Funnel {
+		publication, err := startFunnelForward(payload)
+		if err != nil {
+			return localAPIError(err)
+		}
+		b, err := json.Marshal(publication)
+		if err != nil {
+			return jsonError(err)
+		}
+		return string(b)
+	}
+	ctx := context.Background()
+	st, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return localAPIError(err)
+	}
+	sc, err := lc.GetServeConfig(ctx)
+	if err != nil {
+		return localAPIError(err)
+	}
+	if sc == nil {
+		sc = new(ipn.ServeConfig)
+	}
+
+	publication, err := applyServeForward(sc, st, payload)
+	if err != nil {
+		return localAPIError(err)
+	}
+	if err := lc.SetServeConfig(ctx, sc); err != nil {
+		return localAPIError(err)
+	}
+	trackServePublication(publication.hostKey())
+
+	b, err := json.Marshal(publication)
+	if err != nil {
+		return jsonError(err)
+	}
+	return string(b)
+}
+
+// ServeClear removes one Serve/Funnel web path from this node. It is
+// intentionally idempotent: clearing an absent mapping still succeeds.
+func ServeClear(payloadJSON string) string {
+	var payload serveClearPayload
+	dec := json.NewDecoder(strings.NewReader(payloadJSON))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&payload); err != nil {
+		return jsonError(fmt.Errorf("invalid serve clear JSON: %w", err))
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		return jsonError(fmt.Errorf("invalid serve clear JSON: %w", err))
+	}
+
+	lc, err := lcOr("ServeClear")
+	if err != nil {
+		return jsonError(err)
+	}
+	if payload.Funnel {
+		if err := clearFunnelForward(lc, payload); err != nil {
+			return localAPIError(err)
+		}
+		return `{"ok":true}`
+	}
+	ctx := context.Background()
+	sc, err := lc.GetServeConfig(ctx)
+	if err != nil {
+		return localAPIError(err)
+	}
+	st, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return localAPIError(err)
+	}
+
+	if err := applyServeClear(sc, st, payload); err != nil {
+		return localAPIError(err)
+	}
+	if err := lc.SetServeConfig(ctx, sc); err != nil {
+		return localAPIError(err)
+	}
+	untrackServePublicationFromStatus(st, payload)
+	return `{"ok":true}`
+}
+
+func (p servePublication) hostKey() servePublicationKey {
+	u, err := url.Parse(p.URL)
+	if err != nil {
+		return servePublicationKey{}
+	}
+	host := u.Hostname()
+	return servePublicationKey{
+		host: host,
+		port: uint16(p.Port),
+		path: p.Path,
+	}
+}
+
+func trackServePublication(key servePublicationKey) {
+	if key.host == "" || key.port == 0 || key.path == "" {
+		return
+	}
+	servePublicationMu.Lock()
+	servePublications[key] = struct{}{}
+	servePublicationMu.Unlock()
+}
+
+func untrackServePublicationFromStatus(st *ipnstate.Status, payload serveClearPayload) {
+	dnsName, _, err := serveHostFromStatus(st)
+	if err != nil {
+		return
+	}
+	port, err := validateServePort("tailnetPort", payload.TailnetPort)
+	if err != nil {
+		return
+	}
+	mount, err := normalizeServePath(payload.Path)
+	if err != nil {
+		return
+	}
+	untrackServePublication(servePublicationKey{host: dnsName, port: port, path: mount})
+}
+
+func untrackServePublication(key servePublicationKey) {
+	servePublicationMu.Lock()
+	delete(servePublications, key)
+	servePublicationMu.Unlock()
+}
+
+func closeAllServePublications(lc *local.Client) {
+	keys := takeServePublications()
+	if lc == nil || len(keys) == 0 {
+		return
+	}
+	ctx := context.Background()
+	sc, err := lc.GetServeConfig(ctx)
+	if err != nil || sc == nil {
+		return
+	}
+	for _, key := range keys {
+		removeServeWebHandler(sc, key.host, key.port, key.path)
+	}
+	_ = lc.SetServeConfig(ctx, sc)
+}
+
+func takeServePublications() []servePublicationKey {
+	servePublicationMu.Lock()
+	defer servePublicationMu.Unlock()
+	keys := make([]servePublicationKey, 0, len(servePublications))
+	for key := range servePublications {
+		keys = append(keys, key)
+	}
+	servePublications = map[servePublicationKey]struct{}{}
+	return keys
+}
+
+func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveForwardPayload) (servePublication, error) {
+	port, err := validateServePort("tailnetPort", payload.TailnetPort)
+	if err != nil {
+		return servePublication{}, err
+	}
+	localPort, err := validateServePort("localPort", payload.LocalPort)
+	if err != nil {
+		return servePublication{}, err
+	}
+	localAddress := strings.TrimSpace(payload.LocalAddress)
+	if localAddress == "" {
+		localAddress = "127.0.0.1"
+	}
+	mount, err := normalizeServePath(payload.Path)
+	if err != nil {
+		return servePublication{}, err
+	}
+	dnsName, magicDNSSuffix, err := serveHostFromStatus(st)
+	if err != nil {
+		return servePublication{}, err
+	}
+	if st.Self == nil {
+		return servePublication{}, errors.New("serve unavailable: local node status missing")
+	}
+	if payload.Funnel {
+		if err := ipn.CheckFunnelAccess(port, st.Self); err != nil {
+			return servePublication{}, err
+		}
+	} else if payload.HTTPS && !st.Self.HasCap(tailcfg.CapabilityHTTPS) {
+		return servePublication{}, errors.New("Serve not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
+	}
+	if sc.IsTCPForwardingOnPort(port, "") {
+		return servePublication{}, fmt.Errorf("cannot serve web; already serving TCP on port %d", port)
+	}
+
+	target := "http://" + net.JoinHostPort(localAddress, strconv.Itoa(int(localPort)))
+	proxy, err := ipn.ExpandProxyTargetValue(target, []string{"http"}, "http")
+	if err != nil {
+		return servePublication{}, err
+	}
+	sc.SetWebHandler(
+		&ipn.HTTPHandler{Proxy: proxy},
+		dnsName,
+		port,
+		mount,
+		payload.HTTPS || payload.Funnel,
+		magicDNSSuffix,
+	)
+	if payload.Funnel {
+		sc.SetFunnel(dnsName, port, true)
+	}
+
+	return servePublication{
+		URL:          serveURL(payload.HTTPS || payload.Funnel, dnsName, port, mount),
+		Port:         int(port),
+		LocalAddress: localAddress,
+		LocalPort:    int(localPort),
+		Path:         mount,
+		HTTPS:        payload.HTTPS || payload.Funnel,
+		Funnel:       payload.Funnel,
+	}, nil
+}
+
+func applyServeClear(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveClearPayload) error {
+	if sc == nil {
+		return nil
+	}
+	port, err := validateServePort("tailnetPort", payload.TailnetPort)
+	if err != nil {
+		return err
+	}
+	mount, err := normalizeServePath(payload.Path)
+	if err != nil {
+		return err
+	}
+	dnsName, _, err := serveHostFromStatus(st)
+	if err != nil {
+		return err
+	}
+	if sc.IsTCPForwardingOnPort(port, "") {
+		return fmt.Errorf("cannot clear web serve; currently serving TCP on port %d", port)
+	}
+
+	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(port))))
+	web := sc.Web[hp]
+	if web == nil {
+		return nil
+	}
+	delete(web.Handlers, mount)
+	if len(web.Handlers) == 0 {
+		delete(sc.Web, hp)
+		delete(sc.TCP, port)
+		delete(sc.AllowFunnel, hp)
+	}
+	if len(sc.Web) == 0 {
+		sc.Web = nil
+	}
+	if len(sc.TCP) == 0 {
+		sc.TCP = nil
+	}
+	if len(sc.AllowFunnel) == 0 {
+		sc.AllowFunnel = nil
+	}
+	return nil
+}
+
+func removeServeWebHandler(sc *ipn.ServeConfig, host string, port uint16, mount string) {
+	if sc == nil || host == "" || port == 0 || mount == "" {
+		return
+	}
+	hp := ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
+	web := sc.Web[hp]
+	if web == nil {
+		return
+	}
+	delete(web.Handlers, mount)
+	if len(web.Handlers) == 0 {
+		delete(sc.Web, hp)
+		delete(sc.TCP, port)
+		delete(sc.AllowFunnel, hp)
+	}
+	if len(sc.Web) == 0 {
+		sc.Web = nil
+	}
+	if len(sc.TCP) == 0 {
+		sc.TCP = nil
+	}
+	if len(sc.AllowFunnel) == 0 {
+		sc.AllowFunnel = nil
+	}
+}
+
+func validateServePort(name string, port int) (uint16, error) {
+	if port <= 0 || port > 65535 {
+		return 0, fmt.Errorf("invalid %s %d: must be 1..65535", name, port)
+	}
+	return uint16(port), nil
+}
+
+func normalizeServePath(raw string) (string, error) {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		return "/", nil
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("serve path %q must start with /", raw)
+	}
+	if strings.ContainsAny(path, "?#") {
+		return "", fmt.Errorf("serve path %q must not include query or fragment", raw)
+	}
+	return path, nil
+}
+
+func serveHostFromStatus(st *ipnstate.Status) (dnsName string, magicDNSSuffix string, err error) {
+	if st == nil || st.Self == nil {
+		return "", "", errors.New("serve unavailable: local node status missing")
+	}
+	dnsName = strings.TrimSuffix(st.Self.DNSName, ".")
+	if dnsName == "" {
+		return "", "", errors.New("serve unavailable: local node DNS name missing")
+	}
+	if st.CurrentTailnet != nil {
+		magicDNSSuffix = st.CurrentTailnet.MagicDNSSuffix
+	}
+	return dnsName, magicDNSSuffix, nil
+}
+
+func serveURL(https bool, host string, port uint16, path string) string {
+	scheme := "http"
+	if https {
+		scheme = "https"
+	}
+	u := url.URL{Scheme: scheme, Host: host, Path: path}
+	if !(scheme == "http" && port == 80) && !(scheme == "https" && port == 443) {
+		u.Host = net.JoinHostPort(host, strconv.Itoa(int(port)))
+	}
+	return u.String()
 }
 
 func prefsToJSON(prefs *ipn.Prefs) string {

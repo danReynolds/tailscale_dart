@@ -399,6 +399,62 @@ final class Worker {
     await _request<_WorkerAckResponse>(const _WorkerExitNodeUseAutoCommand());
   }
 
+  Future<
+    ({
+      Uri url,
+      int port,
+      String localAddress,
+      int localPort,
+      String path,
+      bool https,
+      bool funnel,
+    })
+  >
+  serveForward({
+    required int tailnetPort,
+    required int localPort,
+    required String localAddress,
+    required String path,
+    required bool https,
+    required bool funnel,
+  }) async {
+    final payload = jsonEncode({
+      'tailnetPort': tailnetPort,
+      'localPort': localPort,
+      'localAddress': localAddress,
+      'path': path,
+      'https': https,
+      'funnel': funnel,
+    });
+    final response = await _request<_WorkerServePublicationResponse>(
+      _WorkerServeForwardCommand(payloadJson: payload, funnel: funnel),
+    );
+    return (
+      url: response.url,
+      port: response.port,
+      localAddress: response.localAddress,
+      localPort: response.localPort,
+      path: response.path,
+      https: response.https,
+      funnel: response.funnel,
+    );
+  }
+
+  Future<void> serveClear({
+    required int tailnetPort,
+    required String path,
+    required bool funnel,
+  }) async {
+    final payload = jsonEncode({
+      'tailnetPort': tailnetPort,
+      'path': path,
+      'funnel': funnel,
+    });
+    await _request<_WorkerAckResponse>(
+      _WorkerServeClearCommand(payloadJson: payload, funnel: funnel),
+    );
+  }
+
   Future<void> down() async {
     await _request<_WorkerAckResponse>(const _WorkerDownCommand());
   }

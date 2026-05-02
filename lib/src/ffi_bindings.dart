@@ -294,6 +294,18 @@ external ffi.Pointer<Utf8> duneExitNodeSuggest();
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneExitNodeUseAuto')
 external ffi.Pointer<Utf8> duneExitNodeUseAuto();
 
+/// Publishes a local HTTP service through Tailscale Serve/Funnel.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
+  symbol: 'DuneServeForward',
+)
+external ffi.Pointer<Utf8> duneServeForward(ffi.Pointer<Utf8> payloadJson);
+
+/// Removes a Tailscale Serve/Funnel publication.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
+  symbol: 'DuneServeClear',
+)
+external ffi.Pointer<Utf8> duneServeClear(ffi.Pointer<Utf8> payloadJson);
+
 /// Frees a pointer allocated by the Go layer.
 @ffi.Native<ffi.Void Function(ffi.Pointer<Utf8>)>(symbol: 'DuneFree')
 external void duneFree(ffi.Pointer<Utf8> ptr);

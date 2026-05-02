@@ -38,6 +38,7 @@ void main() {
         TailscaleTlsException('_'),
         TailscaleTaildropException('_'),
         TailscaleServeException('_'),
+        TailscaleFunnelException('_'),
         TailscalePrefsException('_'),
         TailscaleProfilesException('_'),
         TailscaleExitNodeException('_'),

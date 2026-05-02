@@ -21,6 +21,10 @@ enum _WorkerOperation {
   prefsUpdate,
   exitNodeSuggest,
   exitNodeUseAuto,
+  serveForward,
+  serveClear,
+  funnelForward,
+  funnelClear,
   down,
   logout;
 
@@ -121,6 +125,26 @@ enum _WorkerOperation {
       statusCode: statusCode,
     ),
     exitNodeUseAuto => TailscaleExitNodeException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    serveForward => TailscaleServeException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    serveClear => TailscaleServeException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    funnelForward => TailscaleFunnelException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    funnelClear => TailscaleFunnelException(
       message,
       code: code,
       statusCode: statusCode,
@@ -289,6 +313,30 @@ final class _WorkerExitNodeUseAutoCommand extends _WorkerCommand {
     : super(_WorkerOperation.exitNodeUseAuto);
 }
 
+final class _WorkerServeForwardCommand extends _WorkerCommand {
+  const _WorkerServeForwardCommand({
+    required this.payloadJson,
+    required bool funnel,
+  }) : super(
+         funnel
+             ? _WorkerOperation.funnelForward
+             : _WorkerOperation.serveForward,
+       );
+
+  final String payloadJson;
+}
+
+final class _WorkerServeClearCommand extends _WorkerCommand {
+  const _WorkerServeClearCommand({
+    required this.payloadJson,
+    required bool funnel,
+  }) : super(
+         funnel ? _WorkerOperation.funnelClear : _WorkerOperation.serveClear,
+       );
+
+  final String payloadJson;
+}
+
 final class _WorkerDownCommand extends _WorkerCommand {
   const _WorkerDownCommand() : super(_WorkerOperation.down);
 }
@@ -455,6 +503,27 @@ final class _WorkerTlsDomainsResponse extends _WorkerResponse {
     : super(_WorkerOperation.tlsDomains);
 
   final List<String> domains;
+}
+
+final class _WorkerServePublicationResponse extends _WorkerResponse {
+  const _WorkerServePublicationResponse({
+    required _WorkerOperation operation,
+    required this.url,
+    required this.port,
+    required this.localAddress,
+    required this.localPort,
+    required this.path,
+    required this.https,
+    required this.funnel,
+  }) : super(operation);
+
+  final Uri url;
+  final int port;
+  final String localAddress;
+  final int localPort;
+  final String path;
+  final bool https;
+  final bool funnel;
 }
 
 final class _WorkerDiagPingResponse extends _WorkerResponse {

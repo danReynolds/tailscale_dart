@@ -224,5 +224,38 @@ void main() {
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
       expect(parsed['error'], contains('ExitNodeSuggest called before Start'));
     });
+
+    test('serve forward returns JSON error before server startup', () {
+      final payload = jsonEncode({
+        'tailnetPort': 443,
+        'localPort': 3000,
+        'localAddress': '127.0.0.1',
+        'path': '/',
+        'https': true,
+        'funnel': false,
+      }).toNativeUtf8();
+      final resultPtr = native.duneServeForward(payload);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(payload);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('ServeForward called before Start'));
+    });
+
+    test('serve clear returns JSON error before server startup', () {
+      final payload = jsonEncode({
+        'tailnetPort': 443,
+        'path': '/',
+        'funnel': false,
+      }).toNativeUtf8();
+      final resultPtr = native.duneServeClear(payload);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(payload);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('ServeClear called before Start'));
+    });
   });
 }

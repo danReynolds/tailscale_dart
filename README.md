@@ -46,6 +46,7 @@ The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](ho
 - **App-scoped networking** — your app joins the tailnet itself instead of depending on a separate VPN
 - **Familiar HTTP client** — standard [`http.Client`](https://pub.dev/documentation/http/latest/http/Client-class.html) routed through [WireGuard](https://www.wireguard.com/)
 - **Inbound HTTP publishing** — accept tailnet HTTP requests directly with `http.bind()`
+- **Serve/Funnel forwarding** — publish an existing loopback HTTP service inside the tailnet or on the public internet
 - **Typed runtime state** — observe node status, node inventory, and errors through Dart models
 - **Persistent identity** — reconnect across launches without re-authenticating
 - **Automatic cross-platform builds** — Go layer compiles for the target via Dart [build hooks](https://dart.dev/tools/build-hooks)
@@ -130,8 +131,10 @@ Windows-native capability backend or chooses a separate Windows fallback.
 | `tls.bind({port, address})` | `Future<TailscaleListener>` | Accept TLS-terminated tailnet connections as plaintext package-native streams |
 | `tls.domains()` | `Future<List<String>>` | Auto-provisioned certificate SANs; empty when MagicDNS/HTTPS is disabled |
 | `udp.bind({port, address})` | `Future<TailscaleDatagramBinding>` | Send and receive UDP datagrams on a tailnet IP |
+| `serve.forward({tailnetPort, localPort})` | `Future<TailscalePublishedService>` | Publish an existing loopback HTTP service inside the tailnet |
+| `funnel.forward({publicPort, localPort})` | `Future<TailscalePublishedService>` | Publish an existing loopback HTTP service through Tailscale Funnel |
 
-The `funnel`, `taildrop`, `serve`, and `profiles` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
+The `taildrop` and `profiles` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
 
 ## Transport Lifecycle
 
@@ -156,6 +159,16 @@ HTTP request bodies are also single-subscription streams. Consume
 layers need to inspect it. HTTP response headers can be set with
 `response.setHeader(...)` or appended with `response.addHeader(...)` for
 multi-value headers such as `set-cookie`.
+
+`serve.forward(...)` and `funnel.forward(...)` are different from
+`http.bind(...)`: they proxy to an existing local HTTP server, typically bound
+to `127.0.0.1`. This is the right shape for reusing Shelf or `dart:io`
+servers. `http.bind(...)` is stronger when the handler lives inside this
+process because it avoids opening a loopback TCP port at all. `funnel.forward`
+uses Tailscale's native Funnel listener for the public edge and then proxies to
+the local server. Publications created by this package are process-scoped:
+close the returned `TailscalePublishedService` when done, and `down()` removes
+package-created publications best-effort before stopping the embedded node.
 
 ## Validation Demo
 

@@ -99,6 +99,7 @@ func TestClassifyLocalAPIError_FeatureDisabledFromMessage(t *testing.T) {
 		"funnel not enabled for this node",
 		"MagicDNS is disabled by operator",
 		"tsnet: you must enable HTTPS in the admin panel to proceed",
+		"Funnel not available; HTTPS must be enabled",
 	}
 	for _, msg := range cases {
 		t.Run(msg, func(t *testing.T) {
@@ -117,6 +118,13 @@ func TestClassifyLocalAPIError_UnknownError(t *testing.T) {
 	}
 	if status != 0 {
 		t.Errorf("status = %d, want 0 for non-HTTP error", status)
+	}
+}
+
+func TestClassifyLocalAPIError_FunnelPortPolicy(t *testing.T) {
+	code, _ := classifyLocalAPIError(errors.New("port 80 is not allowed for funnel"))
+	if code != "forbidden" {
+		t.Errorf("code = %q, want forbidden", code)
 	}
 }
 
@@ -284,6 +292,146 @@ func TestPrefsUpdateRejectsTrailingJSON(t *testing.T) {
 	if !strings.Contains(decoded["error"], "invalid prefs update JSON") {
 		t.Fatalf("PrefsUpdate error = %q, want invalid prefs JSON error", decoded["error"])
 	}
+}
+
+func TestApplyServeForwardHTTP(t *testing.T) {
+	sc := new(ipn.ServeConfig)
+	pub, err := applyServeForward(sc, serveTestStatus(), serveForwardPayload{
+		TailnetPort:  80,
+		LocalAddress: "127.0.0.1",
+		LocalPort:    3000,
+		Path:         "/api",
+		HTTPS:        false,
+		Funnel:       false,
+	})
+	if err != nil {
+		t.Fatalf("applyServeForward: %v", err)
+	}
+
+	if pub.URL != "http://demo.tailnet.ts.net/api" {
+		t.Fatalf("URL = %q, want http://demo.tailnet.ts.net/api", pub.URL)
+	}
+	if pub.Port != 80 || pub.LocalPort != 3000 || pub.Path != "/api" || pub.HTTPS || pub.Funnel {
+		t.Fatalf("unexpected publication: %+v", pub)
+	}
+	if sc.TCP[80] == nil || !sc.TCP[80].HTTP || sc.TCP[80].HTTPS {
+		t.Fatalf("TCP[80] = %+v, want HTTP web handler", sc.TCP[80])
+	}
+	hp := ipn.HostPort("demo.tailnet.ts.net:80")
+	handler := sc.Web[hp].Handlers["/api"]
+	if handler == nil || handler.Proxy != "http://127.0.0.1:3000" {
+		t.Fatalf("handler = %+v, want local proxy", handler)
+	}
+}
+
+func TestApplyServeForwardRejectsTCPConflict(t *testing.T) {
+	sc := &ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{
+			443: &ipn.TCPPortHandler{TCPForward: "127.0.0.1:22"},
+		},
+	}
+	_, err := applyServeForward(sc, serveTestStatus(), serveForwardPayload{
+		TailnetPort:  443,
+		LocalAddress: "127.0.0.1",
+		LocalPort:    3000,
+		Path:         "/",
+		HTTPS:        false,
+	})
+	if err == nil || !strings.Contains(err.Error(), "already serving TCP") {
+		t.Fatalf("err = %v, want TCP conflict", err)
+	}
+}
+
+func TestApplyServeClearRemovesLastHandlerAndFunnel(t *testing.T) {
+	sc := new(ipn.ServeConfig)
+	st := serveTestStatus()
+	if _, err := applyServeForward(sc, st, serveForwardPayload{
+		TailnetPort:  80,
+		LocalAddress: "127.0.0.1",
+		LocalPort:    3000,
+		Path:         "/",
+		HTTPS:        false,
+	}); err != nil {
+		t.Fatalf("applyServeForward: %v", err)
+	}
+	sc.SetFunnel("demo.tailnet.ts.net", 80, true)
+
+	if err := applyServeClear(sc, st, serveClearPayload{
+		TailnetPort: 80,
+		Path:        "/",
+	}); err != nil {
+		t.Fatalf("applyServeClear: %v", err)
+	}
+	if sc.Web != nil || sc.TCP != nil || sc.AllowFunnel != nil {
+		t.Fatalf("serve config not fully cleared: %+v", sc)
+	}
+}
+
+func TestServePublicationRegistryTracksProcessOwnedMappings(t *testing.T) {
+	resetServePublicationRegistryForTest(t)
+
+	key := servePublicationKey{host: "demo.tailnet.ts.net", port: 443, path: "/"}
+	trackServePublication(key)
+	keys := takeServePublications()
+	if len(keys) != 1 || keys[0] != key {
+		t.Fatalf("keys = %+v, want [%+v]", keys, key)
+	}
+	if keys := takeServePublications(); len(keys) != 0 {
+		t.Fatalf("registry was not drained: %+v", keys)
+	}
+}
+
+func TestRemoveServeWebHandlerPreservesOtherPaths(t *testing.T) {
+	sc := new(ipn.ServeConfig)
+	st := serveTestStatus()
+	for _, path := range []string{"/", "/api"} {
+		if _, err := applyServeForward(sc, st, serveForwardPayload{
+			TailnetPort:  443,
+			LocalAddress: "127.0.0.1",
+			LocalPort:    3000,
+			Path:         path,
+			HTTPS:        false,
+		}); err != nil {
+			t.Fatalf("applyServeForward(%q): %v", path, err)
+		}
+	}
+
+	removeServeWebHandler(sc, "demo.tailnet.ts.net", 443, "/api")
+	hp := ipn.HostPort("demo.tailnet.ts.net:443")
+	if sc.Web == nil || sc.Web[hp] == nil || sc.Web[hp].Handlers["/"] == nil {
+		t.Fatalf("root handler was removed: %+v", sc)
+	}
+	if _, ok := sc.Web[hp].Handlers["/api"]; ok {
+		t.Fatalf("/api handler still present: %+v", sc.Web[hp].Handlers)
+	}
+
+	removeServeWebHandler(sc, "demo.tailnet.ts.net", 443, "/")
+	if sc.Web != nil || sc.TCP != nil {
+		t.Fatalf("serve config not fully cleared: %+v", sc)
+	}
+}
+
+func serveTestStatus() *ipnstate.Status {
+	return &ipnstate.Status{
+		Self: &ipnstate.PeerStatus{
+			DNSName: "demo.tailnet.ts.net.",
+		},
+		CurrentTailnet: &ipnstate.TailnetStatus{
+			MagicDNSSuffix: "tailnet.ts.net",
+		},
+	}
+}
+
+func resetServePublicationRegistryForTest(t *testing.T) {
+	t.Helper()
+	servePublicationMu.Lock()
+	servePublications = map[servePublicationKey]struct{}{}
+	servePublicationMu.Unlock()
+	t.Cleanup(func() {
+		servePublicationMu.Lock()
+		servePublications = map[servePublicationKey]struct{}{}
+		servePublicationMu.Unlock()
+	})
 }
 
 // Compile-time sanity check that the error class string constants we

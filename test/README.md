@@ -20,7 +20,8 @@ layer that proves the behavior.
   embedded nodes, and verify assembled tailnet behavior.
 - **Live Tailscale tests** live in `test/live_tailscale/`. They are
   on-demand tests against Tailscale's hosted control plane for behavior
-  Headscale cannot model, such as exit-node recommendations and route approval.
+  Headscale cannot model, such as HTTPS certificate issuance, Funnel policy,
+  exit-node recommendations, and route approval.
 
 ## What Runs Where
 
@@ -34,6 +35,8 @@ layer that proves the behavior.
 | Platform smoke matrix | `tool/smoke/run_matrix.sh` | No, local/release confidence | Docker plus local Flutter platforms/devices | Validates native asset packaging and HTTP/TCP/UDP smoke behavior on macOS/iOS/Android/etc. |
 | Live Tailscale routing controls | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_routing_controls_test.dart` | No, opt-in only | Tailscale SaaS + API key | Validates hosted-control-plane behavior Headscale cannot model: exit-node route approval, `suggest`, `useAuto`, and cleanup. |
 | Live Tailscale TLS | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_tls_listener_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS-enabled tailnet | Validates successful `tls.bind` serving. Headscale can only validate the clear failure path because it does not provision Tailscale HTTPS certificates. |
+| Live Tailscale Serve | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_serve_forward_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS-enabled tailnet | Validates `serve.forward` end-to-end by proxying a loopback HTTP server and fetching it from a second embedded node. |
+| Live Tailscale Funnel | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_funnel_forward_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS/Funnel-enabled tailnet + `curl` | Validates `funnel.forward` end-to-end by proxying a loopback HTTP server and fetching its public Funnel URL. Uses DNS-over-HTTPS plus `curl --resolve` to avoid local negative DNS caching while preserving SNI/Host. |
 
 The default development loop is therefore:
 
@@ -77,6 +80,10 @@ TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
   dart test test/live_tailscale/live_routing_controls_test.dart
 TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
   dart test test/live_tailscale/live_tls_listener_test.dart
+TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
+  dart test test/live_tailscale/live_serve_forward_test.dart
+TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
+  dart test test/live_tailscale/live_funnel_forward_test.dart
 tool/test_pr_gate.sh
 tool/test_local_full.sh
 cd packages/demo_core && dart test

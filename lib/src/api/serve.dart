@@ -94,7 +94,7 @@ final class TailscalePublishedService {
 
   @override
   String toString() =>
-      'TailscalePublishedService(url: $url, local: '
+      'TailscalePublishedService(url: $url, port: $port, local: '
       '$localAddress:$localPort, path: $path, funnel: $funnel)';
 }
 
@@ -281,5 +281,19 @@ String _normalizePath(String path) {
       'must not include query or fragment',
     );
   }
+  if (_containsPathTraversal(trimmed)) {
+    throw ArgumentError.value(
+      path,
+      'path',
+      'must not include . or .. segments',
+    );
+  }
   return trimmed;
+}
+
+bool _containsPathTraversal(String path) {
+  for (final segment in path.split('/')) {
+    if (segment == '.' || segment == '..') return true;
+  }
+  return false;
 }

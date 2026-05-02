@@ -56,6 +56,7 @@ void main() {
         expect(publication.port, 443);
         expect(publication.localPort, 3000);
         expect(publication.funnel, isFalse);
+        expect(publication.toString(), contains('port: 443'));
 
         await publication.close();
         await publication.close();
@@ -93,6 +94,14 @@ void main() {
         );
         expect(
           () => serve.forward(tailnetPort: 443, localPort: 3000, path: 'api'),
+          throwsA(isA<ArgumentError>()),
+        );
+        expect(
+          () => serve.forward(
+            tailnetPort: 443,
+            localPort: 3000,
+            path: '/api/../admin',
+          ),
           throwsA(isA<ArgumentError>()),
         );
         expect(called, isFalse);

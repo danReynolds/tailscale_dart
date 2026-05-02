@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
@@ -101,7 +102,13 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 			domain:  domain,
 			targets: map[string]funnelTarget{},
 		}
-		ff.server = &http.Server{Handler: ff}
+		ff.server = &http.Server{
+			Handler: ff,
+			// Funnel is public-facing. Bound header reads without imposing a
+			// response WriteTimeout that would break long streaming responses.
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
 		ff.listener = ln
 		funnelForwarders[port] = ff
 		go func() {
@@ -169,6 +176,10 @@ func clearFunnelServeConfig(lc *local.Client, domain string, port uint16) error 
 	if domain == "" {
 		return nil
 	}
+	// startFunnelForward activates public ingress through tsnet.ListenFunnel
+	// rather than ServeConfig. This defensive sweep still clears stale
+	// AllowFunnel state left by older package versions or external tailscale
+	// serve/funnel commands for the same host:port.
 	ctx := context.Background()
 	sc, err := lc.GetServeConfig(ctx)
 	if err != nil {

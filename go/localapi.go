@@ -147,6 +147,9 @@ func classifyLocalAPIError(err error) (code string, status int) {
 		switch {
 		case strings.Contains(lower, "not allowed for funnel"):
 			code = "forbidden"
+		case strings.Contains(lower, "no funnel attribute"),
+			strings.Contains(lower, "does not have funnel attribute"):
+			code = "featureDisabled"
 		case strings.Contains(lower, "not enabled"),
 			strings.Contains(lower, "must enable"),
 			strings.Contains(lower, "not available"),
@@ -551,10 +554,9 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 		return servePublication{}, errors.New("serve unavailable: local node status missing")
 	}
 	if payload.Funnel {
-		if err := ipn.CheckFunnelAccess(port, st.Self); err != nil {
-			return servePublication{}, err
-		}
-	} else if payload.HTTPS && !st.Self.HasCap(tailcfg.CapabilityHTTPS) {
+		return servePublication{}, errors.New("funnel forwarding must use startFunnelForward")
+	}
+	if payload.HTTPS && !st.Self.HasCap(tailcfg.CapabilityHTTPS) {
 		return servePublication{}, errors.New("Serve not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
 	}
 	if sc.IsTCPForwardingOnPort(port, "") {
@@ -571,21 +573,18 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 		dnsName,
 		port,
 		mount,
-		payload.HTTPS || payload.Funnel,
+		payload.HTTPS,
 		magicDNSSuffix,
 	)
-	if payload.Funnel {
-		sc.SetFunnel(dnsName, port, true)
-	}
 
 	return servePublication{
-		URL:          serveURL(payload.HTTPS || payload.Funnel, dnsName, port, mount),
+		URL:          serveURL(payload.HTTPS, dnsName, port, mount),
 		Port:         int(port),
 		LocalAddress: localAddress,
 		LocalPort:    int(localPort),
 		Path:         mount,
-		HTTPS:        payload.HTTPS || payload.Funnel,
-		Funnel:       payload.Funnel,
+		HTTPS:        payload.HTTPS,
+		Funnel:       false,
 	}, nil
 }
 
@@ -676,7 +675,19 @@ func normalizeServePath(raw string) (string, error) {
 	if strings.ContainsAny(path, "?#") {
 		return "", fmt.Errorf("serve path %q must not include query or fragment", raw)
 	}
+	if containsServePathTraversal(path) {
+		return "", fmt.Errorf("serve path %q must not include . or .. segments", raw)
+	}
 	return path, nil
+}
+
+func containsServePathTraversal(path string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func serveHostFromStatus(st *ipnstate.Status) (dnsName string, magicDNSSuffix string, err error) {

@@ -100,6 +100,7 @@ func TestClassifyLocalAPIError_FeatureDisabledFromMessage(t *testing.T) {
 		"MagicDNS is disabled by operator",
 		"tsnet: you must enable HTTPS in the admin panel to proceed",
 		"Funnel not available; HTTPS must be enabled",
+		"node has no funnel attribute",
 	}
 	for _, msg := range cases {
 		t.Run(msg, func(t *testing.T) {
@@ -408,6 +409,16 @@ func TestRemoveServeWebHandlerPreservesOtherPaths(t *testing.T) {
 	removeServeWebHandler(sc, "demo.tailnet.ts.net", 443, "/")
 	if sc.Web != nil || sc.TCP != nil {
 		t.Fatalf("serve config not fully cleared: %+v", sc)
+	}
+}
+
+func TestNormalizeServePathRejectsTraversalSegments(t *testing.T) {
+	for _, path := range []string{"/.", "/..", "/foo/../bar", "/foo/./bar"} {
+		t.Run(path, func(t *testing.T) {
+			if _, err := normalizeServePath(path); err == nil {
+				t.Fatalf("normalizeServePath(%q) succeeded, want error", path)
+			}
+		})
 	}
 }
 

@@ -90,6 +90,10 @@ void main() {
         () => funnel.forward(localPort: 3000, localAddress: ' '),
         throwsA(isA<ArgumentError>()),
       );
+      expect(
+        () => funnel.forward(localPort: 3000, path: '/api/../admin'),
+        throwsA(isA<ArgumentError>()),
+      );
       expect(called, isFalse);
     });
   });

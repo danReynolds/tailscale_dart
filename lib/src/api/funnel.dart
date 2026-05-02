@@ -23,8 +23,10 @@ abstract class Funnel {
   /// Publishes `http://[localAddress]:[localPort]` on the public internet.
   ///
   /// [publicPort] defaults to 443. Tailscale currently allows Funnel only on
-  /// policy-approved ports; unsupported ports throw [TailscaleFunnelException]
-  /// with a structured error code where the native runtime can classify it.
+  /// policy-approved ports (commonly 443, 8443, and 10000; see
+  /// https://tailscale.com/kb/1223/funnel); unsupported ports throw
+  /// [TailscaleFunnelException] with a structured error code where the native
+  /// runtime can classify it.
   ///
   /// Bind the local service to `127.0.0.1` unless you intentionally want other
   /// host-local processes or interfaces to reach it directly.
@@ -146,5 +148,19 @@ String _normalizePath(String path) {
       'must not include query or fragment',
     );
   }
+  if (_containsPathTraversal(trimmed)) {
+    throw ArgumentError.value(
+      path,
+      'path',
+      'must not include . or .. segments',
+    );
+  }
   return trimmed;
+}
+
+bool _containsPathTraversal(String path) {
+  for (final segment in path.split('/')) {
+    if (segment == '.' || segment == '..') return true;
+  }
+  return false;
 }

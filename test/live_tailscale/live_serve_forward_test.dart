@@ -46,11 +46,13 @@ void main() {
   final suffix = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
   final hostname = 'dune-live-serve-$suffix';
   final clientHostname = 'dune-live-serve-client-$suffix';
+  final cleanupClientHostname = 'dune-live-serve-cleanup-$suffix';
 
   LiveTailscaleApi? api;
   Tailscale? tsnet;
   String? stateDir;
   String? clientStateDir;
+  String? cleanupClientStateDir;
   final deviceIdsToDelete = <String>{};
 
   Uri? controlUri() {
@@ -75,6 +77,10 @@ void main() {
       final dir = clientStateDir;
       if (dir != null) Directory(dir).deleteSync(recursive: true);
     } catch (_) {}
+    try {
+      final dir = cleanupClientStateDir;
+      if (dir != null) Directory(dir).deleteSync(recursive: true);
+    } catch (_) {}
     api?.close();
   });
 
@@ -89,6 +95,7 @@ void main() {
           .path;
       final authKey = await api!.createAuthKey();
       final clientAuthKey = await api!.createAuthKey();
+      final cleanupClientAuthKey = await api!.createAuthKey();
 
       Tailscale.init(stateDir: stateDir!);
       tsnet = Tailscale.instance;
@@ -143,8 +150,69 @@ void main() {
         expect(publication.url.toString(), 'https://${domains.first}/');
         expect(response.statusCode, 200);
         expect(response.body, 'hello from serve');
-      } finally {
+
         await publication.close();
+
+        final cleanupPublication = await tsnet!.serve.forward(
+          tailnetPort: 443,
+          localPort: localServer.port,
+          path: '/cleanup',
+        );
+        final cleanupUrl = Uri.https(domains.first, '/cleanup');
+        final cleanupResponse = await _runClientFetch(
+          stateDir: clientStateDir!,
+          hostname: clientHostname,
+          authKey: clientAuthKey,
+          controlUrl: controlUrl,
+          url: cleanupUrl,
+        );
+        expect(
+          cleanupPublication.url.toString(),
+          'https://${domains.first}/cleanup',
+        );
+        expect(cleanupResponse.statusCode, 200);
+        expect(cleanupResponse.body, 'hello from serve');
+
+        // Do not close cleanupPublication. down() should remove package-owned
+        // Serve config before stopping so the mapping does not come back after
+        // a process restart with the same state directory.
+        await tsnet!.down();
+        await recordUntil(
+          tsnet!,
+          NodeState.running,
+          () => tsnet!.up(
+            hostname: hostname,
+            authKey: authKey,
+            controlUrl: controlUri(),
+            timeout: const Duration(seconds: 120),
+          ),
+          timeout: const Duration(seconds: 120),
+        );
+
+        cleanupClientStateDir = Directory.systemTemp
+            .createTempSync('tailscale_live_serve_cleanup_client_')
+            .path;
+        final cleanupAfterRestart = await _runClientFetchOutcome(
+          stateDir: cleanupClientStateDir!,
+          hostname: cleanupClientHostname,
+          authKey: cleanupClientAuthKey,
+          controlUrl: controlUrl,
+          url: cleanupUrl,
+        );
+        try {
+          final cleanupClientDevice = await api!.waitForDevice(
+            hostname: cleanupClientHostname,
+          );
+          deviceIdsToDelete.add(cleanupClientDevice.id);
+        } catch (_) {}
+        if (cleanupAfterRestart.statusCode == 200 &&
+            cleanupAfterRestart.body == 'hello from serve') {
+          fail(
+            'serve.forward publication survived down()/restart without an '
+            'explicit close().',
+          );
+        }
+      } finally {
         await localServer.close(force: true);
         await localRequests.catchError((_) {});
       }
@@ -162,6 +230,27 @@ Future<void> _serveLoopback(HttpServer server) async {
 }
 
 Future<({int statusCode, String body})> _runClientFetch({
+  required String stateDir,
+  required String hostname,
+  required String authKey,
+  required String? controlUrl,
+  required Uri url,
+}) async {
+  final outcome = await _runClientFetchOutcome(
+    stateDir: stateDir,
+    hostname: hostname,
+    authKey: authKey,
+    controlUrl: controlUrl,
+    url: url,
+  );
+  final error = outcome.error;
+  if (error != null) {
+    throw StateError('live Serve client failed: $error');
+  }
+  return (statusCode: outcome.statusCode ?? 0, body: outcome.body);
+}
+
+Future<({int? statusCode, String body, String? error})> _runClientFetchOutcome({
   required String stateDir,
   required String hostname,
   required String authKey,
@@ -193,7 +282,7 @@ Future<({int statusCode, String body})> _runClientFetch({
         .forEach((chunk) => stderr.write('[live serve client stderr] $chunk')),
   );
 
-  final result = Completer<({int statusCode, String body})>();
+  final result = Completer<({int? statusCode, String body, String? error})>();
   unawaited(
     process.stdout
         .transform(utf8.decoder)
@@ -205,12 +294,11 @@ Future<({int statusCode, String body})> _runClientFetch({
             final decoded =
                 jsonDecode(line.substring('FETCH_ERROR '.length))
                     as Map<String, dynamic>;
-            result.completeError(
-              StateError(
-                'live Serve client failed: '
-                '${decoded['error'] as String? ?? 'unknown error'}',
-              ),
-            );
+            result.complete((
+              statusCode: null,
+              body: '',
+              error: decoded['error'] as String? ?? 'unknown error',
+            ));
             return;
           }
           if (!line.startsWith('FETCH_RESULT ')) return;
@@ -220,6 +308,7 @@ Future<({int statusCode, String body})> _runClientFetch({
           result.complete((
             statusCode: decoded['status'] as int? ?? 0,
             body: decoded['body'] as String? ?? '',
+            error: null,
           ));
         }),
   );

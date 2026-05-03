@@ -94,7 +94,7 @@ final ts = Tailscale.instance;
 await ts.up(authKey: 'tskey-auth-...');
 
 final status = await ts.status();
-print(status.self?.stableNodeId);
+print(status.stableNodeId);
 
 final res = await ts.http.client.get(
   Uri.parse('http://service.tailnet.ts.net/health'),
@@ -210,25 +210,25 @@ print(res.statusCode);</code></pre>
         </div>
         <div class="example-layout">
           <div class="example-tabs" role="tablist" aria-label="Code examples">
-            <button class="tab active" data-example="quickstart" type="button">
+            <button class="tab active" id="example-tab-quickstart" data-example="quickstart" type="button" role="tab" aria-selected="true" aria-controls="example-panel">
               <span>01</span> Join and inspect status
             </button>
-            <button class="tab" data-example="httpBind" type="button">
+            <button class="tab" id="example-tab-httpBind" data-example="httpBind" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
               <span>02</span> Handle HTTP on the tailnet
             </button>
-            <button class="tab" data-example="tcp" type="button">
+            <button class="tab" id="example-tab-tcp" data-example="tcp" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
               <span>03</span> Accept raw TCP
             </button>
-            <button class="tab" data-example="udp" type="button">
+            <button class="tab" id="example-tab-udp" data-example="udp" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
               <span>04</span> Echo UDP datagrams
             </button>
-            <button class="tab" data-example="tls" type="button">
+            <button class="tab" id="example-tab-tls" data-example="tls" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
               <span>05</span> Terminate Tailscale TLS
             </button>
-            <button class="tab" data-example="funnel" type="button">
+            <button class="tab" id="example-tab-funnel" data-example="funnel" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
               <span>06</span> Publish a local Shelf server
             </button>
-            <button class="tab" data-example="prefs" type="button">
+            <button class="tab" id="example-tab-prefs" data-example="prefs" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
               <span>07</span> Update routing prefs
             </button>
             <p class="example-note">
@@ -236,7 +236,7 @@ print(res.statusCode);</code></pre>
               <code>await ts.up(...)</code> reached a stable state.
             </p>
           </div>
-          <div class="code-window">
+          <div class="code-window" id="example-panel" role="tabpanel" aria-labelledby="example-tab-quickstart" tabindex="0">
             <div class="window-bar">
               <span></span><span></span><span></span>
               <strong id="example-title">quickstart.dart</strong>

@@ -9,29 +9,32 @@ final ts = Tailscale.instance;
 await ts.up(authKey: 'tskey-auth-...');
 
 final status = await ts.status();
-print(status.self?.stableNodeId);
+print(status.stableNodeId);
 
 final onlineNodes = await ts.nodes();
 for (final node in onlineNodes.where((node) => node.online)) {
-  print('\${node.hostname}: \${node.ipv4}');
+  print('\${node.hostName}: \${node.ipv4}');
 }`,
   },
   httpBind: {
     title: "http_bind.dart",
-    code: `final server = await ts.http.bind(tailnetPort: 8080);
+    code: `final server = await ts.http.bind(port: 8080);
 
 server.requests.listen((request) async {
   final identity = await ts.whois(request.remote.address);
 
   if (identity?.tags.contains('tag:internal') != true) {
     await request.respond(
-      TailscaleHttpResponse.text('forbidden', statusCode: 403),
+      statusCode: 403,
+      headers: {'content-type': 'text/plain'},
+      body: 'forbidden',
     );
     return;
   }
 
   await request.respond(
-    TailscaleHttpResponse.json({'ok': true}),
+    headers: {'content-type': 'application/json'},
+    body: '{"ok":true}',
   );
 });`,
   },
@@ -121,6 +124,7 @@ print(await ts.exitNode.current());`,
 const codeEl = document.querySelector("#example-code");
 const titleEl = document.querySelector("#example-title");
 const copyButton = document.querySelector(".copy-button");
+const panel = document.querySelector("#example-panel");
 const tabs = [...document.querySelectorAll(".tab")];
 
 function setExample(name) {
@@ -128,12 +132,34 @@ function setExample(name) {
   codeEl.textContent = example.code;
   titleEl.textContent = example.title;
   tabs.forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.example === name);
+    const active = tab.dataset.example === name;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    if (active) {
+      panel.setAttribute("aria-labelledby", tab.id);
+    }
   });
 }
 
 tabs.forEach((tab) => {
   tab.addEventListener("click", () => setExample(tab.dataset.example));
+  tab.addEventListener("keydown", (event) => {
+    const current = tabs.indexOf(tab);
+    const next = {
+      ArrowDown: (current + 1) % tabs.length,
+      ArrowRight: (current + 1) % tabs.length,
+      ArrowUp: (current - 1 + tabs.length) % tabs.length,
+      ArrowLeft: (current - 1 + tabs.length) % tabs.length,
+      Home: 0,
+      End: tabs.length - 1,
+    }[event.key];
+
+    if (next === undefined) return;
+    event.preventDefault();
+    tabs[next].focus();
+    setExample(tabs[next].dataset.example);
+  });
 });
 
 copyButton.addEventListener("click", async () => {

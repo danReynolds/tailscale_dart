@@ -1,11 +1,12 @@
 <img width="200" height="200" alt="flutter_tailscale" src="https://github.com/user-attachments/assets/56a2a857-c5e7-42eb-9366-506daa56c5f9" />
 
 
-# Flutter + Tailscale
+# Tailscale for Dart and Flutter
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/danReynolds/tailscale_dart/blob/main/LICENSE)
 [![Dart 3.10+](https://img.shields.io/badge/Dart-3.10+-0175C2?logo=dart&logoColor=white)](https://dart.dev)
 [![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)]()
+[![Website](https://img.shields.io/badge/site-GitHub%20Pages-70ffb1.svg)](https://danreynolds.github.io/tailscale_dart/)
 
 Bring a Flutter or plain Dart app onto your tailnet as its own node — talk to other nodes, expose local services, and add private connectivity without a system-wide VPN.
 
@@ -32,14 +33,19 @@ server.requests.listen((request) async {
 });
 ```
 
-### Install
+## Install
 
 ```yaml
 dependencies:
   tailscale: ^0.3.0
 ```
 
-The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](hook/build.dart) that compiles Go for the target platform automatically. Subsequent builds are cached and only recompile when Go source changes.
+The first `dart run`, `dart test`, or `flutter build` triggers a [build hook](https://github.com/danReynolds/tailscale_dart/blob/main/hook/build.dart) that compiles Go for the target platform automatically. Subsequent builds are cached and only recompile when Go source changes.
+
+Prerequisites:
+
+- Go 1.25 or newer on `PATH`
+- the normal native toolchain for the target platform (Xcode for iOS/macOS, Android NDK via Flutter for Android, C toolchain for Linux)
 
 ## Features
 
@@ -115,7 +121,7 @@ Windows-native capability backend or chooses a separate Windows fallback.
 | Member | Type | Description |
 |--------|------|-------------|
 | `init({stateDir, logLevel})` | `static void` | Configure once at startup. Stores state in `stateDir/tailscale/`. |
-| `instance` | `static Tailscale` | Singleton accessor |
+| `instance` | `static Tailscale` | Singleton accessor. App code that needs testability can depend on `TailscaleClient`. |
 | `up({hostname, authKey, controlUrl, timeout})` | `Future<TailscaleStatus>` | Start the node and resolve on the first stable state. |
 | `status()` | `Future<TailscaleStatus>` | Current local-node snapshot (state, IPs, health). Before `up()`, returns `stopped` or `noState` based on whether persisted credentials exist. |
 | `nodes()` | `Future<List<TailscaleNode>>` | Current node snapshot |
@@ -134,7 +140,7 @@ Windows-native capability backend or chooses a separate Windows fallback.
 | `serve.forward({tailnetPort, localPort})` | `Future<TailscalePublishedService>` | Publish an existing loopback HTTP service inside the tailnet |
 | `funnel.forward({publicPort, localPort})` | `Future<TailscalePublishedService>` | Publish an existing loopback HTTP service through Tailscale Funnel |
 
-The `taildrop` and `profiles` namespaces are declared and documented but throw `UnimplementedError` in this release — see [`docs/api-roadmap.md`](docs/api-roadmap.md) for the phased rollout plan.
+The `taildrop` and `profiles` namespaces are declared and documented but throw `UnimplementedError` in this release — see the [API roadmap](https://github.com/danReynolds/tailscale_dart/blob/main/doc/api-roadmap.md) for the remaining feature plan.
 
 ## Transport Lifecycle
 
@@ -175,8 +181,8 @@ publications best-effort before stopping the embedded node.
 ## Validation Demo
 
 The repo includes a reusable demo harness in
-[`packages/demo_core`](packages/demo_core) and a Flutter validation app in
-[`packages/demo_flutter`](packages/demo_flutter). The Flutter app can bring up a
+[`packages/demo_core`](https://github.com/danReynolds/tailscale_dart/tree/main/packages/demo_core) and a Flutter validation app in
+[`packages/demo_flutter`](https://github.com/danReynolds/tailscale_dart/tree/main/packages/demo_flutter). The Flutter app can bring up a
 node, expose HTTP/TCP/UDP echo services, list nodes, and probe another node from
 macOS, iOS, or Android.
 
@@ -262,7 +268,7 @@ A node on the tailnet. Parsed from Go's [`ipnstate.PeerStatus`](https://pkg.go.d
 └─────────────┘                 └──────────────┘                      └─────────────┘
 ```
 
-The Go layer wraps [`tailscale.com/tsnet`](https://pkg.go.dev/tailscale.com/tsnet) and compiles to a platform-specific native library. A Dart [build hook](hook/build.dart) handles compilation — detecting the target OS/architecture, finding the Go toolchain, cross-compiling with the appropriate flags, and registering the result as a [native code asset](https://dart.dev/interop/c-interop#native-assets).
+The Go layer wraps [`tailscale.com/tsnet`](https://pkg.go.dev/tailscale.com/tsnet) and compiles to a platform-specific native library. A Dart [build hook](https://github.com/danReynolds/tailscale_dart/blob/main/hook/build.dart) handles compilation — detecting the target OS/architecture, finding the Go toolchain, cross-compiling with the appropriate flags, and registering the result as a [native code asset](https://dart.dev/interop/c-interop#native-assets).
 
 **Dart -> Go** calls use [`@Native`](https://api.dart.dev/dart-ffi/Native-class.html) FFI annotations and run on background isolates so the main isolate is never blocked.
 
@@ -282,8 +288,8 @@ cd packages/demo_flutter && flutter test
 ```
 
 The E2E suite starts a [Headscale](https://github.com/juanfont/headscale) server in Docker, creates an ephemeral auth key, connects a real embedded node, verifies IP assignment and node discovery, then cleans up. No Tailscale account needed.
-See [docs/testing.md](docs/testing.md) for the test layout and placement rules.
+See the [testing guide](https://github.com/danReynolds/tailscale_dart/blob/main/doc/testing.md) for the test layout and placement rules.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/danReynolds/tailscale_dart/blob/main/LICENSE)

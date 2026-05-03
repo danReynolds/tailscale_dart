@@ -440,7 +440,7 @@ correctness and lifecycle hardening rather than API expansion.
 
 - Updated the roadmap and API status docs so completed Phase 1/2/3/4 items,
   mobile fd validation, and UDP transport status match the implementation.
-- Added `docs/pr-readiness.md` to frame the PR as a capability-first POSIX
+- Added `doc/pr-readiness.md` to frame the PR as a capability-first POSIX
   backend replacement, with old session transport work explicitly out of scope.
 - Cleaned generated demo-package artifacts from the working tree and added
   ignore coverage for local editor state.

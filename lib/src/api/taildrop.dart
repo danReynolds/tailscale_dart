@@ -100,8 +100,8 @@ class Taildrop {
       );
 
   /// Opens a byte stream over a received file. The caller decides where
-  /// to persist the contents. Does not delete — call [delete] (or use
-  /// [deleteOnRead] in a future revision) once the bytes are durable.
+  /// to persist the contents. Does not delete — call [delete] once the bytes
+  /// are durable.
   Stream<Uint8List> openRead(String name) =>
       throw UnimplementedError('taildrop.openRead not yet implemented');
 

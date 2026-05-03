@@ -78,7 +78,7 @@ abstract interface class TailscaleConnection {
   ///
   /// This closes the local read and write sides. It may discard unread input
   /// and fail pending writes. To only signal EOF to the remote while continuing
-  /// to read, call [output.close] instead.
+  /// to read, call [TailscaleConnectionOutput.close] instead.
   Future<void> close();
 
   /// Immediate local teardown/reset.

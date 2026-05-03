@@ -4,6 +4,7 @@ pubspec.lock
 !packages/demo_flutter/pubspec.lock
 !packages/demo_smoke_flutter/pubspec.lock
 .vscode/
+site/api/
 
 # Go build artifacts (the build hook generates these)
 go/libdune_tsnet.*

@@ -14,7 +14,7 @@ enum NodeState {
   /// No persisted credentials and the engine has not been started.
   ///
   /// This is the initial state when the node has never authenticated.
-  /// An [authKey] must be provided to [Tailscale.up] to proceed.
+  /// An auth key must be provided to [Tailscale.up] to proceed.
   noState,
 
   /// The node needs authentication. Open

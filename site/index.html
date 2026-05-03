@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tailscale.dart developer guide</title>
+    <meta
+      name="description"
+      content="Dart and Flutter bindings for embedded Tailscale tsnet. HTTP, TCP, UDP, TLS, Serve, Funnel, routing controls, diagnostics, and generated Dart API docs."
+    />
+    <meta name="theme-color" content="#061614" />
+    <meta property="og:title" content="tailscale.dart developer guide" />
+    <meta
+      property="og:description"
+      content="Use Go tsnet from Dart with package-native APIs and fd-backed transports."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=JetBrains+Mono:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="tailscale.dart home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 42 42" role="img">
+            <path d="M21 3 37 12v18l-16 9L5 30V12L21 3Z" />
+            <path d="M13 16h16M13 21h16M13 26h10" />
+          </svg>
+        </span>
+        <span>tailscale.dart</span>
+      </a>
+      <nav aria-label="Main navigation">
+        <a href="#examples">Examples</a>
+        <a href="#support">Support table</a>
+        <a href="#architecture">Architecture</a>
+        <a href="api/">Dart docs</a>
+        <a href="https://github.com/danReynolds/tailscale_dart">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero section-shell">
+        <div class="hero-copy">
+          <p class="eyebrow">Dart package over Go tsnet</p>
+          <h1>Use a Tailscale node from Dart.</h1>
+          <p class="hero-lede">
+            <code>package:tailscale</code> embeds upstream Go
+            <code>tsnet</code> and exposes Dart APIs for lifecycle, nodes,
+            HTTP, TCP, UDP, TLS, Serve, Funnel, routing controls, and
+            diagnostics.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="api/">Open Dart docs</a>
+            <a class="button button-secondary" href="#examples">Browse examples</a>
+            <a class="button button-secondary" href="https://pub.dev/packages/tailscale">pub.dev</a>
+          </div>
+          <ul class="api-index" aria-label="Representative APIs">
+            <li><code>ts.http.bind()</code><span>private HTTP listener</span></li>
+            <li><code>ts.tcp.bind()</code><span>raw streams</span></li>
+            <li><code>ts.serve.forward()</code><span>existing local server</span></li>
+            <li><code>ts.prefs.updateMasked()</code><span>routing controls</span></li>
+          </ul>
+          <dl class="runtime-facts" aria-label="Implementation summary">
+            <div>
+              <dt>Control plane</dt>
+              <dd>Auth, prefs, nodes, whois, diagnostics via tsnet and LocalAPI.</dd>
+            </div>
+            <div>
+              <dt>Data plane</dt>
+              <dd>Owned listeners use fd-backed streams/datagrams, not localhost proxying.</dd>
+            </div>
+            <div>
+              <dt>Platforms</dt>
+              <dd>macOS, iOS, Android, Linux. Windows is intentionally not supported yet.</dd>
+            </div>
+          </dl>
+        </div>
+
+        <aside class="quickstart-card" aria-label="Quick start code">
+          <div class="window-bar">
+            <span></span><span></span><span></span>
+            <strong>quick_start.dart</strong>
+          </div>
+          <pre><code>import 'package:tailscale/tailscale.dart';
+
+Tailscale.init(stateDir: '/app/tailscale');
+final ts = Tailscale.instance;
+
+await ts.up(authKey: 'tskey-auth-...');
+
+final status = await ts.status();
+print(status.stableNodeId);
+
+final res = await ts.http.client.get(
+  Uri.parse('http://service.tailnet.ts.net/health'),
+);
+print(res.statusCode);</code></pre>
+        </aside>
+      </section>
+
+      <section id="support" class="section-shell support-section">
+        <div class="section-heading">
+          <p class="eyebrow">Feature support</p>
+          <h2>What is implemented today.</h2>
+          <p>
+            This is intentionally explicit. Implemented means there is a typed
+            Dart API and coverage in unit, integration, Headscale, or live
+            Tailscale tests depending on what the feature requires.
+          </p>
+        </div>
+        <p class="table-caption">
+          Current package surface. Features marked implemented have typed Dart
+          APIs and automated coverage at the tier listed in the repository test docs.
+        </p>
+        <div class="support-table-wrap">
+          <table class="support-table">
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th>Dart API</th>
+                <th>Status</th>
+                <th>Upstream / notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Node lifecycle</td>
+                <td><code>init</code>, <code>up</code>, <code>down</code>, <code>logout</code>, <code>status</code></td>
+                <td><span class="status done">Implemented</span></td>
+                <td>Backed by embedded <code>tsnet.Server</code> lifecycle.</td>
+              </tr>
+              <tr>
+                <td>Nodes and identity</td>
+                <td><code>nodes()</code>, <code>nodeByIp()</code>, <code>whois()</code></td>
+                <td><span class="status done">Implemented</span></td>
+                <td>Stable node IDs and LocalAPI identity data for authorization checks.</td>
+              </tr>
+              <tr>
+                <td>Outbound HTTP</td>
+                <td><code>http.client</code></td>
+                <td><span class="status done">Implemented</span></td>
+                <td>Standard <code>package:http.Client</code> routed through <code>tsnet.HTTPClient</code>.</td>
+              </tr>
+              <tr>
+                <td>Inbound HTTP</td>
+                <td><code>http.bind(port)</code></td>
+                <td><span class="status done">Implemented</span></td>
+                <td>fd-backed request and response bodies; no loopback reverse proxy.</td>
+              </tr>
+              <tr>
+                <td>Raw transports</td>
+                <td><code>tcp</code>, <code>udp</code>, <code>tls.bind</code></td>
+                <td><span class="status done">Implemented</span></td>
+                <td>Package-native connections/datagrams over Go-owned tailnet sockets.</td>
+              </tr>
+              <tr>
+                <td>Serve and Funnel</td>
+                <td><code>serve.forward</code>, <code>funnel.forward</code></td>
+                <td><span class="status done">Implemented</span></td>
+                <td>Forward an existing loopback HTTP server to the tailnet or Funnel edge.</td>
+              </tr>
+              <tr>
+                <td>Routing controls</td>
+                <td><code>prefs</code>, <code>exitNode</code></td>
+                <td><span class="status done">Implemented</span></td>
+                <td>LocalAPI prefs wrappers; live Tailscale coverage for hosted-only behavior.</td>
+              </tr>
+              <tr>
+                <td>Diagnostics</td>
+                <td><code>diag.ping</code>, <code>metrics</code>, <code>derpMap</code>, <code>checkUpdate</code></td>
+                <td><span class="status done">Implemented</span></td>
+                <td>Typed diagnostic wrappers with structured error codes.</td>
+              </tr>
+              <tr>
+                <td>Taildrop</td>
+                <td><code>taildrop.*</code></td>
+                <td><span class="status planned">Not yet</span></td>
+                <td>Public types exist; transfer implementation is deferred.</td>
+              </tr>
+              <tr>
+                <td>Profiles</td>
+                <td><code>profiles.*</code></td>
+                <td><span class="status planned">Not yet</span></td>
+                <td>Multi-profile/account management is demand-gated.</td>
+              </tr>
+              <tr>
+                <td>Windows</td>
+                <td>All data-plane APIs</td>
+                <td><span class="status blocked">Unsupported</span></td>
+                <td>Needs a Windows-native backend; POSIX fd reactor is not portable.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="examples" class="section-shell examples-section">
+        <div class="section-heading">
+          <p class="eyebrow">API examples</p>
+          <h2>Common flows in code.</h2>
+          <p>
+            These snippets use the public package API. The full generated Dart
+            reference is published at <a href="api/">/api/</a>.
+          </p>
+        </div>
+        <div class="example-layout">
+          <div class="example-tabs" role="tablist" aria-label="Code examples">
+            <button class="tab active" id="example-tab-quickstart" data-example="quickstart" type="button" role="tab" aria-selected="true" aria-controls="example-panel">
+              <span>01</span> Join and inspect status
+            </button>
+            <button class="tab" id="example-tab-httpBind" data-example="httpBind" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
+              <span>02</span> Handle HTTP on the tailnet
+            </button>
+            <button class="tab" id="example-tab-tcp" data-example="tcp" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
+              <span>03</span> Accept raw TCP
+            </button>
+            <button class="tab" id="example-tab-udp" data-example="udp" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
+              <span>04</span> Echo UDP datagrams
+            </button>
+            <button class="tab" id="example-tab-tls" data-example="tls" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
+              <span>05</span> Terminate Tailscale TLS
+            </button>
+            <button class="tab" id="example-tab-funnel" data-example="funnel" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
+              <span>06</span> Publish a local Shelf server
+            </button>
+            <button class="tab" id="example-tab-prefs" data-example="prefs" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
+              <span>07</span> Update routing prefs
+            </button>
+            <p class="example-note">
+              Examples assume <code>Tailscale.init</code> has already run and
+              <code>await ts.up(...)</code> reached a stable state.
+            </p>
+          </div>
+          <div class="code-window" id="example-panel" role="tabpanel" aria-labelledby="example-tab-quickstart" tabindex="0">
+            <div class="window-bar">
+              <span></span><span></span><span></span>
+              <strong id="example-title">quickstart.dart</strong>
+              <button class="copy-button" type="button">copy</button>
+            </div>
+            <pre><code id="example-code"></code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="architecture" class="section-shell architecture-section">
+        <div class="section-heading">
+          <p class="eyebrow">Architecture</p>
+          <h2>Upstream semantics, Dart-shaped surface.</h2>
+          <p>
+            Control calls cross a worker isolate into Go. High-volume transport
+            I/O uses fd capabilities and a shared POSIX reactor. Forwarding APIs
+            are different by design: they publish a local HTTP server the app
+            already owns.
+          </p>
+        </div>
+        <div class="architecture-grid">
+          <div class="topology-card" aria-label="Runtime topology diagram">
+            <div class="window-bar">
+              <span></span><span></span><span></span>
+              <strong>runtime topology</strong>
+            </div>
+            <svg class="network-map" viewBox="0 0 640 420" aria-hidden="true">
+              <defs>
+                <linearGradient id="meshGradient" x1="0" x2="1">
+                  <stop offset="0" stop-color="#70ffb1" />
+                  <stop offset="0.52" stop-color="#50e7ff" />
+                  <stop offset="1" stop-color="#ffd76d" />
+                </linearGradient>
+                <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+                  <stop offset="0" stop-color="#50e7ff" stop-opacity="0.52" />
+                  <stop offset="1" stop-color="#50e7ff" stop-opacity="0" />
+                </radialGradient>
+                <filter id="softGlow">
+                  <feGaussianBlur stdDeviation="5" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+
+              <circle class="mesh-orbit mesh-orbit-a" cx="326" cy="210" r="168" />
+              <circle class="mesh-orbit mesh-orbit-b" cx="326" cy="210" r="116" />
+              <circle class="core-aura" cx="326" cy="210" r="104" />
+              <path class="mesh-route route-http" d="M154 214 C218 104 346 92 478 114" />
+              <path class="mesh-route route-tcp" d="M160 252 C250 338 386 344 516 280" />
+              <path class="mesh-route route-udp" d="M182 178 C250 196 386 205 494 202" />
+              <path class="mesh-route route-funnel" d="M184 282 C270 238 376 160 536 164" />
+              <circle class="packet packet-one" cx="244" cy="134" r="5" />
+              <circle class="packet packet-two" cx="430" cy="318" r="4.5" />
+              <circle class="packet packet-three" cx="402" cy="202" r="4" />
+
+              <g class="app-window">
+                <rect x="58" y="126" width="132" height="156" rx="22" />
+                <path d="M82 166h72M82 194h86M82 222h58" />
+                <text x="124" y="258">Dart app</text>
+              </g>
+              <g class="runtime-core">
+                <circle cx="326" cy="210" r="70" />
+                <circle cx="326" cy="210" r="45" />
+                <path d="M302 210h48M326 186v48" />
+                <text x="326" y="214">tsnet</text>
+              </g>
+              <g class="peer peer-http">
+                <circle cx="494" cy="112" r="42" />
+                <text x="494" y="118">HTTP</text>
+              </g>
+              <g class="peer peer-udp">
+                <circle cx="504" cy="202" r="34" />
+                <text x="504" y="207">UDP</text>
+              </g>
+              <g class="peer peer-tcp">
+                <circle cx="526" cy="280" r="40" />
+                <text x="526" y="286">TCP</text>
+              </g>
+              <g class="peer peer-funnel">
+                <circle cx="546" cy="164" r="28" />
+                <text x="546" y="169">TLS</text>
+              </g>
+            </svg>
+          </div>
+          <div class="architecture-notes">
+            <article>
+              <h3>Go owns Tailscale state</h3>
+              <p>Authentication, WireGuard, ACLs, MagicDNS, DERP, TLS certs, and socket establishment stay inside upstream tsnet.</p>
+            </article>
+            <article>
+              <h3>Dart owns application shape</h3>
+              <p>Callers work with package-native clients, listeners, datagrams, streams, node objects, prefs, and diagnostics.</p>
+            </article>
+            <article>
+              <h3>Owned transports use fds</h3>
+              <p><code>http.bind</code>, <code>tcp.bind</code>, <code>udp.bind</code>, and <code>tls.bind</code> move data through private fd capabilities and the shared reactor.</p>
+            </article>
+            <article>
+              <h3>Forwarding is intentionally loopback</h3>
+              <p><code>serve.forward</code> and <code>funnel.forward</code> are for existing local HTTP servers, such as Shelf or <code>dart:io</code>.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="install" class="section-shell install-section">
+        <div class="install-card">
+          <div>
+            <p class="eyebrow">Install</p>
+            <h2>Package metadata and docs.</h2>
+            <p>
+              Requires Dart 3.10+, Go 1.25+, and the native toolchain for the
+              target platform. Supported today: Android, iOS, macOS, Linux.
+            </p>
+          </div>
+          <pre><code>dependencies:
+  tailscale: ^0.3.0</code></pre>
+          <div class="install-actions">
+            <a class="button button-primary" href="https://pub.dev/packages/tailscale">Open pub.dev</a>
+            <a class="button button-secondary" href="api/">Generated Dart docs</a>
+            <a class="button button-secondary" href="https://github.com/danReynolds/tailscale_dart">Source</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>MIT licensed. Built around upstream tsnet with package-native Dart APIs for app-scoped tailnet networking.</p>
+      <a href="#top">Back to top</a>
+    </footer>
+
+    <script src="main.js"></script>
+  </body>
+</html>

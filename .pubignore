@@ -1,0 +1,12 @@
+.dart_tool/
+build/
+benchmark/
+site/
+packages/
+tool/
+.github/
+.claude/
+doc/current-architecture-and-api-feedback.md
+doc/pr-readiness.md
+doc/rfc-*.md
+doc/runtime-transport-journal.md

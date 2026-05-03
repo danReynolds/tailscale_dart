@@ -1,15 +1,15 @@
 # API status & usage
 
 Reference for the public API surface of `package:tailscale`, grouped by
-namespace. For each namespace: a description, the phase that completes
-it, and a table of APIs with status, purpose, and a copy-pasteable
+namespace. For each namespace: a description, current support status,
+purpose, and a copy-pasteable
 example. For the forward-looking phase plan, see
 [`api-roadmap.md`](api-roadmap.md).
 
-The **core v1 path** is lifecycle + private HTTP/TCP +
-identity/diagnostics + the LocalAPI escape hatch. Advanced/optional
-namespaces remain tracked here, but they do not block a useful v1 for
-embedded Dart apps.
+The **core public path** is lifecycle + private HTTP/TCP/UDP/TLS,
+Serve/Funnel forwarding, identity, diagnostics, prefs, and exit-node controls.
+Optional namespaces remain tracked here, but they do not block a useful release
+for embedded Dart apps.
 
 **Legend:**
 - ✅ Working — callable today, tested, returns real values.
@@ -29,29 +29,27 @@ HTTP, TCP, UDP, TLS, Funnel, and future service listeners follow
 `tsnet`; node introspection, diagnostics, prefs, profiles, serve
 config, exit nodes, and taildrop follow LocalAPI via `local.Client`.
 
-**Version note:** the current repo pin is `tailscale.com v1.92.2`. Some
-upstream APIs documented below as planned alignment work, especially
-Tailscale Services hosting via `tsnet.Server.ListenService`, require a
-module bump before they can land here.
+**Version note:** the current repo pin is `tailscale.com v1.92.2`. Keep
+upstream version skew visible when adding new wrappers.
 
 ## Namespace overview
 
 | Namespace               | Feature                                                           | Track     | Status           |
 | ----------------------- | ----------------------------------------------------------------- | --------- | ---------------- |
-| [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Core      | Phase 1 ✅        |
-| [`http`](#http)         | Outbound HTTP client + inbound request server                     | Core      | Phase 1 ✅        |
-| [`tcp`](#tcp)           | Raw TCP between tailnet nodes                                      | Core      | Phase 3 ✅        |
+| [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Core      | ✅        |
+| [`http`](#http)         | Outbound HTTP client + inbound request server                     | Core      | ✅        |
+| [`tcp`](#tcp)           | Raw TCP between tailnet nodes                                      | Core      | ✅        |
 | [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | ✅             |
-| [`udp`](#udp)           | UDP datagram bindings on a tailnet IP                               | Advanced  | Phase 5 ✅        |
+| [`udp`](#udp)           | UDP datagram bindings on a tailnet IP                               | Advanced  | ✅        |
 | [`funnel`](#funnel)     | Public-internet HTTPS forwarding via Tailscale Funnel              | Optional  | ✅               |
 | [`taildrop`](#taildrop) | Node-to-node file transfer                                          | Optional  | Planned          |
 | [`serve`](#serve)       | Tailnet publication for existing local HTTP services                | Optional  | ✅               |
-| [`exitNode`](#exitnode) | Route outbound traffic through another node                                | Advanced  | Phase 6 ✅        |
+| [`exitNode`](#exitnode) | Route outbound traffic through another node                                | Advanced  | ✅        |
 | [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Optional  | Planned          |
-| [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Advanced  | Phase 6 ✅        |
-| [`diag`](#diag)         | Ping, metrics, DERP map, update check                                | Core      | Phase 4 ✅        |
-| [`whois`](#whois-top-level) | Resolve a tailnet IP to node identity                             | Core      | Phase 4 ✅        |
-| [Errors](#errors)       | Structured exception taxonomy                                        | Core      | Phase 2 ✅        |
+| [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Advanced  | ✅        |
+| [`diag`](#diag)         | Ping, metrics, DERP map, update check                                | Core      | ✅        |
+| [`whois`](#whois-top-level) | Resolve a tailnet IP to node identity                             | Core      | ✅        |
+| [Errors](#errors)       | Structured exception taxonomy                                        | Core      | ✅        |
 
 ## Lifecycle (top-level)
 
@@ -64,7 +62,7 @@ startup fails or the implementation gives up waiting before a stable
 state is reached, it should throw `TailscaleUpException` rather than
 returning a transitional state such as `starting`.
 
-**Completed in:** Phase 1 (parity) — fully working.
+**Status:** fully working.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -86,7 +84,7 @@ every request over the tailnet tunnel; `bind` accepts incoming tailnet
 HTTP and exposes package-native request/response objects backed by fd
 streams.
 
-**Completed in:** Phase 1 — fully working.
+**Status:** fully working.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -101,13 +99,8 @@ transport types instead of fake `dart:io` sockets: TCP is a full-duplex
 `TailscaleConnection` with single-subscription `input` and an explicit
 `output` write half.
 
-**Completed in:** Phase 3 — POSIX fd-backed TCP. Go owns tailnet connection
+**Status:** POSIX fd-backed TCP. Go owns tailnet connection
 establishment and hands Dart a private fd-backed local capability.
-
-**Tracked upstream gap:** `tsnet.Server.ListenService` exists upstream
-as of `tailscale.com v1.94.1`, but is not yet exposed here. The roadmap
-tracks that as a future `tcp`-aligned listener once the module pin is
-bumped; it should not force a separate `services` namespace by itself.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -124,8 +117,8 @@ valuable.
 
 **Status:** implemented with package-native fd-backed listeners.
 **Requires:** MagicDNS **and** HTTPS enabled on the tailnet by the
-operator. Headscale CI covers only the clear unsupported failure path;
-successful TLS serving requires live Tailscale validation.
+operator. Headscale CI covers only the clear unsupported failure path; live
+Tailscale tests cover successful TLS serving against hosted Tailscale.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -139,7 +132,7 @@ node's current IPv4 tailnet address. Pass `address` to bind a specific
 local tailnet IP. Datagrams preserve message boundaries and expose the
 remote tailnet endpoint on each delivery.
 
-**Completed in:** Phase 5 — POSIX fd-backed UDP.
+**Status:** POSIX fd-backed UDP.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -298,7 +291,7 @@ Observability and diagnostics. Read-only — nothing here affects
 connectivity. `ping` is Tailscale's own Disco probe by default (not
 ICMP).
 
-**Completed in:** Phase 4 (`ping`, `metrics`, `derpMap`, `checkUpdate`).
+**Status:** fully working.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -315,7 +308,7 @@ ACL tags). Lives flat on `Tailscale` rather than under a namespace
 because it's a single cross-cutting utility — commonly paired with
 `tcp.bind` to authorize inbound connections by tag.
 
-**Completed in:** Phase 4.
+**Status:** fully working.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -330,7 +323,7 @@ and carries a structured `TailscaleErrorCode` + optional HTTP
 namespace) and branch on `code` for outcomes (retry on `conflict`,
 surface `featureDisabled`, rethrow otherwise).
 
-**Completed in:** Phase 2 — fully working.
+**Status:** fully working.
 
 | Type | Status | Thrown by | Example |
 | ---- | ------ | --------- | ------- |

@@ -2,7 +2,7 @@
   <img width="160" height="160" alt="tailscale.dart logo" src="https://github.com/user-attachments/assets/56a2a857-c5e7-42eb-9366-506daa56c5f9" />
 </p>
 
-# tailscale.dart
+# Dart Tailscale Client
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/danReynolds/tailscale_dart/blob/main/LICENSE)
 [![Dart 3.10+](https://img.shields.io/badge/Dart-3.10+-0175C2?logo=dart&logoColor=white)](https://dart.dev)

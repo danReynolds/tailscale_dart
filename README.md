@@ -162,6 +162,24 @@ Future<void> main() async {
 
 `funnel.forward` follows the same shape for public Funnel publication.
 
+## API surface
+
+API | Purpose
+--- | ---
+`Tailscale.instance` | Lifecycle, status, streams, node inventory, identity, and top-level controls.
+`http` | Outbound HTTP through the tailnet and inbound fd-backed HTTP handlers.
+`tcp` | Raw tailnet TCP streams with package-native connection/listener types.
+`udp` | Tailnet UDP bindings and datagram streams.
+`tls` | TLS-terminated listeners using Tailscale-managed certificates.
+`serve` | Tailnet publication for an existing local HTTP server.
+`funnel` | Public Funnel publication for an existing local HTTP server.
+`prefs` | Node preferences such as routes, tags, Shields Up, and hostname.
+`exitNode` | Current, suggested, pinned, automatic, and cleared exit-node selection.
+`diag` | Operational diagnostics: ping, metrics, DERP map, and update checks.
+`whois(ip)` | Top-level method that resolves a tailnet IP to node identity for authorization decisions.
+
+The [Feature support](#feature-support) table above carries the per-API implementation status; this section is the namespace-level map.
+
 ## Platform support
 
 Platform | Status | Notes

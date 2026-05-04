@@ -4,15 +4,18 @@
 
 # Dart 💙 Tailscale
 
+[![pub package](https://img.shields.io/pub/v/tailscale.svg)](https://pub.dev/packages/tailscale)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/danReynolds/tailscale_dart/blob/main/LICENSE)
 [![Dart 3.10+](https://img.shields.io/badge/Dart-3.10+-0175C2?logo=dart&logoColor=white)](https://dart.dev)
 [![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)](#platform-support)
 [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-70ffb1.svg)](https://danreynolds.github.io/tailscale_dart/)
 [![API reference](https://img.shields.io/badge/api-dartdoc-0175C2.svg)](https://danreynolds.github.io/tailscale_dart/api/)
 
-Embed a real [Tailscale](https://tailscale.com) or [Headscale](https://github.com/juanfont/headscale) node inside a Dart or Flutter app.
+Build Dart and Flutter apps that talk to each other directly — no public servers, no VPN setup, no NAT punching code — over an encrypted [Tailscale](https://tailscale.com) or [Headscale](https://github.com/juanfont/headscale) tailnet.
 
-`package:tailscale` uses upstream Go [`tsnet`](https://pkg.go.dev/tailscale.com/tsnet) under the hood, then exposes typed Dart APIs for lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve, Funnel, prefs, exit nodes, and diagnostics. The app authenticates as its own tailnet node and can communicate over encrypted WireGuard tunnels without requiring users to install or control a system-wide VPN app.
+`package:tailscale` embeds upstream Go [`tsnet`](https://pkg.go.dev/tailscale.com/tsnet) and exposes typed Dart APIs for lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve, Funnel, prefs, exit nodes, and diagnostics. Your app authenticates as its own node on the tailnet — users never install or configure a Tailscale client.
+
+> **Status:** `0.3.0`, pre-1.0. The core API is stable enough to build on, but minor versions may include breaking changes until 1.0. Production users are welcome — please [open an issue](https://github.com/danReynolds/tailscale_dart/issues) or [start a discussion](https://github.com/danReynolds/tailscale_dart/discussions) if something blocks you.
 
 ## Documentation
 
@@ -22,18 +25,31 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 | --- | --- |
 | [Developer site](https://danreynolds.github.io/tailscale_dart/) | Guide, examples, architecture — start here for rich browsing |
 | [API reference](https://danreynolds.github.io/tailscale_dart/api/) | Generated dartdoc for every public symbol |
-| [pub.dev](https://pub.dev/packages/tailscale) | Install, versions, changelog |
+| [pub.dev](https://pub.dev/packages/tailscale) | Install, versions |
+| [CHANGELOG](CHANGELOG.md) | Release notes and breaking changes |
 | [`example/`](example/) | Runnable Dart snippets |
 | [`doc/`](doc/) | API status, roadmap, RFCs, and architecture notes |
 | [`test/README.md`](test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
 
-## Why use it
+## What you can build
 
-- Build private app-to-app networking into Flutter and Dart applications.
-- Use familiar package-native shapes: `http.Client`, request handlers, byte streams, datagrams, listeners, and small value types.
-- Keep control-plane behavior in upstream Tailscale: auth, WireGuard, ACLs, MagicDNS, DERP, HTTPS certs, Serve, and Funnel policy.
-- Avoid fake `dart:io.Socket` wrappers. Package-owned listeners use fd-backed local capabilities; forwarding APIs are reserved for local servers the application already owns.
-- Test against Headscale locally and hosted Tailscale when a feature depends on Tailscale-only control-plane behavior.
+- A **Flutter chat or collaboration app** where peers reach each other directly — no relay servers, no signaling infrastructure.
+- A **headless Dart service** that joins your tailnet and exposes private HTTPS without opening any public port.
+- An **on-device dashboard** that calls private internal APIs (Grafana, Home Assistant, internal admin) without a corporate VPN.
+- A **shared Funnel endpoint** — publish a local development server to the public internet, terminated with a real cert by Tailscale.
+- Anything you'd reach for a [WireGuard](https://www.wireguard.com/) or [libp2p](https://libp2p.io/) library for, but you'd rather use Tailscale's identity, ACLs, and DERP fallback than build them yourself.
+
+### When this is the right choice
+
+- You want **app-level networking**, scoped to one process — not system-wide tunnels users have to consent to.
+- You want familiar Dart shapes (`http.Client`, byte streams, datagrams) instead of `dart:io.Socket` wrappers around a localhost proxy.
+- You're happy to delegate auth, WireGuard, ACLs, MagicDNS, DERP, HTTPS certs, Serve, and Funnel policy to upstream Tailscale.
+
+### When to use something else
+
+- **You need a system-wide VPN.** Use the official Tailscale apps; this package is per-process userspace networking.
+- **Windows is a hard requirement today.** v1 is POSIX-only — see [Platform support](#platform-support).
+- **You can't run a Go toolchain at build time.** This package compiles upstream tsnet on first build.
 
 ## Install
 
@@ -196,30 +212,19 @@ Control-plane calls go through a worker isolate so Dart's main isolate does not 
 
 Owned transports (`http.bind`, `tcp.bind`, `udp.bind`, `tls.bind`) use private fd-backed capabilities. That keeps listener ownership inside the package and avoids pretending that a localhost proxy is secure. Forwarding APIs (`serve.forward`, `funnel.forward`) intentionally use loopback because their purpose is to publish an existing local HTTP server the application already owns.
 
-## Testing
-
-The repository keeps test tiers separate so common development remains fast while still supporting real network validation.
-
-```bash
-dart analyze
-dart test
-cd go && go test -count=1 ./...
-tool/test_pr_gate.sh
-```
-
-Additional suites:
-
-```bash
-test/e2e/run_e2e.sh              # Headscale in Docker
-tool/test_local_full.sh          # PR gate + package demos
-tool/smoke/run_matrix.sh         # macOS/iOS/Android smoke matrix when devices are available
-```
-
-Live hosted-Tailscale tests are opt-in and require `TAILSCALE_API_KEY` and `TAILSCALE_TAILNET_ID`. They cover behavior Headscale does not model, such as HTTPS certificates, Funnel, and some exit-node policy flows. See [test/README.md](test/README.md) for the full breakdown.
-
 ## Roadmap
 
 The core package path is implemented: lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve/Funnel, prefs, exit nodes, diagnostics, Headscale E2E, and hosted-Tailscale live validation. Remaining launch and post-launch work is tracked in the design docs under [`doc/`](doc/) — see [Documentation](#documentation) for the index.
+
+## Contributing
+
+Issues, bug reports, and PRs are welcome.
+
+- **Found a bug or have a feature request?** [Open an issue](https://github.com/danReynolds/tailscale_dart/issues).
+- **Have a question or want to share what you're building?** [Start a discussion](https://github.com/danReynolds/tailscale_dart/discussions).
+- **Want to send a PR?** Run `dart analyze`, `dart test`, and `tool/test_pr_gate.sh` before pushing. The full test setup — including the Headscale E2E suite and opt-in live Tailscale runs — is documented in [test/README.md](test/README.md).
+
+If you're using `package:tailscale` in production, I'd love to hear about it — open a discussion and let me know.
 
 ## License
 

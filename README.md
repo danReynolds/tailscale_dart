@@ -14,7 +14,18 @@ Embed a real [Tailscale](https://tailscale.com) or [Headscale](https://github.co
 
 `package:tailscale` uses upstream Go [`tsnet`](https://pkg.go.dev/tailscale.com/tsnet) under the hood, then exposes typed Dart APIs for lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve, Funnel, prefs, exit nodes, and diagnostics. The app authenticates as its own tailnet node and can communicate over encrypted WireGuard tunnels without requiring users to install or control a system-wide VPN app.
 
-**Project links:** [developer site](https://danreynolds.github.io/tailscale_dart/) | [API reference](https://danreynolds.github.io/tailscale_dart/api/) | [pub.dev](https://pub.dev/packages/tailscale) | [API status](doc/api-status.md) | [testing guide](test/README.md)
+## Documentation
+
+The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the canonical place to browse the package — full guide, examples, architecture diagrams, and a runtime model walkthrough.
+
+| Where | What |
+| --- | --- |
+| [Developer site](https://danreynolds.github.io/tailscale_dart/) | Guide, examples, architecture — start here for rich browsing |
+| [API reference](https://danreynolds.github.io/tailscale_dart/api/) | Generated dartdoc for every public symbol |
+| [pub.dev](https://pub.dev/packages/tailscale) | Install, versions, changelog |
+| [`example/`](example/) | Runnable Dart snippets |
+| [`doc/`](doc/) | API status, roadmap, RFCs, and architecture notes |
+| [`test/README.md`](test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
 
 ## Why use it
 
@@ -84,7 +95,9 @@ See [doc/api-status.md](doc/api-status.md) for the full namespace-by-namespace A
 
 ## Examples
 
-Examples assume the node has already been initialized and started:
+A few canonical snippets below. The [developer site](https://danreynolds.github.io/tailscale_dart/#examples) hosts the full set covering raw TCP/UDP, TLS termination, Funnel, exit nodes, and routing controls; runnable variants live in [`example/`](example/).
+
+All snippets assume the node has been initialized and started:
 
 ```dart
 Tailscale.init(stateDir: '/app/state');
@@ -147,88 +160,7 @@ Future<void> main() async {
 }
 ```
 
-Use `funnel.forward` for the same local server when it should be reachable from the public internet through Tailscale Funnel:
-
-```dart
-final publicService = await Tailscale.instance.funnel.forward(
-  publicPort: 443,
-  localPort: 3000,
-);
-
-print('public URL: ${publicService.url}');
-```
-
-### Stream raw TCP
-
-```dart
-final listener = await Tailscale.instance.tcp.bind(port: 7000);
-
-listener.connections.listen((connection) async {
-  await connection.output.writeString('ready\n');
-
-  await for (final chunk in connection.input) {
-    await connection.output.write(chunk);
-  }
-
-  await connection.close();
-});
-```
-
-### Exchange UDP datagrams
-
-```dart
-final udp = await Tailscale.instance.udp.bind(port: 5353);
-
-udp.datagrams.listen((datagram) async {
-  await udp.send(datagram.payload, to: datagram.remote);
-});
-```
-
-### Terminate TLS in tsnet
-
-`tls.bind` obtains and renews certificates inside the embedded Go runtime. Dart receives plaintext byte streams after TLS termination.
-
-```dart
-final listener = await Tailscale.instance.tls.bind(port: 443);
-
-listener.connections.listen((connection) async {
-  await connection.output.writeString('HTTP/1.1 200 OK\r\n');
-  await connection.output.writeString('content-length: 2\r\n\r\nok');
-  await connection.close();
-});
-```
-
-### Configure routes and exit nodes
-
-```dart
-final tailscale = Tailscale.instance;
-
-await tailscale.prefs.setAcceptRoutes(true);
-await tailscale.prefs.setShieldsUp(false);
-
-final suggestedExit = await tailscale.exitNode.suggest();
-if (suggestedExit != null) {
-  await tailscale.exitNode.use(suggestedExit);
-}
-```
-
-## API surface
-
-API | Purpose
---- | ---
-`Tailscale.instance` | Lifecycle, status, streams, node inventory, identity, and top-level controls.
-`http` | Outbound HTTP through the tailnet and inbound fd-backed HTTP handlers.
-`tcp` | Raw tailnet TCP streams with package-native connection/listener types.
-`udp` | Tailnet UDP bindings and datagram streams.
-`tls` | TLS-terminated listeners using Tailscale-managed certificates.
-`serve` | Tailnet publication for an existing local HTTP server.
-`funnel` | Public Funnel publication for an existing local HTTP server.
-`prefs` | Node preferences such as routes, tags, Shields Up, and hostname.
-`exitNode` | Current, suggested, pinned, automatic, and cleared exit-node selection.
-`diag` | Operational diagnostics: ping, metrics, DERP map, and update checks.
-`whois(ip)` | Top-level method that resolves a tailnet IP to node identity for authorization decisions.
-
-The API reference is generated with `dart doc` and published at [danreynolds.github.io/tailscale_dart/api](https://danreynolds.github.io/tailscale_dart/api/).
+`funnel.forward` follows the same shape for public Funnel publication.
 
 ## Platform support
 
@@ -287,14 +219,7 @@ Live hosted-Tailscale tests are opt-in and require `TAILSCALE_API_KEY` and `TAIL
 
 ## Roadmap
 
-The core package path is implemented: lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve/Funnel, prefs, exit nodes, diagnostics, Headscale E2E, and hosted-Tailscale live validation.
-
-Remaining launch and post-launch work is tracked in:
-
-- [API status](doc/api-status.md)
-- [API roadmap](doc/api-roadmap.md)
-- [Shared fd reactor RFC](doc/rfc-shared-fd-reactor.md)
-- [Runtime data-plane backend RFC](doc/rfc-runtime-data-plane-backends.md)
+The core package path is implemented: lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve/Funnel, prefs, exit nodes, diagnostics, Headscale E2E, and hosted-Tailscale live validation. Remaining launch and post-launch work is tracked in the design docs under [`doc/`](doc/) — see [Documentation](#documentation) for the index.
 
 ## License
 

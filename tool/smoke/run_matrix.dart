@@ -193,11 +193,15 @@ final class _SmokeMatrixRunner {
     final stdoutSub = process.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen((line) => stdout.writeln('[$target/build] $line'));
+        .listen(
+          (line) => stdout.writeln(_redactSecrets('[$target/build] $line')),
+        );
     final stderrSub = process.stderr
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen((line) => stderr.writeln('[$target/build] $line'));
+        .listen(
+          (line) => stderr.writeln(_redactSecrets('[$target/build] $line')),
+        );
     final exitCode = await process.exitCode;
     await stdoutSub.cancel();
     await stderrSub.cancel();
@@ -340,6 +344,7 @@ final class _SmokeMatrixRunner {
       file.parent.createSync(recursive: true);
       final token = _newRunnerToken();
       file.writeAsStringSync('$token\n', flush: true);
+      _setOwnerOnlyFileMode(file);
       return token;
     } catch (_) {
       return _newRunnerToken();
@@ -578,7 +583,7 @@ final class _SmokeMatrixRunner {
     );
 
     void handleLine(String stream, String line) {
-      stdout.writeln('[$target/$stream] $line');
+      stdout.writeln(_redactSecrets('[$target/$stream] $line'));
       final resultIndex = line.indexOf(_resultPrefix);
       if (resultIndex < 0 || result.isCompleted) return;
       // Stdout result is a fallback path if /result POST never lands.
@@ -732,11 +737,17 @@ final class _SmokeMatrixRunner {
     final stdoutSub = process.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen((line) => stdout.writeln('[android-emulator/out] $line'));
+        .listen(
+          (line) =>
+              stdout.writeln(_redactSecrets('[android-emulator/out] $line')),
+        );
     final stderrSub = process.stderr
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen((line) => stderr.writeln('[android-emulator/err] $line'));
+        .listen(
+          (line) =>
+              stderr.writeln(_redactSecrets('[android-emulator/err] $line')),
+        );
     unawaited(
       process.exitCode.then((code) async {
         await stdoutSub.cancel();
@@ -895,7 +906,7 @@ final class _ManagedPeer {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-          stdout.writeln('[peer/out] $line');
+          stdout.writeln(_redactSecrets('[peer/out] $line'));
           final readyIndex = line.indexOf('READY ');
           if (readyIndex >= 0 && !ready.isCompleted) {
             final jsonText = line.substring(readyIndex + 'READY '.length);
@@ -906,7 +917,7 @@ final class _ManagedPeer {
     final stderrSub = process.stderr
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen((line) => stderr.writeln('[peer/err] $line'));
+        .listen((line) => stderr.writeln(_redactSecrets('[peer/err] $line')));
 
     peer = _ManagedPeer._(
       process: process,
@@ -1168,7 +1179,7 @@ Future<ProcessResult> _run(
   Map<String, String>? environment,
   bool allowFailure = false,
 }) async {
-  _log('\$ $executable ${args.join(' ')}');
+  _log(_redactSecrets('\$ $executable ${args.join(' ')}'));
   final result = await Process.run(
     executable,
     args,
@@ -1176,15 +1187,47 @@ Future<ProcessResult> _run(
     environment: environment,
   );
   if (result.stdout case final String out when out.trim().isNotEmpty) {
-    stdout.write(out);
+    stdout.write(_redactSecrets(out));
   }
   if (result.stderr case final String err when err.trim().isNotEmpty) {
-    stderr.write(err);
+    stderr.write(_redactSecrets(err));
   }
   if (!allowFailure && result.exitCode != 0) {
     throw StateError('$executable exited with ${result.exitCode}');
   }
   return result;
+}
+
+String _redactSecrets(String text) {
+  var redacted = text.replaceAllMapped(
+    RegExp(r'tskey-(?:auth|api)-[A-Za-z0-9_-]+'),
+    (_) => 'tskey-REDACTED',
+  );
+  redacted = redacted.replaceAllMapped(
+    RegExp(r'(--dart-define=DUNE_SMOKE_RUNNER_TOKEN=)[^\s]+'),
+    (match) => '${match.group(1)}REDACTED',
+  );
+  // Some Headscale versions print raw preauth keys without a tskey-* prefix.
+  // These keys are still bearer credentials for the smoke tailnet.
+  redacted = redacted.replaceAllMapped(
+    RegExp(r'\b[A-Fa-f0-9]{32,}\b'),
+    (_) => 'REDACTED_HEX_KEY',
+  );
+  return redacted;
+}
+
+void _setOwnerOnlyFileMode(File file) {
+  if (Platform.isWindows) return;
+  try {
+    final result = Process.runSync('chmod', ['600', file.path]);
+    if (result.exitCode != 0) {
+      stderr.writeln(
+        'warning: failed to chmod smoke runner token file: ${result.stderr}',
+      );
+    }
+  } catch (error) {
+    stderr.writeln('warning: failed to chmod smoke runner token file: $error');
+  }
 }
 
 String _repoRoot() {

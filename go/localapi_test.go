@@ -439,6 +439,20 @@ func TestValidateServeLocalAddressRequiresLoopback(t *testing.T) {
 	}
 }
 
+func TestNormalizeServeLocalAddressCanonicalizesLocalhost(t *testing.T) {
+	for _, address := range []string{"localhost", "LOCALHOST", " LocalHost "} {
+		t.Run(address, func(t *testing.T) {
+			got, err := normalizeServeLocalAddress(address)
+			if err != nil {
+				t.Fatalf("normalizeServeLocalAddress(%q): %v", address, err)
+			}
+			if got != "127.0.0.1" {
+				t.Fatalf("normalizeServeLocalAddress(%q) = %q, want 127.0.0.1", address, got)
+			}
+		})
+	}
+}
+
 func serveTestStatus() *ipnstate.Status {
 	return &ipnstate.Status{
 		Self: &ipnstate.PeerStatus{

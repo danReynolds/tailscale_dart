@@ -49,6 +49,7 @@ void main() {
         final publication = await serve.forward(
           tailnetPort: 443,
           localPort: 3000,
+          localAddress: 'LOCALHOST',
           path: '',
         );
 

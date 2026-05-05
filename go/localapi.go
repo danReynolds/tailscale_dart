@@ -542,7 +542,8 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 	if localAddress == "" {
 		localAddress = "127.0.0.1"
 	}
-	if err := validateServeLocalAddress(localAddress); err != nil {
+	localAddress, err = normalizeServeLocalAddress(localAddress)
+	if err != nil {
 		return servePublication{}, err
 	}
 	mount, err := normalizeServePath(payload.Path)
@@ -668,14 +669,23 @@ func validateServePort(name string, port int) (uint16, error) {
 }
 
 func validateServeLocalAddress(address string) error {
+	_, err := normalizeServeLocalAddress(address)
+	return err
+}
+
+func normalizeServeLocalAddress(address string) (string, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "", errors.New("serve localAddress must not be empty")
+	}
 	if strings.EqualFold(address, "localhost") {
-		return nil
+		return "127.0.0.1", nil
 	}
 	ip := net.ParseIP(address)
 	if ip != nil && ip.IsLoopback() {
-		return nil
+		return address, nil
 	}
-	return fmt.Errorf("serve localAddress %q must be a loopback address", address)
+	return "", fmt.Errorf("serve localAddress %q must be a loopback address", address)
 }
 
 func normalizeServePath(raw string) (string, error) {

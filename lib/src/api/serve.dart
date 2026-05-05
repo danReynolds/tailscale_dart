@@ -273,6 +273,9 @@ String _normalizeLocalAddress(String localAddress) {
       'must be a loopback address such as 127.0.0.1, ::1, or localhost',
     );
   }
+  if (trimmed.toLowerCase() == 'localhost') {
+    return '127.0.0.1';
+  }
   return trimmed;
 }
 

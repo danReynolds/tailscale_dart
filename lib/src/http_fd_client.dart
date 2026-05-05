@@ -96,7 +96,10 @@ Future<http.StreamedResponse> parseHttpFdResponseForTesting({
 
     final requestBodyFd = parsed['requestBodyFd'] as int?;
     final responseBodyFd = parsed['responseBodyFd'] as int?;
-    if (requestBodyFd == null || responseBodyFd == null || responseBodyFd < 0) {
+    if (requestBodyFd == null ||
+        requestBodyFd < -1 ||
+        responseBodyFd == null ||
+        responseBodyFd < 0) {
       throw const TailscaleHttpException(
         'Native runtime did not return usable HTTP fds.',
       );

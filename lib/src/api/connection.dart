@@ -235,17 +235,29 @@ final class _FdTailscaleListener implements TailscaleListener {
   Future<void> close() async {
     if (_closed) return done;
     _closed = true;
+    Object? closeError;
+    StackTrace? closeStackTrace;
     try {
       await _closeFn(listenerId);
+    } catch (error, stackTrace) {
+      closeError = error;
+      closeStackTrace = stackTrace;
+    } finally {
       _acceptIsolate?.kill(priority: Isolate.immediate);
       _acceptEvents?.close();
       _closePendingAccepts();
       if (!_connections.isClosed) unawaited(_connections.close());
-      if (!_done.isCompleted) _done.complete();
-    } catch (error, stackTrace) {
-      if (!_done.isCompleted) _done.completeError(error, stackTrace);
-      rethrow;
     }
+    if (closeError != null) {
+      if (!_done.isCompleted) {
+        _done.completeError(closeError, closeStackTrace);
+      }
+      Error.throwWithStackTrace(
+        closeError,
+        closeStackTrace ?? StackTrace.current,
+      );
+    }
+    if (!_done.isCompleted) _done.complete();
     return done;
   }
 

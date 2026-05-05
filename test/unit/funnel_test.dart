@@ -47,6 +47,7 @@ void main() {
       final publication = await funnel.forward(
         publicPort: 8443,
         localPort: 3000,
+        localAddress: 'localhost',
         path: '/api',
       );
 

@@ -54,7 +54,8 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	if localAddress == "" {
 		localAddress = "127.0.0.1"
 	}
-	if err := validateServeLocalAddress(localAddress); err != nil {
+	localAddress, err = normalizeServeLocalAddress(localAddress)
+	if err != nil {
 		return servePublication{}, err
 	}
 	mount, err := normalizeServePath(payload.Path)

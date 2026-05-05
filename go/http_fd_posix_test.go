@@ -3,8 +3,11 @@
 package tailscale
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/binary"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -41,5 +44,33 @@ func TestTailnetHTTPClientUsesTailscaleTLSVerifier(t *testing.T) {
 	}
 	if transport.TLSClientConfig.VerifyConnection == nil {
 		t.Fatal("TLSClientConfig is missing tailscale tlsdial verification hook")
+	}
+}
+
+func TestHTTPResponseHeadRejectsOversizedReadEnvelope(t *testing.T) {
+	var prefix [4]byte
+	binary.BigEndian.PutUint32(prefix[:], uint32(httpMaxHeadBytes+1))
+
+	_, err := readHTTPResponseHead(bytes.NewReader(prefix[:]))
+	if err == nil {
+		t.Fatal("readHTTPResponseHead accepted an oversized envelope")
+	}
+	if !strings.Contains(err.Error(), "invalid HTTP response head length") {
+		t.Fatalf("error = %q, want invalid length", err)
+	}
+}
+
+func TestHTTPResponseHeadRejectsOversizedWriteEnvelope(t *testing.T) {
+	err := writeHTTPResponseHead(&bytes.Buffer{}, httpResponseHead{
+		StatusCode: http.StatusOK,
+		Headers: map[string][]string{
+			"x-pad": {strings.Repeat("a", httpMaxHeadBytes)},
+		},
+	})
+	if err == nil {
+		t.Fatal("writeHTTPResponseHead accepted an oversized envelope")
+	}
+	if !strings.Contains(err.Error(), "HTTP response head too large") {
+		t.Fatalf("error = %q, want oversized head", err)
 	}
 }

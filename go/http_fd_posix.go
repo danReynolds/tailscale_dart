@@ -19,7 +19,10 @@ import (
 	"tailscale.com/tsnet"
 )
 
-const httpAcceptBacklog = 128
+const (
+	httpAcceptBacklog = 128
+	httpMaxHeadBytes  = 256 * 1024
+)
 
 type HttpFdRequest struct {
 	RequestBodyFD  int
@@ -435,7 +438,7 @@ func readHTTPResponseHead(r io.Reader) (httpResponseHead, error) {
 		return httpResponseHead{}, err
 	}
 	length := binary.BigEndian.Uint32(prefix[:])
-	if length == 0 || length > 16*1024*1024 {
+	if length == 0 || length > httpMaxHeadBytes {
 		return httpResponseHead{}, fmt.Errorf("invalid HTTP response head length %d", length)
 	}
 
@@ -456,7 +459,7 @@ func writeHTTPResponseHead(w io.Writer, head httpResponseHead) error {
 	if err != nil {
 		return err
 	}
-	if len(payload) > 16*1024*1024 {
+	if len(payload) > httpMaxHeadBytes {
 		return fmt.Errorf("HTTP response head too large: %d bytes", len(payload))
 	}
 

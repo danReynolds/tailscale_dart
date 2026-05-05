@@ -12,7 +12,14 @@ import 'fd_transport.dart';
 /// backends can implement the same contract without exposing their carrier.
 @internal
 final class RuntimeConnection {
-  RuntimeConnection._(this._transport);
+  RuntimeConnection._(this._transport) {
+    unawaited(
+      _transport.done.then(
+        (_) => _completeOutputDone(),
+        onError: (_, _) => _completeOutputDone(),
+      ),
+    );
+  }
 
   /// Adopts a POSIX fd as a runtime connection.
   static Future<RuntimeConnection> adoptPosixFd(
@@ -67,8 +74,11 @@ final class RuntimeConnection {
 
   /// Gracefully closes this side's output while continuing to receive input.
   Future<void> closeOutputGracefully() async {
-    await _transport.closeWrite();
-    _completeOutputDone();
+    try {
+      await _transport.closeWrite();
+    } finally {
+      _completeOutputDone();
+    }
   }
 
   /// Closes the local read and write sides because the application is done.

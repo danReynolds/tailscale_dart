@@ -372,16 +372,16 @@ bool _processReactorCommands(
     switch (kind) {
       case _Cmd.enableRead:
         state.readEnabled = true;
-        _updateReactorInterest(handle, state);
+        _updateReactorInterest(handle, states, metrics, state);
         continue;
       case _Cmd.disableRead:
         state.readEnabled = false;
-        _updateReactorInterest(handle, state);
+        _updateReactorInterest(handle, states, metrics, state);
         continue;
       case _Cmd.inboundConsumed when message.length == 3 && message[2] is int:
         state.pendingInboundBytes -= message[2] as int;
         if (state.pendingInboundBytes < 0) state.pendingInboundBytes = 0;
-        _updateReactorInterest(handle, state);
+        _updateReactorInterest(handle, states, metrics, state);
         continue;
       case _Cmd.write
           when message.length == 4 &&
@@ -427,7 +427,7 @@ void _readReactorState(
     final availableInbound =
         state.maxInboundQueuedBytes - state.pendingInboundBytes;
     if (availableInbound <= 0) {
-      _updateReactorInterest(handle, state);
+      _updateReactorInterest(handle, states, metrics, state);
       return;
     }
     final readLimit = math.min(
@@ -455,7 +455,7 @@ void _readReactorState(
       state.readClosed = true;
       state.readEnabled = false;
       state.eventPort.send(<Object>[_Evt.eof]);
-      _updateReactorInterest(handle, state);
+      _updateReactorInterest(handle, states, metrics, state);
       _closeIfFullyDone(handle, states, metrics, state);
       return;
     }
@@ -467,7 +467,7 @@ void _readReactorState(
         state.readClosed = true;
         state.readEnabled = false;
         state.eventPort.send(<Object>[_Evt.eof]);
-        _updateReactorInterest(handle, state);
+        _updateReactorInterest(handle, states, metrics, state);
         _closeIfFullyDone(handle, states, metrics, state);
       }
       return;
@@ -479,7 +479,7 @@ void _readReactorState(
     return;
   }
 
-  _updateReactorInterest(handle, state);
+  _updateReactorInterest(handle, states, metrics, state);
 }
 
 /// Drains queued writes for one transport, performing partial-write
@@ -543,7 +543,7 @@ void _flushReactorWrites(
       if (errno == _eintr) continue;
       if (_isAgain(errno)) {
         metrics.againCount++;
-        _updateReactorInterest(handle, state);
+        _updateReactorInterest(handle, states, metrics, state);
         return;
       }
       final error = StateError('write syscall failed errno=$errno');
@@ -584,7 +584,7 @@ void _flushReactorWrites(
     return;
   }
 
-  _updateReactorInterest(handle, state);
+  _updateReactorInterest(handle, states, metrics, state);
 }
 
 /// Promotes a half-closed transport (both read and write halves done) to
@@ -665,7 +665,12 @@ Map<String, int> _reactorSnapshot(
 /// its current state and pushes it to the native poller. Read interest is
 /// dropped while paused, half-closed, or back-pressured by a full inbound
 /// queue; write interest is asserted only while there is queued data.
-void _updateReactorInterest(int handle, _ReactorTransportState state) {
+void _updateReactorInterest(
+  int handle,
+  Map<int, _ReactorTransportState> states,
+  _ReactorMetrics metrics,
+  _ReactorTransportState state,
+) {
   if (state.closed) return;
   var events = 0;
   if (state.readEnabled &&
@@ -677,7 +682,9 @@ void _updateReactorInterest(int handle, _ReactorTransportState state) {
   final result = duneReactorUpdate(handle, state.fd, state.id, events);
   if (result != 0) {
     final error = StateError('native reactor update failed');
+    metrics.hardErrorCount++;
     state.eventPort.send(<Object>[_Evt.readError, error.toString()]);
+    _closeReactorState(handle, states, metrics, state, error: error);
   }
 }
 

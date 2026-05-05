@@ -33,7 +33,7 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 
 ## What you can build
 
-- A **Flutter chat or collaboration app** where peers reach each other directly — no relay servers, no signaling infrastructure.
+- A **Flutter chat or collaboration app** where peers reach each other directly when possible — without you running relay or signaling infrastructure.
 - A **headless Dart service** that joins your tailnet and exposes private HTTPS without opening any public port.
 - An **on-device dashboard** that calls private internal APIs (Grafana, Home Assistant, internal admin) without a corporate VPN.
 - A **shared Funnel endpoint** — publish a local development server to the public internet, terminated with a real cert by Tailscale.

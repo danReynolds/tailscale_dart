@@ -237,17 +237,29 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
   Future<void> close() async {
     if (_closed) return done;
     _closed = true;
+    Object? closeError;
+    StackTrace? closeStackTrace;
     try {
       await _closeFn(bindingId);
+    } catch (error, stackTrace) {
+      closeError = error;
+      closeStackTrace = stackTrace;
+    } finally {
       _acceptIsolate?.kill(priority: Isolate.immediate);
       _acceptEvents?.close();
       _closePendingAccepts();
       if (!_requests.isClosed) unawaited(_requests.close());
-      if (!_done.isCompleted) _done.complete();
-    } catch (error, stackTrace) {
-      if (!_done.isCompleted) _done.completeError(error, stackTrace);
-      rethrow;
     }
+    if (closeError != null) {
+      if (!_done.isCompleted) {
+        _done.completeError(closeError, closeStackTrace);
+      }
+      Error.throwWithStackTrace(
+        closeError,
+        closeStackTrace ?? StackTrace.current,
+      );
+    }
+    if (!_done.isCompleted) _done.complete();
     return done;
   }
 
@@ -496,9 +508,15 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
     final existing = _requestBodyClosed;
     if (existing != null) return existing;
     return _requestBodyClosed = () async {
-      await _bodySub?.cancel();
-      await _requestTransport.close();
-      _closeBodyController();
+      try {
+        await _bodySub?.cancel();
+      } finally {
+        try {
+          await _requestTransport.close();
+        } finally {
+          _closeBodyController();
+        }
+      }
     }();
   }
 
@@ -506,8 +524,11 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
     final existing = _requestBodyClosed;
     if (existing != null) return existing;
     return _requestBodyClosed = () async {
-      await _requestTransport.close();
-      _closeBodyController();
+      try {
+        await _requestTransport.close();
+      } finally {
+        _closeBodyController();
+      }
     }();
   }
 
@@ -598,18 +619,35 @@ final class _TailscaleHttpResponse implements TailscaleHttpResponse {
   Future<void> close() async {
     if (_closed) return done;
     _closed = true;
+    Object? closeError;
+    StackTrace? closeStackTrace;
     try {
       await _sendHead();
       await _transport.closeWrite();
-      await _transport.close();
-      await _onClose?.call();
-      if (!_done.isCompleted) _done.complete();
     } catch (error, stackTrace) {
-      await _transport.close();
-      await _onClose?.call();
-      if (!_done.isCompleted) _done.completeError(error, stackTrace);
-      rethrow;
+      closeError = error;
+      closeStackTrace = stackTrace;
     }
+    try {
+      await _transport.close();
+    } catch (error, stackTrace) {
+      closeError ??= error;
+      closeStackTrace ??= stackTrace;
+    }
+    try {
+      await _onClose?.call();
+    } catch (error, stackTrace) {
+      closeError ??= error;
+      closeStackTrace ??= stackTrace;
+    }
+    if (closeError != null) {
+      if (!_done.isCompleted) _done.completeError(closeError, closeStackTrace);
+      Error.throwWithStackTrace(
+        closeError,
+        closeStackTrace ?? StackTrace.current,
+      );
+    }
+    if (!_done.isCompleted) _done.complete();
     return done;
   }
 

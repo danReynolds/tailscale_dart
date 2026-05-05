@@ -188,10 +188,28 @@ final class _FdTailscaleDatagramBinding implements TailscaleDatagramBinding {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
-    await _subscription.cancel();
-    await _transport.close();
+    Object? closeError;
+    StackTrace? closeStackTrace;
+    try {
+      await _subscription.cancel();
+    } catch (error, stackTrace) {
+      closeError = error;
+      closeStackTrace = stackTrace;
+    }
+    try {
+      await _transport.close();
+    } catch (error, stackTrace) {
+      closeError ??= error;
+      closeStackTrace ??= stackTrace;
+    }
     _closeDatagrams();
-    _completeDone();
+    _completeDone(closeError, closeStackTrace);
+    if (closeError != null) {
+      Error.throwWithStackTrace(
+        closeError,
+        closeStackTrace ?? StackTrace.current,
+      );
+    }
   }
 
   void _handleEnvelope(Uint8List envelope) {

@@ -198,10 +198,12 @@ final class PosixFdTransport {
         id,
         TransferableTypedData.fromList(<Uint8List>[copy]),
       ]);
-    } catch (error) {
+    } catch (error, stackTrace) {
       _writeCompletions.remove(id);
       _pendingWriteBytes -= copy.length;
-      completer.completeError(error);
+      final failure = StateError('fd write dispatch failed: $error');
+      completer.completeError(failure, stackTrace);
+      _finishWithError(failure);
     }
     return completer.future;
   }
@@ -216,9 +218,11 @@ final class PosixFdTransport {
     _writeCompletions[id] = _PendingWrite(0, completer);
     try {
       _reactor.send(<Object>[_Cmd.shutdownWrite, _transportId, id]);
-    } catch (error) {
+    } catch (error, stackTrace) {
       _writeCompletions.remove(id);
-      completer.completeError(error);
+      final failure = StateError('fd closeWrite dispatch failed: $error');
+      completer.completeError(failure, stackTrace);
+      _finishWithError(failure);
     }
     return completer.future;
   }

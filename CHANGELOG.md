@@ -86,6 +86,18 @@ and a shared POSIX reactor.
   model: routing controls, TLS serving, Serve forwarding, Funnel forwarding,
   and Serve cleanup on `down()`/restart.
 
+**Release hardening:**
+
+- HTTP fd response-head envelopes are capped at 256 KiB on both the Dart and
+  Go sides.
+- fd transport write/close dispatch failures, listener/server close failures,
+  unread HTTP request bodies, and UDP binding teardown paths now deterministically
+  close local resources.
+- Serve/Funnel forwarding canonicalizes `localhost` to `127.0.0.1` before
+  creating loopback proxy targets.
+- Smoke-matrix tooling redacts bearer credentials from logs and stores generated
+  runner tokens with owner-only file permissions.
+
 ## 0.2.0
 
 - tsnet.Server.Close() doesn't fire a terminal state through the IPN bus, so onStateChange subscribers drifted from the engine — stuck at the pre-stop value (usually Running) and their UI routing went stale.

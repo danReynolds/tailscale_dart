@@ -112,6 +112,11 @@ final class TailscalePublishedService {
 /// background `tailscale serve --bg` configuration surface. Close returned
 /// handles explicitly; `Tailscale.down()` also removes package-created
 /// publications best-effort.
+///
+/// Requests from tailnet clients follow upstream Tailscale Serve behavior:
+/// Tailscale forwards identity headers such as `Tailscale-User-Login`,
+/// `Tailscale-User-Name`, and `Tailscale-User-Profile-Pic` to the loopback
+/// backend. Public Funnel requests do not include those headers.
 abstract class Serve {
   /// Publishes `http://[localAddress]:[localPort]` inside the tailnet.
   ///

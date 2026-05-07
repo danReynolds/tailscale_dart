@@ -6,7 +6,7 @@
 
 [![pub package](https://img.shields.io/pub/v/tailscale.svg)](https://pub.dev/packages/tailscale)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/danReynolds/tailscale_dart/blob/main/LICENSE)
-[![Dart 3.10+](https://img.shields.io/badge/Dart-3.10+-0175C2?logo=dart&logoColor=white)](https://dart.dev)
+[![Dart 3.10.4+](https://img.shields.io/badge/Dart-3.10.4+-0175C2?logo=dart&logoColor=white)](https://dart.dev)
 [![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)](#platform-support)
 [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-70ffb1.svg)](https://danreynolds.github.io/tailscale_dart/)
 [![API reference](https://img.shields.io/badge/api-dartdoc-0175C2.svg)](https://danreynolds.github.io/tailscale_dart/api/)
@@ -26,10 +26,10 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 | [Developer site](https://danreynolds.github.io/tailscale_dart/) | Guide, examples, architecture — start here for rich browsing |
 | [API reference](https://danreynolds.github.io/tailscale_dart/api/) | Generated dartdoc for every public symbol |
 | [pub.dev](https://pub.dev/packages/tailscale) | Install, versions |
-| [CHANGELOG](CHANGELOG.md) | Release notes and breaking changes |
-| [`example/`](example/) | Runnable Dart snippets |
-| [`doc/`](doc/) | API status, roadmap, RFCs, and architecture notes |
-| [`test/README.md`](test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
+| [CHANGELOG](https://github.com/danReynolds/tailscale_dart/blob/main/CHANGELOG.md) | Release notes and breaking changes |
+| [`example/`](https://github.com/danReynolds/tailscale_dart/tree/main/example) | Runnable Dart snippets |
+| [`doc/`](https://github.com/danReynolds/tailscale_dart/tree/main/doc) | API status, roadmap, RFCs, and architecture notes |
+| [`test/README.md`](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
 
 ## What you can build
 
@@ -62,7 +62,7 @@ The first `dart run`, `dart test`, or `flutter build` triggers a native build ho
 
 Prerequisites:
 
-- Dart SDK 3.10 or newer.
+- Dart SDK 3.10.4 or newer.
 - Go 1.25 or newer on `PATH`.
 - Native toolchain for the target platform: Xcode for iOS/macOS, Android NDK through Flutter for Android, and a C toolchain for Linux.
 
@@ -101,17 +101,18 @@ Raw UDP | `udp.bind` | Supported | Message-preserving datagrams with remote endp
 TLS listener | `tls.bind`, `tls.domains` | Supported | Requires MagicDNS and HTTPS enabled on the tailnet.
 Serve | `serve.forward`, `serve.clear` | Supported | Tailnet-only publication for an existing loopback HTTP server.
 Funnel | `funnel.forward`, `funnel.clear` | Supported | Public HTTPS publication through Tailscale Funnel policy.
+Tailscale Services | N/A | Planned | Upstream `tsnet.Server.ListenService` is newer than the current `tailscale.com v1.92.2` pin.
 Routing controls | `prefs`, `exitNode` | Supported | Subnet routes, Shields Up, tags, hostname, auto-update, and exit nodes.
 Diagnostics | `diag` | Supported | Ping, metrics, DERP map, and update checks.
 Taildrop | `taildrop` | Planned | Exported as a stub; not implemented in this release.
 Profiles | `profiles` | Planned | Exported as a stub; not implemented in this release.
 Windows | N/A | Unsupported | v1 is POSIX-only while the Windows data-plane backend is designed.
 
-See [doc/api-status.md](doc/api-status.md) for the full namespace-by-namespace API map.
+See [doc/api-status.md](https://github.com/danReynolds/tailscale_dart/blob/main/doc/api-status.md) for the full namespace-by-namespace API map.
 
 ## Examples
 
-A few canonical snippets below. The [developer site](https://danreynolds.github.io/tailscale_dart/#examples) hosts the full set covering raw TCP/UDP, TLS termination, Funnel, exit nodes, and routing controls; runnable variants live in [`example/`](example/).
+A few canonical snippets below. The [developer site](https://danreynolds.github.io/tailscale_dart/#examples) hosts the full set covering raw TCP/UDP, TLS termination, Funnel, exit nodes, and routing controls; runnable variants live in [`example/`](https://github.com/danReynolds/tailscale_dart/tree/main/example).
 
 All snippets assume the node has been initialized and started:
 
@@ -176,7 +177,10 @@ Future<void> main() async {
 }
 ```
 
-`funnel.forward` follows the same shape for public Funnel publication.
+`serve.forward` traffic follows Tailscale Serve semantics, including Tailscale
+identity headers for tailnet clients. `funnel.forward` follows the same local
+server shape for public Funnel publication, but Funnel traffic is public and does
+not include Tailscale identity headers.
 
 ## Platform support
 
@@ -214,7 +218,7 @@ Owned transports (`http.bind`, `tcp.bind`, `udp.bind`, `tls.bind`) use private f
 
 ## Roadmap
 
-The core package path is implemented: lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve/Funnel, prefs, exit nodes, diagnostics, Headscale E2E, and hosted-Tailscale live validation. Remaining launch and post-launch work is tracked in the design docs under [`doc/`](doc/) — see [Documentation](#documentation) for the index.
+The core package path is implemented: lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve/Funnel, prefs, exit nodes, diagnostics, Headscale E2E, and hosted-Tailscale live validation. Remaining launch and post-launch work is tracked in the design docs under [`doc/`](https://github.com/danReynolds/tailscale_dart/tree/main/doc) — see [Documentation](#documentation) for the index.
 
 ## Contributing
 
@@ -222,7 +226,7 @@ Issues, bug reports, and PRs are welcome.
 
 - **Found a bug or have a feature request?** [Open an issue](https://github.com/danReynolds/tailscale_dart/issues).
 - **Have a question or want to share what you're building?** [Start a discussion](https://github.com/danReynolds/tailscale_dart/discussions).
-- **Want to send a PR?** Run `dart analyze`, `dart test`, and `tool/test_pr_gate.sh` before pushing. The full test setup — including the Headscale E2E suite and opt-in live Tailscale runs — is documented in [test/README.md](test/README.md).
+- **Want to send a PR?** Run `dart analyze`, `dart test`, and `tool/test_pr_gate.sh` before pushing. The full test setup — including the Headscale E2E suite and opt-in live Tailscale runs — is documented in [test/README.md](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md).
 
 If you're using `package:tailscale` in production, I'd love to hear about it — open a discussion and let me know.
 

@@ -124,7 +124,7 @@ abstract interface class TailscaleClient {
 }
 
 /// Singleton embedded Tailscale node for the current Dart process.
-/// Wraps Tailscale's [tsnet](https://tailscale.com/kb/1244/tsnet)
+/// Wraps Tailscale's [tsnet](https://tailscale.com/docs/features/tsnet)
 /// userspace library — the Dart app itself becomes a node on the
 /// tailnet, no OS-level VPN required.
 ///

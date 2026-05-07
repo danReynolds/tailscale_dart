@@ -21,6 +21,7 @@ fd capabilities plus kqueue/epoll; Windows needs a separate backend decision.
 | P1 | Windows backend decision | Windows is the only major platform gap. Supporting it likely requires either a Windows-native handle/reactor backend or a separate fallback carrier. | Deferred intentionally; do not expose as supported until designed. |
 | P2 | Taildrop | Useful for app-to-app file transfer, but upstream semantics are user-device-oriented and the byte-path decision should stay stream-safe. | Declared API, not implemented. |
 | P2 | Profiles | Useful when one app needs multiple tailnet identities, but most embedded apps only need one node identity. | Declared API, not implemented. |
+| P2 | Tailscale Services | Useful for tagged service hosts and stable service names, but upstream `ListenService` is newer than the current `tailscale.com v1.92.2` pin. | Wait for a module bump, then design the Dart listener shape. |
 | P3 | Generic LocalAPI escape hatch | Helps advanced users reach endpoints before a typed wrapper exists, but it can freeze an awkward low-level API if added too early. | Wait until the typed surface settles. |
 | P3 | Advanced Serve/Funnel config | Raw config get/set, directory serving, richer policy inspection, and persistent background publications could be useful for operator tools. | Keep `forward/clear` small until real users need more. |
 
@@ -59,6 +60,19 @@ Strongest use cases:
 
 Profiles are useful, but optional. They add account/state complexity without
 improving the common "one embedded node per app install" path.
+
+### Tailscale Services
+
+Strongest use cases:
+
+- expose a stable service name such as `svc:api` from one or more tagged Dart
+  service nodes
+- publish multi-port service hosts without coupling callers to individual device
+  names
+
+This should mirror upstream `tsnet.Server.ListenService` once the package bumps
+past `tailscale.com v1.92.2`. Until then, keep it explicit as unsupported rather
+than implying parity with the current upstream docs.
 
 ### Generic LocalAPI escape hatch
 

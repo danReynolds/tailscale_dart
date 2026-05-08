@@ -1,5 +1,6 @@
 .dart_tool/
 build/
+doc/api/
 pubspec.lock
 !packages/demo_flutter/pubspec.lock
 !packages/demo_smoke_flutter/pubspec.lock

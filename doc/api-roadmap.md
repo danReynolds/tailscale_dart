@@ -17,7 +17,7 @@ fd capabilities plus kqueue/epoll; Windows needs a separate backend decision.
 
 | Priority | Area | Why it matters | Current stance |
 | --- | --- | --- | --- |
-| P0 | Publishing readiness | Users need accurate README, changelog, platform metadata, package contents, and repeatable validation commands before public release. | In progress for `0.3.0`. |
+| P0 | Publishing readiness | Users need accurate README, changelog, platform metadata, package contents, and repeatable validation commands before public release. | Release gate documented in [`release-readiness.md`](release-readiness.md); run it before publishing. |
 | P1 | Windows backend decision | Windows is the only major platform gap. Supporting it likely requires either a Windows-native handle/reactor backend or a separate fallback carrier. | Deferred intentionally; do not expose as supported until designed. |
 | P2 | Taildrop | Useful for app-to-app file transfer, but upstream semantics are user-device-oriented and the byte-path decision should stay stream-safe. | Declared API, not implemented. |
 | P2 | Profiles | Useful when one app needs multiple tailnet identities, but most embedded apps only need one node identity. | Declared API, not implemented. |

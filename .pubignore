@@ -1,6 +1,7 @@
 .dart_tool/
 build/
 benchmark/
+doc/api/
 site/
 packages/
 tool/

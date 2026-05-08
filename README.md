@@ -26,10 +26,10 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 | [Developer site](https://danreynolds.github.io/tailscale_dart/) | Guide, examples, architecture — start here for rich browsing |
 | [API reference](https://danreynolds.github.io/tailscale_dart/api/) | Generated dartdoc for every public symbol |
 | [pub.dev](https://pub.dev/packages/tailscale) | Install, versions |
-| [CHANGELOG](https://github.com/danReynolds/tailscale_dart/blob/main/CHANGELOG.md) | Release notes and breaking changes |
-| [`example/`](https://github.com/danReynolds/tailscale_dart/tree/main/example) | Runnable Dart snippets |
-| [`doc/`](https://github.com/danReynolds/tailscale_dart/tree/main/doc) | API status, roadmap, RFCs, and architecture notes |
-| [`test/README.md`](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
+| [CHANGELOG](CHANGELOG.md) | Release notes and breaking changes |
+| [`example/`](example/) | Runnable Dart snippets |
+| [`doc/`](doc/) | API status, roadmap, release checklist, RFCs, and architecture notes |
+| [`test/README.md`](test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
 
 ## What you can build
 
@@ -234,7 +234,7 @@ Owned transports (`http.bind`, `tcp.bind`, `udp.bind`, `tls.bind`) use private f
 
 ## Roadmap
 
-The core package path is implemented: lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve/Funnel, prefs, exit nodes, diagnostics, Headscale E2E, and hosted-Tailscale live validation. Remaining launch and post-launch work is tracked in the design docs under [`doc/`](https://github.com/danReynolds/tailscale_dart/tree/main/doc) — see [Documentation](#documentation) for the index.
+The core package path is implemented: lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve/Funnel, prefs, exit nodes, diagnostics, Headscale E2E, and hosted-Tailscale live validation. Remaining launch and post-launch work is tracked in the design docs under [`doc/`](doc/) — see [Documentation](#documentation) for the index. Release publishing gates are listed in [`doc/release-readiness.md`](doc/release-readiness.md).
 
 ## Contributing
 
@@ -242,7 +242,7 @@ Issues, bug reports, and PRs are welcome.
 
 - **Found a bug or have a feature request?** [Open an issue](https://github.com/danReynolds/tailscale_dart/issues).
 - **Have a question or want to share what you're building?** [Start a discussion](https://github.com/danReynolds/tailscale_dart/discussions).
-- **Want to send a PR?** Run `dart analyze`, `dart test`, and `tool/test_pr_gate.sh` before pushing. The full test setup — including the Headscale E2E suite and opt-in live Tailscale runs — is documented in [test/README.md](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md).
+- **Want to send a PR?** Run `dart analyze`, `dart test`, and `tool/test_pr_gate.sh` before pushing. The full test setup — including the Headscale E2E suite and opt-in live Tailscale runs — is documented in [test/README.md](test/README.md). Release candidates should also pass [`doc/release-readiness.md`](doc/release-readiness.md).
 
 If you're using `package:tailscale` in production, I'd love to hear about it — open a discussion and let me know.
 

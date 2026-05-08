@@ -6,3 +6,5 @@ The canonical testing guide lives next to the test suite:
 
 That guide covers test layering, placement rules, validation tiers, demo package
 roles, and the Flutter platform smoke matrix.
+
+Release publishing gates live in [`release-readiness.md`](release-readiness.md).

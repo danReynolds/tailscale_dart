@@ -99,6 +99,8 @@ and a shared POSIX reactor.
   creating loopback proxy targets.
 - Smoke-matrix tooling redacts bearer credentials from logs and stores generated
   runner tokens with owner-only file permissions.
+- Release readiness is now documented with repeatable publish, docs, package
+  contents, CI, smoke, and live-validation gates.
 
 ## 0.2.0
 

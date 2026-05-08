@@ -83,7 +83,10 @@ returning a transitional state such as `starting`.
 HTTP conveniences layered on top of the tailnet. The `client` routes
 every request over the tailnet tunnel; `bind` accepts incoming tailnet
 HTTP and exposes package-native request/response objects backed by fd
-streams.
+streams. Shelf users can copy the tested adapter in
+[`example/shelf_adapter.dart`](../example/shelf_adapter.dart) to run a
+Shelf `Handler` directly on `http.bind` without adding Shelf as a core package
+dependency.
 
 **Status:** fully working.
 

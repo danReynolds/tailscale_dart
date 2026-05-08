@@ -166,31 +166,50 @@ server.requests.listen((request) async {
 });
 ```
 
-### Reuse an existing Shelf or dart:io server
+### Use Shelf middleware directly
 
-Use `serve.forward` when your app already owns a loopback HTTP server.
+The tested adapter in [`example/shelf_adapter.dart`](example/shelf_adapter.dart)
+adds a `bindShelf` extension for apps that want Shelf middleware and routing.
+Add `shelf` to your app and copy or import the adapter; `package:tailscale`
+does not take Shelf as a core dependency.
 
 ```dart
-import 'dart:io';
-
 import 'package:shelf/shelf.dart';
-import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:tailscale/tailscale.dart';
 
+import 'shelf_adapter.dart';
+
 Future<void> main() async {
-  final localServer = await shelf_io.serve(
-    (Request request) => Response.ok('served by Shelf'),
-    InternetAddress.loopbackIPv4,
-    3000,
+  final handler = const Pipeline()
+      .addMiddleware(logRequests())
+      .addHandler((Request request) {
+        return Response.ok(
+          'hello from Shelf over Tailscale',
+          headers: {'content-type': 'text/plain; charset=utf-8'},
+        );
+      });
+
+  final server = await Tailscale.instance.http.bindShelf(
+    port: 8080,
+    handler: handler,
   );
 
-  final publication = await Tailscale.instance.serve.forward(
-    tailnetPort: 443,
-    localPort: localServer.port,
-  );
-
-  print('tailnet URL: ${publication.url}');
+  print('Shelf listening on ${server.tailnet}');
 }
+```
+
+### Reuse an existing loopback server
+
+Use `serve.forward` when your app already owns a local HTTP server and you want
+to publish that existing loopback port.
+
+```dart
+final publication = await Tailscale.instance.serve.forward(
+  tailnetPort: 443,
+  localPort: 3000,
+);
+
+print('tailnet URL: ${publication.url}');
 ```
 
 `serve.forward` traffic follows Tailscale Serve semantics, including Tailscale

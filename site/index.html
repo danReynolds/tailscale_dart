@@ -231,11 +231,14 @@ print(res.statusCode);</code></pre>
             <button class="tab" id="example-tab-tls" data-example="tls" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
               <span>05</span> Terminate Tailscale TLS
             </button>
+            <button class="tab" id="example-tab-shelf" data-example="shelf" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
+              <span>06</span> Serve Shelf directly
+            </button>
             <button class="tab" id="example-tab-funnel" data-example="funnel" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
-              <span>06</span> Publish a local Shelf server
+              <span>07</span> Forward loopback HTTP
             </button>
             <button class="tab" id="example-tab-prefs" data-example="prefs" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
-              <span>07</span> Update routing prefs
+              <span>08</span> Update routing prefs
             </button>
             <p class="example-note">
               Examples assume <code>Tailscale.init</code> has already run and
@@ -345,7 +348,7 @@ print(res.statusCode);</code></pre>
             </article>
             <article>
               <h3>Forwarding is intentionally loopback</h3>
-              <p><code>serve.forward</code> and <code>funnel.forward</code> are for existing local HTTP servers, such as Shelf or <code>dart:io</code>.</p>
+              <p><code>serve.forward</code> and <code>funnel.forward</code> are for existing local HTTP servers. Shelf handlers can also run directly on <code>http.bind</code> with the tested adapter example.</p>
             </article>
           </div>
         </div>

@@ -60,6 +60,8 @@ and a shared POSIX reactor.
   metadata and rejects payloads over 60 KiB.
 - The POSIX data plane uses a shared kqueue/epoll reactor instead of spawning
   reader/writer isolates per fd.
+- `example/shelf_adapter.dart` shows how to run Shelf handlers directly on
+  `http.bind` via an extension, without making Shelf a core dependency.
 
 **Tailscale feature namespaces:**
 

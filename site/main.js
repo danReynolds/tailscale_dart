@@ -81,9 +81,31 @@ listener.connections.listen((conn) async {
   await conn.close();
 });`,
   },
+  shelf: {
+    title: "shelf_adapter.dart",
+    code: `import 'package:shelf/shelf.dart';
+
+import 'shelf_adapter.dart';
+
+final handler = const Pipeline()
+    .addMiddleware(logRequests())
+    .addHandler((Request request) {
+      return Response.ok(
+        'private over tailnet',
+        headers: {'content-type': 'text/plain; charset=utf-8'},
+      );
+    });
+
+final server = await ts.http.bindShelf(
+  port: 8080,
+  handler: handler,
+);
+
+print(server.tailnet);`,
+  },
   funnel: {
     title: "serve_funnel.dart",
-    code: `// Reuse an existing loopback Shelf or dart:io server.
+    code: `// Forward an existing loopback HTTP server.
 final serve = await ts.serve.forward(
   tailnetPort: 443,
   localPort: 8080,

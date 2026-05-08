@@ -3,8 +3,9 @@
 /// Run via: test/e2e/run_e2e.sh (handles Docker setup and teardown).
 ///
 /// Required environment variables:
-///   HEADSCALE_URL      - e.g. http://localhost:8080
-///   HEADSCALE_AUTH_KEY  - pre-auth key from headscale
+///   HEADSCALE_URL               - e.g. http://localhost:8080
+///   HEADSCALE_AUTH_KEY          - ephemeral pre-auth key from headscale
+///   HEADSCALE_PERSIST_AUTH_KEY  - non-ephemeral pre-auth key from headscale
 @TestOn('mac-os || linux')
 library;
 
@@ -25,11 +26,13 @@ import 'support/state_waiters.dart';
 void main() {
   final controlUrl = Platform.environment['HEADSCALE_URL'];
   final authKey = Platform.environment['HEADSCALE_AUTH_KEY'];
-  final persistAuthKey =
-      Platform.environment['HEADSCALE_PERSIST_AUTH_KEY'] ?? authKey;
+  final persistAuthKey = Platform.environment['HEADSCALE_PERSIST_AUTH_KEY'];
 
-  if (controlUrl == null || authKey == null) {
-    print('Skipping E2E tests: HEADSCALE_URL and HEADSCALE_AUTH_KEY required.');
+  if (controlUrl == null || authKey == null || persistAuthKey == null) {
+    print(
+      'Skipping E2E tests: HEADSCALE_URL, HEADSCALE_AUTH_KEY, and '
+      'HEADSCALE_PERSIST_AUTH_KEY required.',
+    );
     print('Run test/e2e/run_e2e.sh to set up the environment.');
     return;
   }

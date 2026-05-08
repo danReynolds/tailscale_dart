@@ -99,6 +99,10 @@ await Tailscale.instance.up(
 );
 ```
 
+Use a fresh or cleared `stateDir` for each disposable identity. If `stateDir`
+already contains node credentials, `up(ephemeral: true)` reconnects as that
+existing node instead of registering a new ephemeral one.
+
 ## Feature support
 
 Area | API | Status | Notes

@@ -130,9 +130,9 @@ print(res.statusCode);</code></pre>
             <tbody>
               <tr>
                 <td>Node lifecycle</td>
-                <td><code>init</code>, <code>up</code>, <code>down</code>, <code>logout</code>, <code>status</code></td>
+                <td><code>init</code>, <code>up(ephemeral)</code>, <code>down</code>, <code>logout</code>, <code>status</code></td>
                 <td><span class="status done">Implemented</span></td>
-                <td>Backed by embedded <code>tsnet.Server</code> lifecycle.</td>
+                <td>Backed by embedded <code>tsnet.Server</code> lifecycle, including disposable nodes for CI and tests.</td>
               </tr>
               <tr>
                 <td>Nodes and identity</td>

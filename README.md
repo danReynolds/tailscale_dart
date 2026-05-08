@@ -87,11 +87,27 @@ Future<void> main() async {
 
 Subsequent launches can call `up()` without an auth key. The node identity is persisted in `stateDir`.
 
+For short-lived CI jobs, preview environments, and disposable test nodes, pass
+`ephemeral: true` to register a node that Tailscale removes after it goes
+inactive:
+
+```dart
+await Tailscale.instance.up(
+  hostname: 'preview-pr-842',
+  authKey: 'tskey-auth-...',
+  ephemeral: true,
+);
+```
+
+Use a fresh or cleared `stateDir` for each disposable identity. If `stateDir`
+already contains node credentials, `up(ephemeral: true)` reconnects as that
+existing node instead of registering a new ephemeral one.
+
 ## Feature support
 
 Area | API | Status | Notes
 --- | --- | --- | ---
-Lifecycle | `init`, `up`, `down`, `logout`, `status` | Supported | `up()` resolves on the first stable state: running, needs login, or needs machine auth.
+Lifecycle | `init`, `up`, `down`, `logout`, `status` | Supported | `up(ephemeral: true)` supports disposable CI/test nodes; `up()` resolves on the first stable state: running, needs login, or needs machine auth.
 Reactive state | `onStateChange`, `onError`, `onNodeChanges` | Supported | Go pushes updates to Dart; callers do not poll.
 Node identity | `nodes`, `nodeByIp`, `whois` | Supported | Use stable node IDs for durable references.
 Outbound HTTP | `http.client` | Supported | A normal `package:http` client routed through tsnet.

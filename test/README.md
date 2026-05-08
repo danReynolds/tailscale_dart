@@ -226,7 +226,7 @@ TAILSCALE_TAILNET_ID=... \
   dart test test/live_tailscale/live_routing_controls_test.dart
 ```
 
-The suite creates short-lived auth keys, starts two embedded nodes, makes one
+The suite creates short-lived ephemeral auth keys, starts two embedded nodes, makes one
 node advertise default routes, approves those routes with the Tailscale device
 routes API, and verifies `exitNode.suggest()`, `use(node)`, `useAuto()`, and
 `clear()`. The API key must be able to create auth keys, list devices, enable

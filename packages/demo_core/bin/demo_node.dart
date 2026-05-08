@@ -62,6 +62,7 @@ Future<void> _serve(_Args args) async {
     stateDir: stateDir,
     hostname: hostname,
     authKey: authKey,
+    ephemeral: args.flag('ephemeral'),
     controlUrl: controlUrl,
     verbose: args.flag('verbose'),
   );
@@ -145,6 +146,7 @@ Future<bool> _probe(_Args args) async {
     stateDir: stateDir,
     hostname: hostname,
     authKey: authKey,
+    ephemeral: args.flag('ephemeral'),
     controlUrl: controlUrl,
     verbose: args.flag('verbose'),
   );
@@ -180,6 +182,7 @@ Future<bool> _pair(_Args args) async {
     stateDir: '$stateRoot/a',
     hostname: args.option('hostname-a') ?? 'demo-local-a',
     authKey: authKey,
+    ephemeral: args.flag('ephemeral'),
     controlUrl: controlUrl,
     verbose: args.flag('verbose'),
   );
@@ -195,6 +198,7 @@ Future<bool> _pair(_Args args) async {
       stateDir: '$stateRoot/b',
       hostname: args.option('hostname-b') ?? 'demo-local-b',
       authKey: authKey,
+      ephemeral: args.flag('ephemeral'),
       controlUrl: controlUrl,
       verbose: args.flag('verbose'),
     );
@@ -239,6 +243,7 @@ Future<TailscaleStatus> _upAndWaitRunning(
   required String stateDir,
   required String hostname,
   required String? authKey,
+  required bool ephemeral,
   required Uri? controlUrl,
   required bool verbose,
 }) async {
@@ -247,6 +252,7 @@ Future<TailscaleStatus> _upAndWaitRunning(
     stateDir: stateDir,
     hostname: hostname,
     authKey: authKey,
+    ephemeral: ephemeral,
     controlUrl: controlUrl,
     logLevel: verbose ? TailscaleLogLevel.info : TailscaleLogLevel.error,
   );
@@ -375,6 +381,7 @@ final class _ManagedNode {
     required String stateDir,
     required String hostname,
     required String authKey,
+    required bool ephemeral,
     required String? controlUrl,
     required bool verbose,
   }) async {
@@ -389,6 +396,7 @@ final class _ManagedNode {
       hostname,
       '--auth-key',
       authKey,
+      if (ephemeral) '--ephemeral',
       if (controlUrl != null && controlUrl.isNotEmpty) ...[
         '--control-url',
         controlUrl,
@@ -568,6 +576,7 @@ Common options:
   --state-dir DIR
   --hostname NAME
   --auth-key KEY
+  --ephemeral
   --control-url URL
   --stdin-control
   --verbose

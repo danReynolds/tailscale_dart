@@ -20,13 +20,13 @@ import (
 )
 
 //export DuneStart
-func DuneStart(hostname *C.char, authKey *C.char, controlURL *C.char, stateDir *C.char) *C.char {
+func DuneStart(hostname *C.char, authKey *C.char, controlURL *C.char, stateDir *C.char, ephemeral C.int) *C.char {
 	name := C.GoString(hostname)
 	key := C.GoString(authKey)
 	ctl := C.GoString(controlURL)
 	dir := C.GoString(stateDir)
 
-	err := tailscale.Start(name, key, ctl, dir)
+	err := tailscale.Start(name, key, ctl, dir, ephemeral != 0)
 	if err != nil {
 		m := map[string]string{"error": err.Error()}
 		b, _ := json.Marshal(m)

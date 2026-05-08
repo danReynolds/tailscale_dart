@@ -16,6 +16,7 @@ final class PeerProcess {
     required String hostname,
     String? controlUrl,
     String? authKey,
+    bool ephemeral = false,
     String? responseBody,
     List<String> advertisedRoutes = const [],
   }) async {
@@ -28,6 +29,7 @@ final class PeerProcess {
         'HOSTNAME': hostname,
         if (controlUrl != null) 'CONTROL_URL': controlUrl,
         if (authKey != null) 'AUTH_KEY': authKey,
+        if (ephemeral) 'EPHEMERAL': '1',
         if (responseBody != null) 'RESPONSE_BODY': responseBody,
         if (advertisedRoutes.isNotEmpty)
           'ADVERTISED_ROUTES': advertisedRoutes.join(','),

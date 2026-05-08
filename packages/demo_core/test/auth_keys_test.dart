@@ -14,6 +14,7 @@ void main() {
         apiKey: 'tskey-api-test',
         tailnetId: 'example.com',
         reusable: true,
+        ephemeral: true,
         preauthorized: true,
         expiry: Duration(hours: 2),
       ),
@@ -38,6 +39,7 @@ void main() {
     expect(requestedHeaders['content-type'], 'application/json');
     expect(requestedBody, contains('"expirySeconds":7200'));
     expect(requestedBody, contains('"reusable":true'));
+    expect(requestedBody, contains('"ephemeral":true'));
     expect(requestedBody, contains('"preauthorized":true'));
   });
 }

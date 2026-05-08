@@ -15,7 +15,7 @@ Build Dart and Flutter apps that talk to each other directly — no public serve
 
 `package:tailscale` embeds upstream Go [`tsnet`](https://pkg.go.dev/tailscale.com/tsnet) and exposes typed Dart APIs for lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve, Funnel, prefs, exit nodes, and diagnostics. Your app authenticates as its own node on the tailnet — users never install or configure a Tailscale client.
 
-> **Status:** `0.3.0`, pre-1.0. The core API is stable enough to build on, but minor versions may include breaking changes until 1.0. Production users are welcome — please [open an issue](https://github.com/danReynolds/tailscale_dart/issues) or [start a discussion](https://github.com/danReynolds/tailscale_dart/discussions) if something blocks you.
+> **Status:** `0.3.1`, pre-1.0. The core API is stable enough to build on, but minor versions may include breaking changes until 1.0. Production users are welcome — please [open an issue](https://github.com/danReynolds/tailscale_dart/issues) or [start a discussion](https://github.com/danReynolds/tailscale_dart/discussions) if something blocks you.
 
 ## Documentation
 
@@ -55,7 +55,7 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 
 ```yaml
 dependencies:
-  tailscale: ^0.3.0
+  tailscale: ^0.3.1
 ```
 
 The first `dart run`, `dart test`, or `flutter build` triggers a native build hook that compiles the Go runtime for the target platform. Subsequent builds are cached and only recompile when Go source changes.

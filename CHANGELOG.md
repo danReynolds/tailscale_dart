@@ -1,3 +1,12 @@
+## 0.3.1
+
+- Adds `Tailscale.up(ephemeral: true)` for disposable CI jobs, preview
+  environments, and tests.
+- Adds `example/shelf_adapter.dart`, a tested adapter showing how to run Shelf
+  handlers directly on `http.bind` without making Shelf a core dependency.
+- Updates the README, developer site, API status, and architecture notes to
+  point Shelf users at the tested adapter example.
+
 ## 0.3.0
 
 This release is a major API and transport rebuild for public POSIX usage.
@@ -36,8 +45,6 @@ and a shared POSIX reactor.
 
 - `TailscaleClient` is the testable app-facing interface implemented by
   `Tailscale.instance`.
-- `Tailscale.up(ephemeral: true)` registers disposable nodes for CI jobs,
-  preview environments, and tests.
 - `onStateChange`, `onError`, and `onNodeChanges` are pushed from Go; node
   updates are debounced and new `onNodeChanges` subscribers receive the current
   snapshot.
@@ -60,8 +67,6 @@ and a shared POSIX reactor.
   metadata and rejects payloads over 60 KiB.
 - The POSIX data plane uses a shared kqueue/epoll reactor instead of spawning
   reader/writer isolates per fd.
-- `example/shelf_adapter.dart` shows how to run Shelf handlers directly on
-  `http.bind` via an extension, without making Shelf a core dependency.
 
 **Tailscale feature namespaces:**
 

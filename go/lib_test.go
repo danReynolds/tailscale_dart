@@ -168,6 +168,24 @@ func TestStart_NoOpWithoutAuthKey(t *testing.T) {
 	}
 }
 
+func TestStart_AppliesEphemeralFlag(t *testing.T) {
+	Stop()
+	t.Cleanup(Stop)
+
+	if err := Start("ephemeral-test", "", "", t.TempDir(), true); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if srv == nil {
+		t.Fatal("Start did not commit a server")
+	}
+	if !srv.Ephemeral {
+		t.Fatal("Start did not apply Ephemeral=true to tsnet.Server")
+	}
+}
+
 func TestStart_StopLockedClosesListeners(t *testing.T) {
 	oldLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

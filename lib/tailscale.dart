@@ -411,10 +411,13 @@ class Tailscale implements TailscaleClient {
   ///
   /// Set [ephemeral] to register this process as a short-lived node. Ephemeral
   /// nodes are removed from the tailnet automatically after they go inactive
-  /// and immediately on [logout]. Use this for CI jobs, preview environments,
-  /// disposable tests, and other nodes whose identity should not outlive the
-  /// process. This affects registration with the control plane; use a fresh or
-  /// cleared [stateDir] when you need to force a new ephemeral identity.
+  /// by control-plane cleanup. Calling [logout] stops the local node and clears
+  /// local credentials, but tailnet removal still follows the control plane's
+  /// ephemeral-node cleanup behavior. Use this for CI jobs, preview
+  /// environments, disposable tests, and other nodes whose identity should not
+  /// outlive the process. This affects registration with the control plane; use
+  /// a fresh or cleared `stateDir` passed to [Tailscale.init] when you need to
+  /// force a new ephemeral identity.
   ///
   /// [hostname] sets the tailnet-visible hostname and the
   /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) label, so the

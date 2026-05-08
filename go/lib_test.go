@@ -163,7 +163,7 @@ func TestStart_NoOpWithoutAuthKey(t *testing.T) {
 		mu.Unlock()
 	}()
 
-	if err := Start("host", "", "https://control", t.TempDir()); err != nil {
+	if err := Start("host", "", "https://control", t.TempDir(), false); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 }

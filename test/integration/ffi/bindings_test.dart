@@ -108,6 +108,7 @@ void main() {
         authKey,
         controlUrl,
         stateDir,
+        1,
       );
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);

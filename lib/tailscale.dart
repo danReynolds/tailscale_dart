@@ -111,6 +111,7 @@ abstract interface class TailscaleClient {
   Future<TailscaleStatus> up({
     String hostname = '',
     String? authKey,
+    bool ephemeral = false,
     Uri? controlUrl,
     Duration timeout = const Duration(seconds: 30),
   });
@@ -405,9 +406,15 @@ class Tailscale implements TailscaleClient {
   /// tailnet admin panel at
   /// <https://login.tailscale.com/admin/settings/keys> (see
   /// <https://tailscale.com/kb/1085/auth-keys>). Reusable keys let you
-  /// call [up] from multiple processes; ephemeral keys auto-expire
-  /// after the node goes offline. Subsequent launches can omit it —
+  /// call [up] from multiple processes. Subsequent launches can omit it —
   /// the persisted session state reconnects automatically.
+  ///
+  /// Set [ephemeral] to register this process as a short-lived node. Ephemeral
+  /// nodes are removed from the tailnet automatically after they go inactive
+  /// and immediately on [logout]. Use this for CI jobs, preview environments,
+  /// disposable tests, and other nodes whose identity should not outlive the
+  /// process. This affects registration with the control plane; use a fresh or
+  /// cleared [stateDir] when you need to force a new ephemeral identity.
   ///
   /// [hostname] sets the tailnet-visible hostname and the
   /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) label, so the
@@ -448,6 +455,7 @@ class Tailscale implements TailscaleClient {
   Future<TailscaleStatus> up({
     String hostname = '',
     String? authKey,
+    bool ephemeral = false,
     Uri? controlUrl,
     Duration timeout = const Duration(seconds: 30),
   }) async {
@@ -474,6 +482,7 @@ class Tailscale implements TailscaleClient {
       await _worker.start(
         hostname: hostname,
         authKey: authKey ?? '',
+        ephemeral: ephemeral,
         controlUrl: resolvedControlUrl.toString(),
         stateDir: _stateDir,
       );

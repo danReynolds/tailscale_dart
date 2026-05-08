@@ -25,6 +25,8 @@ import 'support/state_waiters.dart';
 void main() {
   final controlUrl = Platform.environment['HEADSCALE_URL'];
   final authKey = Platform.environment['HEADSCALE_AUTH_KEY'];
+  final persistAuthKey =
+      Platform.environment['HEADSCALE_PERSIST_AUTH_KEY'] ?? authKey;
 
   if (controlUrl == null || authKey == null) {
     print('Skipping E2E tests: HEADSCALE_URL and HEADSCALE_AUTH_KEY required.');
@@ -62,7 +64,7 @@ void main() {
       NodeState.running,
       () => tsnet.up(
         hostname: 'dune-e2e-test',
-        authKey: authKey,
+        authKey: persistAuthKey,
         controlUrl: Uri.parse(controlUrl),
       ),
     );
@@ -139,6 +141,7 @@ void main() {
         stateDir: peerStateDir,
         controlUrl: controlUrl,
         authKey: authKey,
+        ephemeral: true,
         hostname: 'dune-e2e-peer',
         responseBody: peerResponseBody,
       );
@@ -409,7 +412,7 @@ void main() {
       final peer = await PeerProcess.spawn(
         stateDir: persistStateDir,
         controlUrl: controlUrl,
-        authKey: authKey,
+        authKey: persistAuthKey,
         hostname: 'dune-e2e-persist',
       );
       firstIpv4 = peer.ipv4;
@@ -467,7 +470,7 @@ void main() {
     const hostname = 'dune-e2e-lifecycle';
     Future<void> bringUp() => tsnet.up(
       hostname: hostname,
-      authKey: authKey,
+      authKey: persistAuthKey,
       controlUrl: Uri.parse(controlUrl),
     );
     Future<void> reconnect() =>

@@ -175,6 +175,7 @@ Future<void> _setUpLiveTailnet({
     () => tsnet.up(
       hostname: clientHostname,
       authKey: clientAuthKey,
+      ephemeral: true,
       controlUrl: controlUri(),
       timeout: const Duration(seconds: 120),
     ),
@@ -184,6 +185,7 @@ Future<void> _setUpLiveTailnet({
     stateDir: exitStateDir,
     controlUrl: controlUri()?.toString(),
     authKey: exitAuthKey,
+    ephemeral: true,
     hostname: exitHostname,
     advertisedRoutes: _defaultRoutes,
   );

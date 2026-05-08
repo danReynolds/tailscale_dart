@@ -36,6 +36,8 @@ and a shared POSIX reactor.
 
 - `TailscaleClient` is the testable app-facing interface implemented by
   `Tailscale.instance`.
+- `Tailscale.up(ephemeral: true)` registers disposable nodes for CI jobs,
+  preview environments, and tests.
 - `onStateChange`, `onError`, and `onNodeChanges` are pushed from Go; node
   updates are debounced and new `onNodeChanges` subscribers receive the current
   snapshot.

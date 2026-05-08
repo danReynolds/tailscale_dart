@@ -64,6 +64,7 @@ void _workerEntrypoint(SendPort sendPort) {
             final _WorkerStartCommand(
               :authKey,
               :controlUrl,
+              :ephemeral,
               :hostname,
               :hostNetworkSnapshot,
               :stateDir,
@@ -112,6 +113,7 @@ void _workerEntrypoint(SendPort sendPort) {
                   authKeyPtr!,
                   controlUrlPtr!,
                   stateDirPtr!,
+                  ephemeral ? 1 : 0,
                 ),
                 onError: TailscaleUpException.new,
               );

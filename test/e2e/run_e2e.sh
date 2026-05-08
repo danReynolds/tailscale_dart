@@ -42,20 +42,29 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# Create a user and auth key
-echo "=== Creating Headscale user and auth key ==="
+# Create a user plus separate disposable and persistence auth keys.
+echo "=== Creating Headscale user and auth keys ==="
 docker compose -f "$COMPOSE_FILE" exec headscale \
     headscale users create dune-test 2>/dev/null || true
 
 AUTH_KEY=$(docker compose -f "$COMPOSE_FILE" exec headscale \
+    headscale preauthkeys create --user dune-test --reusable --ephemeral --expiration 10m \
+    2>/dev/null | tail -1)
+
+PERSIST_AUTH_KEY=$(docker compose -f "$COMPOSE_FILE" exec headscale \
     headscale preauthkeys create --user dune-test --reusable --expiration 10m \
     2>/dev/null | tail -1)
 
 if [ -z "$AUTH_KEY" ]; then
-    echo "ERROR: Failed to create auth key"
+    echo "ERROR: Failed to create ephemeral auth key"
     exit 1
 fi
-echo "Auth key: ${AUTH_KEY:0:20}..."
+if [ -z "$PERSIST_AUTH_KEY" ]; then
+    echo "ERROR: Failed to create persistence auth key"
+    exit 1
+fi
+echo "Ephemeral auth key: ${AUTH_KEY:0:20}..."
+echo "Persistence auth key: ${PERSIST_AUTH_KEY:0:20}..."
 
 # Run the E2E Dart test
 echo "=== Running E2E tests ==="
@@ -63,6 +72,7 @@ cd "$PKG_DIR"
 
 HEADSCALE_URL="http://localhost:$HEADSCALE_PORT" \
 HEADSCALE_AUTH_KEY="$AUTH_KEY" \
+HEADSCALE_PERSIST_AUTH_KEY="$PERSIST_AUTH_KEY" \
     "${DART:-dart}" test test/e2e/e2e_test.dart --enable-experiment=native-assets --timeout=360s
 
 echo "=== E2E tests passed ==="

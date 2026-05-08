@@ -14,6 +14,7 @@
 ///                     plane
 ///   AUTH_KEY        — reusable preauth key (optional; omit to reconnect with
 ///                     previously persisted credentials in STATE_DIR)
+///   EPHEMERAL       — `1`/`true` to register as a short-lived node
 ///   HOSTNAME        — tailnet-visible hostname (default: dune-e2e-peer)
 ///   ADVERTISED_ROUTES — optional comma-separated routes to advertise through
 ///                     prefs before READY, e.g. `0.0.0.0/0,::/0`.
@@ -39,6 +40,7 @@ Future<void> main(List<String> args) async {
   final stateDir = _requiredEnv('STATE_DIR');
   final controlUrl = Platform.environment['CONTROL_URL'];
   final authKey = Platform.environment['AUTH_KEY'] ?? '';
+  final ephemeral = _optionalBoolEnv('EPHEMERAL');
   final hostname = Platform.environment['HOSTNAME'] ?? 'dune-e2e-peer';
   final advertisedRoutes = _optionalCsvEnv('ADVERTISED_ROUTES');
   final responseBody =
@@ -52,6 +54,7 @@ Future<void> main(List<String> args) async {
   await tsnet.up(
     hostname: hostname,
     authKey: authKey.isEmpty ? null : authKey,
+    ephemeral: ephemeral,
     controlUrl: controlUrl == null || controlUrl.isEmpty
         ? null
         : Uri.parse(controlUrl),
@@ -140,4 +143,9 @@ List<String> _optionalCsvEnv(String name) {
     for (final item in value.split(','))
       if (item.trim().isNotEmpty) item.trim(),
   ];
+}
+
+bool _optionalBoolEnv(String name) {
+  final raw = Platform.environment[name]?.trim().toLowerCase();
+  return raw == '1' || raw == 'true' || raw == 'yes';
 }

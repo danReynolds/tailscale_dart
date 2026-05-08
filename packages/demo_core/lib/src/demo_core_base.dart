@@ -105,6 +105,7 @@ final class DemoCore {
     required String stateDir,
     required String hostname,
     String? authKey,
+    bool ephemeral = false,
     Uri? controlUrl,
     TailscaleLogLevel logLevel = TailscaleLogLevel.info,
   }) async {
@@ -114,6 +115,7 @@ final class DemoCore {
     return _tsnet.up(
       hostname: hostname,
       authKey: authKey == null || authKey.isEmpty ? null : authKey,
+      ephemeral: ephemeral,
       controlUrl: controlUrl,
     );
   }
@@ -147,17 +149,20 @@ final class DemoCore {
     required String hostname,
     required String apiKey,
     required String tailnetId,
+    bool ephemeral = false,
     Uri? controlUrl,
     TailscaleLogLevel logLevel = TailscaleLogLevel.info,
   }) async {
     final generated = await generateAuthKey(
       apiKey: apiKey,
       tailnetId: tailnetId,
+      ephemeral: ephemeral,
     );
     return up(
       stateDir: stateDir,
       hostname: hostname,
       authKey: generated.key,
+      ephemeral: ephemeral,
       controlUrl: controlUrl,
       logLevel: logLevel,
     );

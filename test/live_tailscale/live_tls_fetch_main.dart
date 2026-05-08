@@ -24,6 +24,7 @@ Future<void> main() async {
     await tsnet.up(
       hostname: hostname,
       authKey: authKey,
+      ephemeral: true,
       controlUrl: controlUrl == null || controlUrl.isEmpty
           ? null
           : Uri.parse(controlUrl),

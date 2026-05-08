@@ -98,6 +98,7 @@ void main() {
         () => tsnet!.up(
           hostname: hostname,
           authKey: authKey,
+          ephemeral: true,
           controlUrl: controlUri(),
           timeout: const Duration(seconds: 120),
         ),

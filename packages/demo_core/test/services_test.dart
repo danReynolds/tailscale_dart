@@ -81,6 +81,7 @@ class _FakeTailscale implements Tailscale {
   Future<TailscaleStatus> up({
     String hostname = '',
     String? authKey,
+    bool ephemeral = false,
     Uri? controlUrl,
     Duration timeout = const Duration(seconds: 30),
   }) => status();

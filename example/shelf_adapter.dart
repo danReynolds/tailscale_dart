@@ -43,20 +43,21 @@ Future<TailscaleHttpServer> startShelfExample(Tailscale tailscale) {
   final handler = const shelf.Pipeline()
       .addMiddleware(shelf.logRequests())
       .addHandler((request) async {
-    final remote =
-        request.context[tailscaleShelfRemoteEndpointKey] as TailscaleEndpoint;
-    if (request.url.path == 'echo' && request.method == 'POST') {
-      final body = await request.readAsString();
-      return shelf.Response.ok(
-        'echo from ${remote.address}: $body',
-        headers: {'content-type': 'text/plain; charset=utf-8'},
-      );
-    }
-    return shelf.Response.ok(
-      'private over tailnet',
-      headers: {'content-type': 'text/plain; charset=utf-8'},
-    );
-  });
+        final remote =
+            request.context[tailscaleShelfRemoteEndpointKey]
+                as TailscaleEndpoint;
+        if (request.url.path == 'echo' && request.method == 'POST') {
+          final body = await request.readAsString();
+          return shelf.Response.ok(
+            'echo from ${remote.address}: $body',
+            headers: {'content-type': 'text/plain; charset=utf-8'},
+          );
+        }
+        return shelf.Response.ok(
+          'private over tailnet',
+          headers: {'content-type': 'text/plain; charset=utf-8'},
+        );
+      });
 
   return tailscale.http.bindShelf(port: 8080, handler: handler);
 }
@@ -87,16 +88,17 @@ Future<void> _handleShelfRequest(
   } catch (error, stackTrace) {
     onError?.call(error, stackTrace);
     await _tryInternalServerError(request);
+    await _tryCloseResponse(request, onError);
   }
 }
 
 Map<String, Object> _requestHeaders(TailscaleHttpRequest request) => {
-      for (final entry in request.headersAll.entries)
-        if (entry.value.length == 1)
-          entry.key: entry.value.single
-        else if (entry.value.length > 1)
-          entry.key: List<String>.unmodifiable(entry.value),
-    };
+  for (final entry in request.headersAll.entries)
+    if (entry.value.length == 1)
+      entry.key: entry.value.single
+    else if (entry.value.length > 1)
+      entry.key: List<String>.unmodifiable(entry.value),
+};
 
 Uri _requestedUri(TailscaleHttpRequest request) {
   if (request.uri.hasScheme) return request.uri;
@@ -106,26 +108,23 @@ Uri _requestedUri(TailscaleHttpRequest request) {
   final originForm = request.requestUri.isEmpty
       ? '/'
       : request.requestUri.startsWith('/')
-          ? request.requestUri
-          : '/${request.requestUri}';
+      ? request.requestUri
+      : '/${request.requestUri}';
   return Uri.parse('http://$authority$originForm');
 }
 
 String _endpointAuthority(TailscaleEndpoint endpoint) {
   final address =
       endpoint.address.contains(':') && !endpoint.address.startsWith('[')
-          ? '[${endpoint.address}]'
-          : endpoint.address;
+      ? '[${endpoint.address}]'
+      : endpoint.address;
   return '$address:${endpoint.port}';
 }
 
 String _protocolVersion(String proto) =>
     proto.startsWith('HTTP/') ? proto.substring(5) : proto;
 
-void _copyResponseHeaders(
-  TailscaleHttpResponse target,
-  shelf.Response source,
-) {
+void _copyResponseHeaders(TailscaleHttpResponse target, shelf.Response source) {
   for (final entry in source.headersAll.entries) {
     final values = entry.value;
     if (values.isEmpty) continue;
@@ -145,5 +144,16 @@ Future<void> _tryInternalServerError(TailscaleHttpRequest request) async {
     );
   } catch (_) {
     // The response may already be committed if the handler failed mid-stream.
+  }
+}
+
+Future<void> _tryCloseResponse(
+  TailscaleHttpRequest request,
+  void Function(Object error, StackTrace stackTrace)? onError,
+) async {
+  try {
+    await request.response.close();
+  } catch (error, stackTrace) {
+    onError?.call(error, stackTrace);
   }
 }

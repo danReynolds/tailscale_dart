@@ -87,6 +87,34 @@ void main() {
       expect(request.response.headers['content-type'], 'text/plain');
     });
 
+    test('bindShelf closes the response when a streamed body fails', () async {
+      final http = _FakeHttp();
+      Object? reportedError;
+      StackTrace? reportedStack;
+
+      await http.bindShelf(
+        port: 80,
+        handler: (_) => shelf.Response.ok(
+          _failingBody(),
+          headers: {'content-type': 'text/plain'},
+        ),
+        onError: (error, stackTrace) {
+          reportedError = error;
+          reportedStack = stackTrace;
+        },
+      );
+
+      final request = _FakeRequest();
+      http.add(request);
+      await request.response.done.timeout(const Duration(seconds: 1));
+
+      expect(reportedError, isA<StateError>());
+      expect(reportedStack, isNotNull);
+      expect(request.response.statusCode, 200);
+      expect(request.response.textBody, 'partial');
+      expect(request.response.closeCount, 1);
+    });
+
     test('bindShelf reports handler errors and sends a 500', () async {
       final http = _FakeHttp();
       Object? reportedError;
@@ -142,6 +170,11 @@ void main() {
       },
     );
   });
+}
+
+Stream<List<int>> _failingBody() async* {
+  yield utf8.encode('partial');
+  throw StateError('stream failed');
 }
 
 final class _FakeHttp implements Http {
@@ -291,6 +324,9 @@ final class _FakeResponse implements TailscaleHttpResponse {
   final _body = <int>[];
   final _done = Completer<void>();
   var _statusCode = 200;
+  var _closed = false;
+  var _headSent = false;
+  var closeCount = 0;
 
   String get textBody => utf8.decode(_body);
 
@@ -299,6 +335,7 @@ final class _FakeResponse implements TailscaleHttpResponse {
 
   @override
   set statusCode(int value) {
+    _checkHeaderMutable();
     _statusCode = value;
   }
 
@@ -313,12 +350,14 @@ final class _FakeResponse implements TailscaleHttpResponse {
 
   @override
   void setHeader(String name, String value) {
+    _checkHeaderMutable();
     _headers[name] = value;
     _extraHeaderValues.remove(name);
   }
 
   @override
   void addHeader(String name, String value) {
+    _checkHeaderMutable();
     if (!_headers.containsKey(name)) {
       _headers[name] = value;
       return;
@@ -328,6 +367,8 @@ final class _FakeResponse implements TailscaleHttpResponse {
 
   @override
   Future<void> write(List<int> bytes) async {
+    if (_closed) throw StateError('HTTP response is closed.');
+    _headSent = true;
     _body.addAll(bytes);
   }
 
@@ -346,6 +387,9 @@ final class _FakeResponse implements TailscaleHttpResponse {
 
   @override
   Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    closeCount += 1;
     if (!_done.isCompleted) {
       _done.complete();
     }
@@ -353,4 +397,10 @@ final class _FakeResponse implements TailscaleHttpResponse {
 
   @override
   Future<void> get done => _done.future;
+
+  void _checkHeaderMutable() {
+    if (_headSent) {
+      throw StateError('HTTP response headers cannot change after body write.');
+    }
+  }
 }

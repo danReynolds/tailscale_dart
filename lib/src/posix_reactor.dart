@@ -180,6 +180,94 @@ final class _SharedFdReactorProxy {
       error.message == 'fd reactor register timed out';
 }
 
+/// The native operations the reactor loop performs on its poller and fds.
+///
+/// Pulling these behind an interface lets the reactor's command processing and
+/// main loop be driven deterministically by a fake in tests (see
+/// `ReactorTestHarness`), which is the only way to reach the lifecycle race
+/// windows — registration failure, idle exit, close ordering — that real-fd
+/// integration tests cannot trigger on demand. Production uses
+/// [_NativeReactorBackend], a thin forwarder to the cgo `duneReactor*` exports
+/// and libc syscall bindings.
+abstract interface class _ReactorBackend {
+  /// Registers [fd] (transport [id]) with the poller for [events]. Returns 0 on
+  /// success, non-zero on failure (the caller must NOT close [fd] on failure —
+  /// ownership stays with the main isolate until registration succeeds).
+  int register(int fd, int id, int events);
+
+  /// Updates the interest [events] for the registered [fd]. 0 on success.
+  int update(int fd, int id, int events);
+
+  /// Removes [fd] from the poller.
+  void unregister(int fd);
+
+  /// Blocks until readiness or [timeoutMillis] elapses, filling [events] with up
+  /// to [maxEvents] records. Returns the count, or negative on error.
+  int wait(
+    Pointer<_NativeReactorEvent> events,
+    int maxEvents,
+    int timeoutMillis,
+  );
+
+  /// Tears down the poller; called once on shard exit.
+  void closePoller();
+
+  int read(int fd, Pointer<Uint8> buffer, int count);
+  int write(int fd, Pointer<Uint8> buffer, int count);
+  int shutdown(int fd, int how);
+
+  /// Closes the descriptor (the reactor calls [shutdown] first).
+  int closeFd(int fd);
+
+  int get errno;
+}
+
+/// Production backend: forwards to the cgo reactor exports (keyed by the shard's
+/// native [_handle]) and the libc syscall bindings.
+final class _NativeReactorBackend implements _ReactorBackend {
+  _NativeReactorBackend(this._handle);
+
+  final int _handle;
+
+  @override
+  int register(int fd, int id, int events) =>
+      duneReactorRegister(_handle, fd, id, events);
+
+  @override
+  int update(int fd, int id, int events) =>
+      duneReactorUpdate(_handle, fd, id, events);
+
+  @override
+  void unregister(int fd) => duneReactorUnregister(_handle, fd);
+
+  @override
+  int wait(
+    Pointer<_NativeReactorEvent> events,
+    int maxEvents,
+    int timeoutMillis,
+  ) => duneReactorWait(_handle, events.cast<Void>(), maxEvents, timeoutMillis);
+
+  @override
+  void closePoller() => duneReactorClose(_handle);
+
+  @override
+  int read(int fd, Pointer<Uint8> buffer, int count) =>
+      _PosixBindings.instance.read(fd, buffer, count);
+
+  @override
+  int write(int fd, Pointer<Uint8> buffer, int count) =>
+      _PosixBindings.instance.write(fd, buffer, count);
+
+  @override
+  int shutdown(int fd, int how) => _PosixBindings.instance.shutdown(fd, how);
+
+  @override
+  int closeFd(int fd) => _PosixBindings.instance.close(fd);
+
+  @override
+  int get errno => _PosixBindings.instance.errno;
+}
+
 /// Isolate entrypoint for one reactor shard.
 ///
 /// Sets up the command port, creates the native poller, hands the proxy a
@@ -199,7 +287,9 @@ void _fdReactorWorker(SendPort readyPort) {
   }
   readyPort.send(<Object>[_Boot.ready, commands.sendPort, handle]);
 
-  unawaited(_runFdReactor(handle, commands, pendingCommands));
+  unawaited(
+    _runFdReactor(_NativeReactorBackend(handle), commands, pendingCommands),
+  );
 }
 
 /// Reactor main loop.
@@ -216,7 +306,7 @@ void _fdReactorWorker(SendPort readyPort) {
 /// never observe a command sent by the main isolate while the reactor is
 /// otherwise busy.
 Future<void> _runFdReactor(
-  int handle,
+  _ReactorBackend backend,
   RawReceivePort commands,
   Queue<Object?> pendingCommands,
 ) async {
@@ -242,21 +332,20 @@ Future<void> _runFdReactor(
     while (true) {
       await Future<void>.delayed(Duration.zero);
       sawTransport =
-          _processReactorCommands(handle, states, metrics, pendingCommands) ||
+          _processReactorCommands(backend, states, metrics, pendingCommands) ||
           sawTransport;
       final idleBeforeWait =
           sawTransport && states.isEmpty && pendingCommands.isEmpty;
       if (tickIdle(isIdle: idleBeforeWait)) return;
 
-      final n = duneReactorWait(
-        handle,
-        events.cast<Void>(),
+      final n = backend.wait(
+        events,
         _reactorMaxEvents,
         idleBeforeWait ? _remainingIdleMillis(idle.elapsed) : -1,
       );
       await Future<void>.delayed(Duration.zero);
       sawTransport =
-          _processReactorCommands(handle, states, metrics, pendingCommands) ||
+          _processReactorCommands(backend, states, metrics, pendingCommands) ||
           sawTransport;
       if (tickIdle(
         isIdle: sawTransport && states.isEmpty && pendingCommands.isEmpty,
@@ -268,7 +357,7 @@ Future<void> _runFdReactor(
         final error = StateError('native reactor wait failed');
         metrics.hardErrorCount++;
         for (final state in List<_ReactorTransportState>.of(states.values)) {
-          _closeReactorState(handle, states, metrics, state, error: error);
+          _closeReactorState(backend, states, metrics, state, error: error);
         }
         return;
       }
@@ -282,25 +371,25 @@ Future<void> _runFdReactor(
         final state = states[event.id];
         if (state == null || state.closed) continue;
         if (event.events & _reactorEventRead != 0) {
-          _readReactorState(handle, states, metrics, state);
+          _readReactorState(backend, states, metrics, state);
         }
         if (state.closed) continue;
         if (event.events & _reactorEventWrite != 0) {
-          _flushReactorWrites(handle, states, metrics, state);
+          _flushReactorWrites(backend, states, metrics, state);
         }
         if (state.closed) continue;
         if (event.events & (_reactorEventHup | _reactorEventError) != 0) {
-          _readReactorState(handle, states, metrics, state, eofOnAgain: true);
+          _readReactorState(backend, states, metrics, state, eofOnAgain: true);
         }
       }
     }
   } finally {
     for (final state in List<_ReactorTransportState>.of(states.values)) {
-      _closeReactorState(handle, states, metrics, state);
+      _closeReactorState(backend, states, metrics, state);
     }
     calloc.free(events);
     commands.close();
-    duneReactorClose(handle);
+    backend.closePoller();
   }
 }
 
@@ -318,7 +407,7 @@ int _remainingIdleMillis(Duration elapsed) {
 /// shard has crossed from "bootstrap empty" to "has serviced traffic," which
 /// is what arms the idle-exit path.
 bool _processReactorCommands(
-  int handle,
+  _ReactorBackend backend,
   Map<int, _ReactorTransportState> states,
   _ReactorMetrics metrics,
   Queue<Object?> pendingCommands,
@@ -351,7 +440,7 @@ bool _processReactorCommands(
           replyPort.send('fd reactor transport limit exceeded');
           continue;
         }
-        final result = duneReactorRegister(handle, fd, id, 0);
+        final result = backend.register(fd, id, 0);
         if (result != 0) {
           replyPort.send('native reactor register failed');
           continue;
@@ -377,16 +466,16 @@ bool _processReactorCommands(
     switch (kind) {
       case _Cmd.enableRead:
         state.readEnabled = true;
-        _updateReactorInterest(handle, states, metrics, state);
+        _updateReactorInterest(backend, states, metrics, state);
         continue;
       case _Cmd.disableRead:
         state.readEnabled = false;
-        _updateReactorInterest(handle, states, metrics, state);
+        _updateReactorInterest(backend, states, metrics, state);
         continue;
       case _Cmd.inboundConsumed when message.length == 3 && message[2] is int:
         state.pendingInboundBytes -= message[2] as int;
         if (state.pendingInboundBytes < 0) state.pendingInboundBytes = 0;
-        _updateReactorInterest(handle, states, metrics, state);
+        _updateReactorInterest(backend, states, metrics, state);
         continue;
       case _Cmd.write
           when message.length == 4 &&
@@ -396,15 +485,15 @@ bool _processReactorCommands(
             .materialize()
             .asUint8List();
         state.writes.add(_ReactorWrite(message[2] as int, data));
-        _flushReactorWrites(handle, states, metrics, state);
+        _flushReactorWrites(backend, states, metrics, state);
         continue;
       case _Cmd.shutdownWrite when message.length == 3 && message[2] is int:
         state.closingWrite = true;
         state.shutdownWriteId = message[2] as int;
-        _flushReactorWrites(handle, states, metrics, state);
+        _flushReactorWrites(backend, states, metrics, state);
         continue;
       case _Cmd.close:
-        _closeReactorState(handle, states, metrics, state);
+        _closeReactorState(backend, states, metrics, state);
         continue;
     }
   }
@@ -419,7 +508,7 @@ bool _processReactorCommands(
 /// needs a final drain attempt; in that mode an EAGAIN is treated as EOF
 /// rather than a "come back later" signal.
 void _readReactorState(
-  int handle,
+  _ReactorBackend backend,
   Map<int, _ReactorTransportState> states,
   _ReactorMetrics metrics,
   _ReactorTransportState state, {
@@ -432,7 +521,7 @@ void _readReactorState(
     final availableInbound =
         state.maxInboundQueuedBytes - state.pendingInboundBytes;
     if (availableInbound <= 0) {
-      _updateReactorInterest(handle, states, metrics, state);
+      _updateReactorInterest(backend, states, metrics, state);
       return;
     }
     final readLimit = math.min(
@@ -441,11 +530,7 @@ void _readReactorState(
     );
 
     metrics.readSyscalls++;
-    final n = _PosixBindings.instance.read(
-      state.fd,
-      state.scratch.read,
-      readLimit,
-    );
+    final n = backend.read(state.fd, state.scratch.read, readLimit);
     if (n > 0) {
       // `fromList` copies the scratch view synchronously into the transferable,
       // so the buffer can be reused on the next read without an intermediate
@@ -464,11 +549,11 @@ void _readReactorState(
       state.readClosed = true;
       state.readEnabled = false;
       state.eventPort.send(<Object>[_Evt.eof]);
-      _updateReactorInterest(handle, states, metrics, state);
-      _closeIfFullyDone(handle, states, metrics, state);
+      _updateReactorInterest(backend, states, metrics, state);
+      _closeIfFullyDone(backend, states, metrics, state);
       return;
     }
-    final errno = _PosixBindings.instance.errno;
+    final errno = backend.errno;
     if (errno == _eintr) continue;
     if (_isAgain(errno)) {
       metrics.againCount++;
@@ -476,19 +561,19 @@ void _readReactorState(
         state.readClosed = true;
         state.readEnabled = false;
         state.eventPort.send(<Object>[_Evt.eof]);
-        _updateReactorInterest(handle, states, metrics, state);
-        _closeIfFullyDone(handle, states, metrics, state);
+        _updateReactorInterest(backend, states, metrics, state);
+        _closeIfFullyDone(backend, states, metrics, state);
       }
       return;
     }
     final error = StateError('read syscall failed errno=$errno');
     metrics.hardErrorCount++;
     state.eventPort.send(<Object>[_Evt.readError, error.toString()]);
-    _closeReactorState(handle, states, metrics, state, error: error);
+    _closeReactorState(backend, states, metrics, state, error: error);
     return;
   }
 
-  _updateReactorInterest(handle, states, metrics, state);
+  _updateReactorInterest(backend, states, metrics, state);
 }
 
 /// Drains queued writes for one transport, performing partial-write
@@ -496,7 +581,7 @@ void _readReactorState(
 /// `closeWrite()`. EAGAIN leaves the head write in place with its current
 /// offset; the next EPOLLOUT/EVFILT_WRITE wake will resume from there.
 void _flushReactorWrites(
-  int handle,
+  _ReactorBackend backend,
   Map<int, _ReactorTransportState> states,
   _ReactorMetrics metrics,
   _ReactorTransportState state,
@@ -523,11 +608,7 @@ void _flushReactorWrites(
         );
     while (true) {
       metrics.writeSyscalls++;
-      final n = _PosixBindings.instance.write(
-        state.fd,
-        state.scratch.write,
-        toWrite,
-      );
+      final n = backend.write(state.fd, state.scratch.write, toWrite);
       if (n > 0) {
         write.offset += n;
         budget -= n;
@@ -545,14 +626,14 @@ void _flushReactorWrites(
           write.id,
           error.toString(),
         ]);
-        _closeReactorState(handle, states, metrics, state, error: error);
+        _closeReactorState(backend, states, metrics, state, error: error);
         return;
       }
-      final errno = _PosixBindings.instance.errno;
+      final errno = backend.errno;
       if (errno == _eintr) continue;
       if (_isAgain(errno)) {
         metrics.againCount++;
-        _updateReactorInterest(handle, states, metrics, state);
+        _updateReactorInterest(backend, states, metrics, state);
         return;
       }
       final error = StateError('write syscall failed errno=$errno');
@@ -562,21 +643,18 @@ void _flushReactorWrites(
         write.id,
         error.toString(),
       ]);
-      _closeReactorState(handle, states, metrics, state, error: error);
+      _closeReactorState(backend, states, metrics, state, error: error);
       return;
     }
   }
 
   if (state.writes.isEmpty && state.closingWrite && !state.writeClosed) {
-    final result = _PosixBindings.instance.shutdown(
-      state.fd,
-      _ShutdownHow.write.value,
-    );
+    final result = backend.shutdown(state.fd, _ShutdownHow.write.value);
     if (result == 0) {
       state.writeClosed = true;
       final id = state.shutdownWriteId;
       if (id != null) state.eventPort.send(<Object>[_Evt.writeOk, id]);
-      _closeIfFullyDone(handle, states, metrics, state);
+      _closeIfFullyDone(backend, states, metrics, state);
     } else {
       final id = state.shutdownWriteId;
       final error = StateError('shutdown(SHUT_WR) failed');
@@ -588,25 +666,25 @@ void _flushReactorWrites(
       } else {
         state.eventPort.send(<Object>[_Evt.writeError, id, error.toString()]);
       }
-      _closeReactorState(handle, states, metrics, state, error: error);
+      _closeReactorState(backend, states, metrics, state, error: error);
     }
     return;
   }
 
-  _updateReactorInterest(handle, states, metrics, state);
+  _updateReactorInterest(backend, states, metrics, state);
 }
 
 /// Promotes a half-closed transport (both read and write halves done) to
 /// fully closed. Cheap to call repeatedly — `_closeReactorState` is
 /// idempotent on `state.closed`.
 void _closeIfFullyDone(
-  int handle,
+  _ReactorBackend backend,
   Map<int, _ReactorTransportState> states,
   _ReactorMetrics metrics,
   _ReactorTransportState state,
 ) {
   if (state.readClosed && state.writeClosed) {
-    _closeReactorState(handle, states, metrics, state);
+    _closeReactorState(backend, states, metrics, state);
   }
 }
 
@@ -618,7 +696,7 @@ void _closeIfFullyDone(
 /// silently discarded (the main isolate has already failed them through its
 /// own close path).
 void _closeReactorState(
-  int handle,
+  _ReactorBackend backend,
   Map<int, _ReactorTransportState> states,
   _ReactorMetrics metrics,
   _ReactorTransportState state, {
@@ -628,9 +706,9 @@ void _closeReactorState(
   state.closed = true;
   metrics.closeCount++;
   states.remove(state.id);
-  duneReactorUnregister(handle, state.fd);
-  _PosixBindings.instance.shutdown(state.fd, _ShutdownHow.readWrite.value);
-  _PosixBindings.instance.close(state.fd);
+  backend.unregister(state.fd);
+  backend.shutdown(state.fd, _ShutdownHow.readWrite.value);
+  backend.closeFd(state.fd);
   state.scratch.dispose();
   if (error != null) {
     for (final write in state.writes) {
@@ -675,7 +753,7 @@ Map<String, int> _reactorSnapshot(
 /// dropped while paused, half-closed, or back-pressured by a full inbound
 /// queue; write interest is asserted only while there is queued data.
 void _updateReactorInterest(
-  int handle,
+  _ReactorBackend backend,
   Map<int, _ReactorTransportState> states,
   _ReactorMetrics metrics,
   _ReactorTransportState state,
@@ -693,12 +771,12 @@ void _updateReactorInterest(
   // ack but rarely actually changes, so this elides most epoll_ctl/kevent calls
   // (two per kevent update on Darwin).
   if (events == state.lastInterest) return;
-  final result = duneReactorUpdate(handle, state.fd, state.id, events);
+  final result = backend.update(state.fd, state.id, events);
   if (result != 0) {
     final error = StateError('native reactor update failed');
     metrics.hardErrorCount++;
     state.eventPort.send(<Object>[_Evt.readError, error.toString()]);
-    _closeReactorState(handle, states, metrics, state, error: error);
+    _closeReactorState(backend, states, metrics, state, error: error);
     return;
   }
   state.lastInterest = events;
@@ -899,3 +977,131 @@ typedef _ShutdownDart = int Function(int, int);
 
 typedef _ErrnoLocationNative = Pointer<Int32> Function();
 typedef _ErrnoLocationDart = Pointer<Int32> Function();
+
+// ---------------------------------------------------------------------------
+// Test support.
+//
+// These expose the reactor's command processing to deterministic unit tests
+// via a fake backend, without spawning a reactor isolate or touching real fds
+// or the native poller. They are the seam that makes the lifecycle race
+// windows — registration failure, close ordering — testable; real-fd
+// integration tests cannot trigger those on demand.
+// ---------------------------------------------------------------------------
+
+/// A [_ReactorBackend] that records the native operations the reactor performs
+/// instead of executing them, so tests can assert on fd ownership. Test-only.
+@visibleForTesting
+final class FakeReactorBackend implements _ReactorBackend {
+  /// Return value for [register]; set non-zero to simulate a native
+  /// registration failure (the reactor must then NOT touch the fd).
+  int registerResult = 0;
+
+  /// Return value for [update]; non-zero simulates a poller update failure.
+  int updateResult = 0;
+
+  /// fds for which [register] succeeded, in order.
+  final List<int> registered = <int>[];
+
+  /// fds passed to [unregister], in order.
+  final List<int> unregistered = <int>[];
+
+  /// fds passed to [shutdown], in order.
+  final List<int> shutdownFds = <int>[];
+
+  /// fds passed to [closeFd], in order. A double-close shows up as a duplicate.
+  final List<int> closedFds = <int>[];
+
+  /// Whether [closePoller] was called.
+  bool pollerClosed = false;
+
+  @override
+  int register(int fd, int id, int events) {
+    if (registerResult == 0) registered.add(fd);
+    return registerResult;
+  }
+
+  @override
+  int update(int fd, int id, int events) => updateResult;
+
+  @override
+  void unregister(int fd) => unregistered.add(fd);
+
+  @override
+  int wait(
+    // ignore: library_private_types_in_public_api
+    Pointer<_NativeReactorEvent> events,
+    int maxEvents,
+    int timeoutMillis,
+  ) => 0;
+
+  @override
+  void closePoller() => pollerClosed = true;
+
+  @override
+  int read(int fd, Pointer<Uint8> buffer, int count) => 0;
+
+  @override
+  int write(int fd, Pointer<Uint8> buffer, int count) => count;
+
+  @override
+  int shutdown(int fd, int how) {
+    shutdownFds.add(fd);
+    return 0;
+  }
+
+  @override
+  int closeFd(int fd) {
+    closedFds.add(fd);
+    return 0;
+  }
+
+  @override
+  int get errno => 0;
+}
+
+/// Drives the reactor's command processor against a [FakeReactorBackend] in the
+/// test isolate, with no spawned isolate, real fds, or native poller. Test-only.
+@visibleForTesting
+final class ReactorTestHarness {
+  ReactorTestHarness(this.backend);
+
+  final FakeReactorBackend backend;
+  final Map<int, _ReactorTransportState> _states =
+      <int, _ReactorTransportState>{};
+  final _ReactorMetrics _metrics = _ReactorMetrics();
+  final Queue<Object?> _commands = Queue<Object?>();
+
+  /// Queues a register command. [eventPort]/[replyPort] receive the reactor's
+  /// per-transport events and the register reply respectively.
+  void enqueueRegister({
+    required int id,
+    required int fd,
+    required SendPort eventPort,
+    required SendPort replyPort,
+    int maxReadChunkSize = 64 * 1024,
+    int maxInboundQueuedBytes = 1024 * 1024,
+  }) {
+    _commands.add(<Object>[
+      _Cmd.register,
+      id,
+      fd,
+      maxReadChunkSize,
+      maxInboundQueuedBytes,
+      eventPort,
+      replyPort,
+    ]);
+  }
+
+  /// Queues a close command for transport [id].
+  void enqueueClose(int id) => _commands.add(<Object>[_Cmd.close, id]);
+
+  /// Drains all queued commands through the reactor's processor.
+  void processCommands() =>
+      _processReactorCommands(backend, _states, _metrics, _commands);
+
+  /// Transports the reactor currently considers registered.
+  int get registeredCount => _states.length;
+
+  /// Whether transport [id] is registered.
+  bool isRegistered(int id) => _states.containsKey(id);
+}

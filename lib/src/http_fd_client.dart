@@ -184,27 +184,42 @@ final class _HttpResponseParser {
     }
 
     _headBytes.add(chunk);
-    final bytes = _headBytes.toBytes();
-    if (_headLength == null && bytes.length >= _responseHeadPrefixBytes) {
+    // Materialize the accumulated bytes O(1) times rather than once per chunk:
+    // once to read the 4-byte length prefix, and once more when the full head
+    // has arrived. `BytesBuilder.length` is O(1), so the waiting chunks don't
+    // re-copy the buffer.
+    if (_headBytes.length < _responseHeadPrefixBytes) return;
+
+    if (_headLength == null) {
+      final bytes = _headBytes.toBytes();
       _headLength =
           (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
       if (_headLength! <= 0 || _headLength! > tailscaleMaxHttpHeadBytes) {
-        _fail(TailscaleHttpException('Invalid HTTP response head length.'));
+        _fail(
+          const TailscaleHttpException('Invalid HTTP response head length.'),
+        );
         return;
       }
-    }
-
-    final headLength = _headLength;
-    if (headLength == null ||
-        bytes.length < _responseHeadPrefixBytes + headLength) {
+      // Reuse this materialization if it already holds the complete head
+      // (the common single-chunk case).
+      if (bytes.length >= _responseHeadPrefixBytes + _headLength!) {
+        _completeHead(bytes);
+      }
       return;
     }
 
+    if (_headBytes.length < _responseHeadPrefixBytes + _headLength!) return;
+    _completeHead(_headBytes.toBytes());
+  }
+
+  void _completeHead(Uint8List bytes) {
     final headStart = _responseHeadPrefixBytes;
-    final headEnd = headStart + headLength;
+    final headEnd = headStart + _headLength!;
     final Map<String, dynamic> head;
     try {
-      final headJson = utf8.decode(bytes.sublist(headStart, headEnd));
+      final headJson = utf8.decode(
+        Uint8List.sublistView(bytes, headStart, headEnd),
+      );
       head = jsonDecode(headJson) as Map<String, dynamic>;
     } catch (error, stackTrace) {
       _fail(

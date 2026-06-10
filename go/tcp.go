@@ -3,6 +3,7 @@ package tailscale
 import (
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -10,6 +11,18 @@ import (
 // silently-dead peers within a couple of minutes rather than a couple of hours
 // (the OS default).
 const keepAlivePeriod = 30 * time.Second
+
+// pipeBufferPool recycles the io.Copy transfer buffers used by pipe. Without
+// pooling, each proxied connection allocates two fresh 32 KiB buffers (io.Copy's
+// default) for its lifetime; under connection churn that is steady GC pressure.
+// Neither side (Unix socketpair / tsnet gVisor conn) offers a ReaderFrom/WriterTo
+// fast path, so io.CopyBuffer genuinely uses these.
+var pipeBufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 64*1024)
+		return &b
+	},
+}
 
 // configureTCP enables TCP keep-alive. No-op on non-TCP conns, including the
 // socketpair side of the POSIX fd backend.
@@ -28,12 +41,16 @@ func pipe(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 
 	go func() {
-		_, _ = io.Copy(a, b) // reads from b, writes to a
+		buf := pipeBufferPool.Get().(*[]byte)
+		_, _ = io.CopyBuffer(a, b, *buf) // reads from b, writes to a
+		pipeBufferPool.Put(buf)
 		closeWriteOrFull(a)
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(b, a) // reads from a, writes to b
+		buf := pipeBufferPool.Get().(*[]byte)
+		_, _ = io.CopyBuffer(b, a, *buf) // reads from a, writes to b
+		pipeBufferPool.Put(buf)
 		closeWriteOrFull(b)
 		done <- struct{}{}
 	}()

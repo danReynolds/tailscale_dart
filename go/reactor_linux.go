@@ -16,10 +16,11 @@ import (
 // Darwin). We side-step the truncation by storing the id in fdToID and
 // recovering it on dispatch via the fd reported by epoll.
 type epollReactorPoller struct {
-	epfd   int
-	wakeFd int
-	fdToID map[int]int64
-	closed bool
+	epfd    int
+	wakeFd  int
+	fdToID  map[int]int64
+	closed  bool
+	scratch []unix.EpollEvent // reused across Wait calls to avoid per-poll alloc
 }
 
 func newReactorPoller() (reactorPoller, error) {
@@ -105,7 +106,10 @@ func (p *epollReactorPoller) Unregister(fd int) error {
 }
 
 func (p *epollReactorPoller) Wait(out []ReactorEvent, timeoutMillis int) (int, error) {
-	events := make([]unix.EpollEvent, len(out))
+	if cap(p.scratch) < len(out) {
+		p.scratch = make([]unix.EpollEvent, len(out))
+	}
+	events := p.scratch[:len(out)]
 	n, err := unix.EpollWait(p.epfd, events, timeoutMillis)
 	if err != nil {
 		if err == unix.EINTR {

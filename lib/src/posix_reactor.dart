@@ -447,12 +447,16 @@ void _readReactorState(
       readLimit,
     );
     if (n > 0) {
-      final bytes = Uint8List.fromList(state.scratch.read.asTypedList(n));
+      // `fromList` copies the scratch view synchronously into the transferable,
+      // so the buffer can be reused on the next read without an intermediate
+      // `Uint8List.fromList` — one fewer full copy of every inbound byte.
       state.pendingInboundBytes += n;
       budget -= n;
       state.eventPort.send(<Object>[
         _Evt.data,
-        TransferableTypedData.fromList(<Uint8List>[bytes]),
+        TransferableTypedData.fromList(<Uint8List>[
+          state.scratch.read.asTypedList(n),
+        ]),
       ]);
       continue;
     }
@@ -684,13 +688,20 @@ void _updateReactorInterest(
     events |= _reactorEventRead;
   }
   if (state.writes.isNotEmpty) events |= _reactorEventWrite;
+  // Skip the syscall when the kernel already has this exact interest mask. On a
+  // steady flow the mask is recomputed after every read drain and every inbound
+  // ack but rarely actually changes, so this elides most epoll_ctl/kevent calls
+  // (two per kevent update on Darwin).
+  if (events == state.lastInterest) return;
   final result = duneReactorUpdate(handle, state.fd, state.id, events);
   if (result != 0) {
     final error = StateError('native reactor update failed');
     metrics.hardErrorCount++;
     state.eventPort.send(<Object>[_Evt.readError, error.toString()]);
     _closeReactorState(handle, states, metrics, state, error: error);
+    return;
   }
+  state.lastInterest = events;
 }
 
 /// True if [errno] is the "try again later" signal on either supported
@@ -725,6 +736,12 @@ final class _ReactorTransportState {
   bool writeClosed = false;
   bool closed = false;
   int? shutdownWriteId;
+
+  /// Last interest mask pushed to the native poller, or -1 if none yet. Lets
+  /// [_updateReactorInterest] skip the `epoll_ctl`/`kevent` syscall when the
+  /// recomputed mask is unchanged — the common case on a steady read/write flow
+  /// where interest is recomputed after every drain and every inbound ack.
+  int lastInterest = -1;
 }
 
 final class _ScratchBuffers {

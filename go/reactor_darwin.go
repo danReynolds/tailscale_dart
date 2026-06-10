@@ -21,8 +21,9 @@ const reactorWakeIdent = 1
 // in the kevent's Udata field, which is pointer-width and accepts the full
 // int64 round-trip without the side-table the Linux poller needs.
 type kqueueReactorPoller struct {
-	kq     int
-	closed bool
+	kq      int
+	closed  bool
+	scratch []unix.Kevent_t // reused across Wait calls to avoid per-poll alloc
 }
 
 func newReactorPoller() (reactorPoller, error) {
@@ -116,7 +117,10 @@ func (p *kqueueReactorPoller) Unregister(fd int) error {
 }
 
 func (p *kqueueReactorPoller) Wait(out []ReactorEvent, timeoutMillis int) (int, error) {
-	events := make([]unix.Kevent_t, len(out))
+	if cap(p.scratch) < len(out) {
+		p.scratch = make([]unix.Kevent_t, len(out))
+	}
+	events := p.scratch[:len(out)]
 	timeout := reactorTimeout(timeoutMillis)
 	n, err := unix.Kevent(p.kq, nil, events, timeout)
 	if err != nil {

@@ -230,11 +230,32 @@ func endpointFromAddr(addr net.Addr) (string, int) {
 	return host, port
 }
 
+// socketPairBufferBytes is the SO_SNDBUF/SO_RCVBUF target for the bridge
+// socketpairs. The OS default is small on macOS/iOS, which forces a full
+// reactor write chunk (64 KiB) to drain across several EPOLLOUT cycles — each a
+// reactor round-trip — capping single-stream throughput. A larger buffer lets a
+// chunk land in one syscall and keeps a few chunks in flight. The kernel clamps
+// to its own max (kern.ipc.maxsockbuf / net.core.wmem_max), so this is a hint.
+const socketPairBufferBytes = 256 * 1024
+
+// tuneSocketPairBuffers best-effort enlarges the send/receive buffers on both
+// ends of a bridge socketpair. Errors are ignored: the platform may clamp the
+// value and the default still works (just slower).
+func tuneSocketPairBuffers(fds ...int) {
+	for _, fd := range fds {
+		_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, socketPairBufferBytes)
+		_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, socketPairBufferBytes)
+	}
+}
+
 func newSocketPairConn() (int, net.Conn, error) {
 	dartFd, goFd, err := newSocketPairCloexec(unix.SOCK_STREAM)
 	if err != nil {
 		return -1, nil, err
 	}
+	// Enlarge both ends before either side is used; the setting lives on the
+	// socket and survives the net.FileConn dup below.
+	tuneSocketPairBuffers(dartFd, goFd)
 
 	success := false
 	defer func() {

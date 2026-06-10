@@ -57,7 +57,10 @@ type reactorHandle struct {
 var (
 	reactorID       int64
 	reactorRegistry = map[int64]*reactorHandle{}
-	reactorMu       sync.Mutex
+	// RWMutex so the per-Wait/Wake/Update handle lookups (the hot path, one per
+	// reactor-loop iteration on every shard) take a shared read lock and don't
+	// serialize across shards; only create/close take the exclusive lock.
+	reactorMu sync.RWMutex
 )
 
 func ReactorCreate() (int64, error) {
@@ -132,8 +135,8 @@ func ReactorWait(id int64, out unsafe.Pointer, maxEvents int, timeoutMillis int)
 }
 
 func getReactor(id int64) *reactorHandle {
-	reactorMu.Lock()
-	defer reactorMu.Unlock()
+	reactorMu.RLock()
+	defer reactorMu.RUnlock()
 	return reactorRegistry[id]
 }
 

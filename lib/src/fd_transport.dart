@@ -177,8 +177,8 @@ final class PosixFdTransport {
       return Future.error(StateError('fd transport write side is closed'));
     }
 
-    final copy = Uint8List.fromList(bytes);
-    if (_pendingWriteBytes + copy.length > maxPendingWriteBytes) {
+    final length = bytes.length;
+    if (_pendingWriteBytes + length > maxPendingWriteBytes) {
       return Future.error(
         StateError(
           'fd transport write queue exceeded $maxPendingWriteBytes bytes',
@@ -186,21 +186,26 @@ final class PosixFdTransport {
       );
     }
 
+    // `TransferableTypedData.fromList` copies the bytes synchronously into an
+    // isolate-transferable buffer before this method returns, so the documented
+    // "caller may reuse `bytes` immediately" contract holds without a separate
+    // defensive `Uint8List.fromList` — that copy would just duplicate work on
+    // every write.
     final id = ++_nextWriteId;
     final completer = Completer<void>();
-    _pendingWriteBytes += copy.length;
-    _writeCompletions[id] = _PendingWrite(copy.length, completer);
+    _pendingWriteBytes += length;
+    _writeCompletions[id] = _PendingWrite(length, completer);
 
     try {
       _reactor.send(<Object>[
         _Cmd.write,
         _transportId,
         id,
-        TransferableTypedData.fromList(<Uint8List>[copy]),
+        TransferableTypedData.fromList(<Uint8List>[bytes]),
       ]);
     } catch (error, stackTrace) {
       _writeCompletions.remove(id);
-      _pendingWriteBytes -= copy.length;
+      _pendingWriteBytes -= length;
       final failure = StateError('fd write dispatch failed: $error');
       completer.completeError(failure, stackTrace);
       _finishWithError(failure);
@@ -439,10 +444,20 @@ const int _reactorMaxEvents = 128;
 /// with a deterministic error and the caller's fd is closed.
 const int _reactorMaxRegisteredTransports = 4096;
 
-/// Number of reactor shards. Sharding is wired through `_shardForFd` but the
-/// default workload (private tailnet, dozens of active flows) does not warrant
-/// more than one. Bumping this is the single-knob path to scale-out.
-const int _reactorShardCount = 1;
+/// Number of reactor shards. Each shard is its own isolate + native poller
+/// owning a disjoint subset of fds (`fd % count`), so byte I/O for concurrent
+/// flows spreads across cores instead of serializing through a single isolate
+/// — a single reactor saturates one core well before the tailnet does under
+/// many simultaneous transfers.
+///
+/// Shards spawn lazily and idle-exit, so a light workload (one or a few flows)
+/// still effectively uses one shard; a busy one scales out. Capped so the
+/// isolate/poller footprint stays bounded on high-core machines, past the point
+/// of meaningful returns.
+final int _reactorShardCount = math.max(
+  1,
+  math.min(Platform.numberOfProcessors, 2),
+);
 
 /// Per-iteration read drain budget. Caps how many bytes one transport can
 /// consume before yielding back to the dispatch loop, so a single hot fd

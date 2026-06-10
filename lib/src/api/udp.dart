@@ -29,6 +29,13 @@ final class TailscaleDatagram {
     this.identity,
   }) : payload = Uint8List.fromList(payload);
 
+  /// Internal: wraps [payload] without copying. The receive path passes a
+  /// zero-copy view over a freshly-materialized envelope buffer that is not
+  /// retained or reused elsewhere, so the copy in the public constructor would
+  /// be pure overhead on every inbound datagram.
+  TailscaleDatagram._view({required this.remote, required this.payload})
+    : identity = null;
+
   /// Remote tailnet endpoint that sent this datagram.
   final TailscaleEndpoint remote;
 
@@ -315,7 +322,7 @@ TailscaleDatagram _decodeDatagramEnvelope(Uint8List envelope) {
   } on FormatException catch (error) {
     throw TailscaleUdpException('malformed UDP envelope address', cause: error);
   }
-  return TailscaleDatagram(
+  return TailscaleDatagram._view(
     remote: TailscaleEndpoint(address: address, port: port),
     payload: Uint8List.sublistView(envelope, payloadOffset),
   );

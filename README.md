@@ -63,7 +63,8 @@ The first `dart run`, `dart test`, or `flutter build` triggers a native build ho
 Prerequisites:
 
 - Dart SDK 3.10 or newer.
-- Go 1.25 or newer on `PATH`.
+- Go 1.26 or newer on `PATH` (or Go 1.25 with the default `GOTOOLCHAIN=auto`,
+  which auto-fetches the 1.26.1 toolchain that `tailscale.com` requires).
 - Native toolchain for the target platform: Xcode for iOS/macOS, Android NDK through Flutter for Android, and a C toolchain for Linux.
 
 ## Quick start

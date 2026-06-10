@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
@@ -43,10 +44,26 @@ func HasState(stateDir string) bool {
 	return len(val) > 0
 }
 
-// Logout stops the server and removes the state directory.
+// Logout revokes the node key with the control plane (best-effort), then stops
+// the server and removes the state directory.
+//
+// The control-plane logout is what actually invalidates the credential.
+// Without it, any surviving copy of the state DB (a cloud backup, a disk image,
+// a file read before the wipe) would remain a valid credential and the device
+// would stay registered in the tailnet until key expiry. It is attempted while
+// the server is still running, and is best-effort: if the control plane is
+// unreachable we still tear down and wipe local state so a "logout" never
+// leaves the node running or its on-disk credential intact.
 func Logout(stateDir string) error {
 	if strings.TrimSpace(stateDir) == "" {
 		return fmt.Errorf("state dir is empty")
+	}
+
+	mu.Lock()
+	s := srv
+	mu.Unlock()
+	if s != nil {
+		revokeNodeKey(s)
 	}
 
 	Stop()
@@ -125,6 +142,10 @@ func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err 
 		if strings.TrimSpace(stateDir) == "" {
 			return fmt.Errorf("state dir is empty")
 		}
+		// Best-effort revoke the current node key before wiping its state, so
+		// the old identity doesn't linger registered in the tailnet until key
+		// expiry. Done while the server is still up; failures are non-fatal.
+		revokeNodeKey(srv)
 		stopLocked()
 		if err := os.RemoveAll(stateDir); err != nil {
 			return fmt.Errorf("failed to clear state dir for re-auth: %w", err)
@@ -135,6 +156,13 @@ func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err 
 
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return fmt.Errorf("failed to create state dir: %v", err)
+	}
+	// MkdirAll is a no-op on an existing directory and never tightens its
+	// permissions, so enforce 0700 explicitly — this dir holds the node's
+	// private keys and must not be traversable by other local users. Best
+	// effort: don't fail startup on platforms/filesystems without chmod.
+	if err := os.Chmod(stateDir, 0700); err != nil {
+		logInfo("Start: could not enforce 0700 on state dir %q: %v", stateDir, err)
 	}
 	logDir := stateDir + "/logs"
 	if err := os.MkdirAll(logDir, 0700); err != nil {
@@ -237,6 +265,23 @@ func DunePeers() string {
 		return jsonError(err)
 	}
 	return string(jsonBytes)
+}
+
+// revokeNodeKey best-effort expires the node key with the control plane via
+// the LocalAPI Logout, bounded by a timeout. Callers invoke this while the
+// server is still running and before wiping local state; failures are logged
+// and swallowed so local teardown always proceeds.
+func revokeNodeKey(s *tsnet.Server) {
+	lc, err := s.LocalClient()
+	if err != nil {
+		logInfo("logout: LocalClient unavailable, skipping control-plane revoke: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := lc.Logout(ctx); err != nil {
+		logInfo("logout: control-plane revoke failed (continuing with local wipe): %v", err)
+	}
 }
 
 func jsonError(err error) string {

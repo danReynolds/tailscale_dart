@@ -3,6 +3,7 @@ package tailscale
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"sync"
 
 	_ "modernc.org/sqlite"
@@ -17,6 +18,18 @@ type SQLiteStore struct {
 
 // NewSQLiteStore creates a new SQLiteStore backed by the given database file.
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
+	// Pre-create the database file with owner-only permissions. This file holds
+	// the ipn state map — the WireGuard node private key and machine key.
+	// SQLite's default file mode is 0644 (world-readable) and it preserves the
+	// permissions of an existing file, so creating it 0600 up front (and
+	// chmod-ing below to cover a pre-existing 0644 file) keeps the secret
+	// material owner-only rather than relying solely on the 0700 parent dir.
+	if f, err := os.OpenFile(path, os.O_CREATE, 0o600); err != nil {
+		return nil, fmt.Errorf("failed to pre-create state db: %w", err)
+	} else {
+		f.Close()
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
@@ -36,7 +49,21 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("failed to create state table: %w", err)
 	}
 
+	// Tighten the main file (covers a pre-existing 0644 db) and the WAL-mode
+	// sidecars, which also hold recently-written state pages. Best-effort: the
+	// sidecars are created lazily so they may not exist yet, and some platforms
+	// don't support chmod; the 0700 state directory remains the primary guard.
+	restrictFilePerms(path)
+	restrictFilePerms(path + "-wal")
+	restrictFilePerms(path + "-shm")
+
 	return &SQLiteStore{db: db}, nil
+}
+
+// restrictFilePerms best-effort restricts path to owner-only (0600), ignoring
+// errors for files that don't exist yet or platforms without chmod support.
+func restrictFilePerms(path string) {
+	_ = os.Chmod(path, 0o600)
 }
 
 // ReadState implements ipn.StateStore.

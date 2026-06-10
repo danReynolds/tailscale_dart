@@ -272,6 +272,10 @@ final class _FdTailscaleListener implements TailscaleListener {
           listenerId,
           events.sendPort,
         ], debugName: 'tailscale-tcp-accept-$listenerId');
+        // If the loop isolate ever dies without sending a terminal message,
+        // its exit posts null to the events port, which routes to close() — so
+        // the listener can't hang forever awaiting a dead accept isolate.
+        _acceptIsolate!.addOnExitListener(events.sendPort);
       } catch (error, stackTrace) {
         if (!_connections.isClosed) {
           _connections.addError(error, stackTrace);
@@ -282,7 +286,18 @@ final class _FdTailscaleListener implements TailscaleListener {
   }
 
   void _handleAcceptEvent(Object? message) {
-    if (_closed) return;
+    if (_closed) {
+      // Release any fd carried by an in-flight 'accepted' message that arrived
+      // after close; otherwise the descriptor (and its live tailnet
+      // connection) leaks until process exit.
+      if (message is List &&
+          message.length == 7 &&
+          message[0] == 'accepted' &&
+          message[1] is int) {
+        closePosixFdForCleanup(message[1] as int);
+      }
+      return;
+    }
     if (message == null) {
       unawaited(close());
       return;
@@ -389,45 +404,64 @@ void _tcpAcceptLoop(List<Object> args) {
   final sendPort = args[1] as SendPort;
   var consecutiveErrors = 0;
 
-  while (true) {
-    final resultPtr = native.duneTcpAcceptFd(listenerId);
-    final resultJson = resultPtr.toDartString();
-    native.duneFree(resultPtr);
+  try {
+    while (true) {
+      final resultPtr = native.duneTcpAcceptFd(listenerId);
+      final String resultJson;
+      try {
+        resultJson = resultPtr.toDartString();
+      } finally {
+        native.duneFree(resultPtr);
+      }
 
-    final result = jsonDecode(resultJson) as Map<String, dynamic>;
-    if (result['closed'] == true) {
-      sendPort.send(null);
-      return;
-    }
-    final error = result['error'] as String?;
-    if (error != null) {
-      consecutiveErrors++;
-      if (consecutiveErrors >= _maxConsecutiveAcceptErrors) {
+      final decoded = jsonDecode(resultJson);
+      if (decoded is! Map<String, dynamic>) {
         sendPort.send(<Object>[
           'fatal',
-          'tailnet accept failed $consecutiveErrors consecutive times: $error',
+          'native accept returned malformed result',
         ]);
         return;
       }
-      sendPort.send(<Object>['error', error]);
-      sleep(Duration(milliseconds: 50 * consecutiveErrors));
-      continue;
-    }
-    consecutiveErrors = 0;
+      final result = decoded;
+      if (result['closed'] == true) {
+        sendPort.send(null);
+        return;
+      }
+      final error = result['error'] as String?;
+      if (error != null) {
+        consecutiveErrors++;
+        if (consecutiveErrors >= _maxConsecutiveAcceptErrors) {
+          sendPort.send(<Object>[
+            'fatal',
+            'tailnet accept failed $consecutiveErrors consecutive times: $error',
+          ]);
+          return;
+        }
+        sendPort.send(<Object>['error', error]);
+        sleep(Duration(milliseconds: 50 * consecutiveErrors));
+        continue;
+      }
+      consecutiveErrors = 0;
 
-    final fd = result['fd'] as int?;
-    if (fd == null || fd < 0) {
-      sendPort.send(<Object>['fatal', 'native accept returned invalid fd']);
-      return;
+      final fd = result['fd'] as int?;
+      if (fd == null || fd < 0) {
+        sendPort.send(<Object>['fatal', 'native accept returned invalid fd']);
+        return;
+      }
+      sendPort.send(<Object?>[
+        'accepted',
+        fd,
+        result['localAddress'] as String? ?? '',
+        result['localPort'] as int? ?? 0,
+        result['remoteAddress'] as String? ?? '',
+        result['remotePort'] as int? ?? 0,
+        null,
+      ]);
     }
-    sendPort.send(<Object?>[
-      'accepted',
-      fd,
-      result['localAddress'] as String? ?? '',
-      result['localPort'] as int? ?? 0,
-      result['remoteAddress'] as String? ?? '',
-      result['remotePort'] as int? ?? 0,
-      null,
-    ]);
+  } catch (error) {
+    // A malformed native result or any other unexpected throw would otherwise
+    // kill this isolate silently and hang the parent's accept stream. Surface
+    // it as a terminal 'fatal' so the parent errors out and closes.
+    sendPort.send(<Object>['fatal', 'tailnet accept loop crashed: $error']);
   }
 }

@@ -29,8 +29,10 @@ final class TailscaleHttpClient extends http.BaseClient {
     try {
       responseTransport = await PosixFdTransport.adopt(start.responseBodyFd);
     } catch (_) {
+      // `adopt` owns and closes the fd it was given on failure, so only the
+      // request fd (not yet adopted — it is written below) needs closing here.
+      // Closing responseBodyFd again would double-close it.
       closePosixFdForCleanup(start.requestBodyFd);
-      closePosixFdForCleanup(start.responseBodyFd);
       rethrow;
     }
 

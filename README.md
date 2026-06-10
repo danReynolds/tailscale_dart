@@ -15,7 +15,7 @@ Build Dart and Flutter apps that talk to each other directly — no public serve
 
 `package:tailscale` embeds upstream Go [`tsnet`](https://pkg.go.dev/tailscale.com/tsnet) and exposes typed Dart APIs for lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve, Funnel, prefs, exit nodes, and diagnostics. Your app authenticates as its own node on the tailnet — users never install or configure a Tailscale client.
 
-> **Status:** `0.3.1`, pre-1.0. The core API is stable enough to build on, but minor versions may include breaking changes until 1.0. Production users are welcome — please [open an issue](https://github.com/danReynolds/tailscale_dart/issues) or [start a discussion](https://github.com/danReynolds/tailscale_dart/discussions) if something blocks you.
+> **Status:** `0.4.0`, pre-1.0. The core API is stable enough to build on, but minor versions may include breaking changes until 1.0. Production users are welcome — please [open an issue](https://github.com/danReynolds/tailscale_dart/issues) or [start a discussion](https://github.com/danReynolds/tailscale_dart/discussions) if something blocks you.
 
 ## Documentation
 
@@ -55,7 +55,7 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 
 ```yaml
 dependencies:
-  tailscale: ^0.3.1
+  tailscale: ^0.4.0
 ```
 
 The first `dart run`, `dart test`, or `flutter build` triggers a native build hook that compiles the Go runtime for the target platform. Subsequent builds are cached and only recompile when Go source changes.
@@ -63,7 +63,8 @@ The first `dart run`, `dart test`, or `flutter build` triggers a native build ho
 Prerequisites:
 
 - Dart SDK 3.10.4 or newer.
-- Go 1.25 or newer on `PATH`.
+- Go 1.26 or newer on `PATH` (or Go 1.25 with the default `GOTOOLCHAIN=auto`,
+  which auto-fetches the 1.26.1 toolchain that `tailscale.com` requires).
 - Native toolchain for the target platform: Xcode for iOS/macOS, Android NDK through Flutter for Android, and a C toolchain for Linux.
 
 ## Quick start
@@ -86,6 +87,8 @@ Future<void> main() async {
 ```
 
 Subsequent launches can call `up()` without an auth key. The node identity is persisted in `stateDir`.
+
+> **Securing `stateDir`.** This directory holds the node's WireGuard private key (stored owner-only, in a `0700` subdirectory). Choose a location that is **excluded from cloud backups** — a key copied into iCloud/Google backups can be restored onto another device and impersonate the node. On Flutter, prefer the application support directory (`getApplicationSupportDirectory()`) over the documents directory and mark it excluded from backup (`NSURLIsExcludedFromBackupKey` on iOS; backup rules on Android). Calling `logout()` revokes the node key with the control plane before wiping local state.
 
 For short-lived CI jobs, preview environments, and disposable test nodes, pass
 `ephemeral: true` to register a node that Tailscale removes after it goes

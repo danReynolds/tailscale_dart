@@ -340,14 +340,19 @@ bool _processReactorCommands(
         final maxInboundQueuedBytes = message[4] as int;
         final eventPort = message[5] as SendPort;
         final replyPort = message[6] as SendPort;
+        // Ownership rule: the reactor owns an fd if and only if it is in
+        // `states` (registration succeeded). On a registration failure the fd
+        // is NOT ours to close — the main isolate (`_registerWithReactor`'s
+        // catch) is still the sole owner and closes it exactly once. Closing
+        // here as well would double-close the same fd across two isolates,
+        // which under fd-number reuse can tear down an unrelated live
+        // descriptor.
         if (states.length >= _reactorMaxRegisteredTransports) {
-          closePosixFdForCleanup(fd);
           replyPort.send('fd reactor transport limit exceeded');
           continue;
         }
         final result = duneReactorRegister(handle, fd, id, 0);
         if (result != 0) {
-          closePosixFdForCleanup(fd);
           replyPort.send('native reactor register failed');
           continue;
         }

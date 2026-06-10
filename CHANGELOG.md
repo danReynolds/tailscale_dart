@@ -1,3 +1,67 @@
+## 0.4.0
+
+A security and reliability release. It hardens the embedded-tsnet data plane,
+tightens credential handling, and updates the bundled Tailscale stack. No
+public API shape changes.
+
+**Security:**
+
+- Tailscale Funnel forwarding now strips reserved `Tailscale-*` identity headers
+  (`Tailscale-User-Login`, etc.) from inbound public requests before proxying to
+  the loopback backend, and pins `X-Forwarded-Proto`/`-Host`. Previously a public
+  Funnel client could spoof these headers — which are only trustworthy on the
+  authenticated Serve path — straight through to the backend.
+- `logout()` now best-effort revokes the node key with the control plane before
+  wiping local state (same on re-auth via `up()` with a new auth key). A
+  surviving copy of the state database (e.g. a backup) is therefore no longer a
+  live credential, and the device is deregistered rather than lingering until key
+  expiry.
+- The state database (node and machine private keys) is created owner-only
+  (`0600`, including the WAL sidecars), and the state directory is enforced
+  `0700` even when it already exists.
+- The public Funnel listener now bounds concurrent connections to limit resource
+  exhaustion from the open internet.
+
+**Reliability and resource hygiene:**
+
+- Established a single-owner rule for fd capabilities across the shared reactor
+  and the main isolate, eliminating a deterministic cross-isolate double-close on
+  registration failure (which under fd reuse could sever an unrelated live
+  descriptor), plus a related response-fd over-close and an inbound-accept leak.
+- Closing an HTTP binding now drains its accept backlog, releasing queued
+  descriptors and unblocking their handler goroutines.
+- Inbound UDP datagrams larger than 60 KiB are now dropped (and logged) instead
+  of being silently truncated and delivered as a short datagram.
+- The worker now fails API calls fast if its background isolate terminates,
+  instead of hanging indefinitely.
+- Additional fixes: TCP accept-loop descriptor leak and silent-failure handling,
+  native-memory cleanup on decode errors, eager (fail-at-parse) string-list
+  decoding, and closing the prior HTTP client on repeated `up()`.
+
+**Dependencies and build:**
+
+- Bumped `tailscale.com` from v1.92.2 to v1.96.5.
+- **Now requires the Go 1.26.1 toolchain** (up from 1.25.5), enforced by the Go
+  module directive. With the default `GOTOOLCHAIN=auto`, Go fetches it
+  automatically — including on a Go 1.25 base — so no manual toolchain install is
+  needed unless `GOTOOLCHAIN` is set to `local`/`off`.
+- Added Dependabot (Go modules, pub, and GitHub Actions) and a least-privilege CI
+  token.
+
+**Documentation:**
+
+- `init()` and the README now recommend storing state in a backup-excluded,
+  app-private directory (the node's WireGuard key must not leak into iCloud or
+  Google backups), and `WaitingFile.name` documents that the sender-chosen
+  filename is attacker-controlled and must be sanitized before use in a path.
+
+**Validation:**
+
+- Verified against the existing unit, FFI, fd, runtime, Go, and Headscale E2E
+  suites. The bundled-stack bump passes the full two-node Headscale E2E (node
+  lifecycle, TCP/UDP/HTTP, persisted-credential reconnect, and logout revocation)
+  identically to the prior version.
+
 ## 0.3.1
 
 - Adds `Tailscale.up(ephemeral: true)` for disposable CI jobs, preview

@@ -1,6 +1,8 @@
 package tailscale
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"testing"
@@ -30,6 +32,50 @@ func TestFunnelForwarderMatchUsesLongestServePath(t *testing.T) {
 	}
 	if target.localPort != 3000 {
 		t.Fatalf("localPort = %d, want 3000", target.localPort)
+	}
+}
+
+func TestFunnelForwarderStripsSpoofedIdentityHeaders(t *testing.T) {
+	var gotLogin, gotProto, gotReservedTS, gotKept string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLogin = r.Header.Get("Tailscale-User-Login")
+		gotReservedTS = r.Header.Get("Tailscale-Anything")
+		gotProto = r.Header.Get("X-Forwarded-Proto")
+		gotKept = r.Header.Get("X-App-Header")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	ff := &funnelForwarder{
+		targets: map[string]funnelTarget{
+			"/": {proxy: httputil.NewSingleHostReverseProxy(mustParseURL(t, backend.URL))},
+		},
+	}
+
+	// Simulate a public Funnel client trying to spoof Tailscale-injected
+	// identity headers, plus a benign app header that must pass through.
+	req := httptest.NewRequest(http.MethodGet, "http://demo.tailnet.ts.net/", nil)
+	req.Header.Set("Tailscale-User-Login", "admin@evil.example")
+	req.Header.Set("Tailscale-Anything", "spoofed")
+	req.Header.Set("X-App-Header", "ok")
+	rec := httptest.NewRecorder()
+
+	ff.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotLogin != "" {
+		t.Errorf("backend saw spoofed Tailscale-User-Login = %q, want it stripped", gotLogin)
+	}
+	if gotReservedTS != "" {
+		t.Errorf("backend saw spoofed Tailscale-Anything = %q, want it stripped", gotReservedTS)
+	}
+	if gotProto != "https" {
+		t.Errorf("X-Forwarded-Proto = %q, want \"https\"", gotProto)
+	}
+	if gotKept != "ok" {
+		t.Errorf("benign X-App-Header = %q, want \"ok\" (must not be stripped)", gotKept)
 	}
 }
 

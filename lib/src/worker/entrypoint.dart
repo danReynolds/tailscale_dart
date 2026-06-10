@@ -310,7 +310,10 @@ void _workerEntrypoint(SendPort sendPort) {
                     )
                     as Map<String, dynamic>;
             final domains =
-                (result['domains'] as List?)?.cast<String>() ?? const [];
+                (result['domains'] as List?)?.whereType<String>().toList(
+                  growable: false,
+                ) ??
+                const [];
             sendPort.send(_WorkerTlsDomainsResponse(domains: domains));
           case _WorkerDiagPingCommand request:
             final ipPtr = request.ip.toNativeUtf8();
@@ -529,9 +532,14 @@ void _workerEntrypoint(SendPort sendPort) {
 
 String _callNativeString(ffi.Pointer<Utf8> Function() fn) {
   final ptr = fn();
-  final result = ptr.toDartString();
-  native.duneFree(ptr);
-  return result;
+  // Free the Go-allocated buffer even if decoding throws — `toDartString`
+  // rejects malformed UTF-8, and Go error strings can carry raw remote-supplied
+  // bytes, so without the finally a bad response would leak native memory.
+  try {
+    return ptr.toDartString();
+  } finally {
+    native.duneFree(ptr);
+  }
 }
 
 /// Calls a native function that returns JSON, decodes it, and checks for an
@@ -648,8 +656,14 @@ TailscaleNodeIdentity? _parseWhoIsResponse(Map<String, dynamic> json) {
     nodeId: json['nodeId'] as String? ?? '',
     hostName: json['hostName'] as String? ?? '',
     userLoginName: json['userLoginName'] as String? ?? '',
-    tags: (json['tags'] as List?)?.cast<String>() ?? const [],
-    tailscaleIPs: (json['tailscaleIPs'] as List?)?.cast<String>() ?? const [],
+    tags:
+        (json['tags'] as List?)?.whereType<String>().toList(growable: false) ??
+        const [],
+    tailscaleIPs:
+        (json['tailscaleIPs'] as List?)?.whereType<String>().toList(
+          growable: false,
+        ) ??
+        const [],
   );
 }
 

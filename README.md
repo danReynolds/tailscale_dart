@@ -87,6 +87,8 @@ Future<void> main() async {
 
 Subsequent launches can call `up()` without an auth key. The node identity is persisted in `stateDir`.
 
+> **Securing `stateDir`.** This directory holds the node's WireGuard private key (stored owner-only, in a `0700` subdirectory). Choose a location that is **excluded from cloud backups** — a key copied into iCloud/Google backups can be restored onto another device and impersonate the node. On Flutter, prefer the application support directory (`getApplicationSupportDirectory()`) over the documents directory and mark it excluded from backup (`NSURLIsExcludedFromBackupKey` on iOS; backup rules on Android). Calling `logout()` revokes the node key with the control plane before wiping local state.
+
 ## Feature support
 
 Area | API | Status | Notes

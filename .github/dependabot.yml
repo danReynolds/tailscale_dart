@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Go module backing the embedded tsnet node. Keeping tailscale.com current
+  # is security-relevant: it is a full WireGuard/control-plane network stack
+  # shipped into every consumer app, so upstream security releases should be
+  # tracked promptly.
+  - package-ecosystem: "gomod"
+    directory: "/go"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      tailscale:
+        patterns:
+          - "tailscale.com"
+          - "tailscale.com/*"
+
+  # Dart/Flutter package dependencies.
+  - package-ecosystem: "pub"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # GitHub Actions — surfaces action updates (and lets us move to SHA pins).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -127,7 +127,11 @@ class TailscaleStatus {
       authUrl: _parseUri(json['AuthURL']),
       stableNodeId: _parseNonEmptyString(self?['ID']),
       tailscaleIPs: _parseIPs(self?['TailscaleIPs']),
-      health: (json['Health'] as List?)?.cast<String>() ?? const [],
+      health:
+          (json['Health'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
+          const [],
       magicDNSSuffix:
           (json['CurrentTailnet'] as Map<String, dynamic>?)?['MagicDNSSuffix']
               as String?,
@@ -354,7 +358,11 @@ extension on List<String> {
 }
 
 List<String> _parseIPs(dynamic value) {
-  if (value is List) return value.cast<String>();
+  // Eagerly materialize as strings here (dropping any non-string element)
+  // rather than `cast<String>()`, whose lazy view defers a TypeError to a
+  // distant consumer — e.g. inside `firstIpv4`'s `contains`, on another
+  // isolate — instead of failing cleanly at parse time.
+  if (value is List) return value.whereType<String>().toList(growable: false);
   return const [];
 }
 

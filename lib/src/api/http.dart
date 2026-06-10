@@ -344,8 +344,10 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
     unawaited(() async {
       PosixFdTransport? requestTransport;
       PosixFdTransport? responseTransport;
+      var responseAdoptStarted = false;
       try {
         requestTransport = await PosixFdTransport.adopt(accept.requestBodyFd);
+        responseAdoptStarted = true;
         responseTransport = await PosixFdTransport.adopt(accept.responseBodyFd);
         final request = _TailscaleHttpRequest(
           method: accept.method,
@@ -365,8 +367,16 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
         }
         _requests.add(request);
       } catch (error, stackTrace) {
+        // `adopt` owns and closes the fd it was handed on failure, so adopted
+        // transports are cleaned up via close(). But if the request adopt threw
+        // before the response adopt ran, responseBodyFd was never handed to
+        // `adopt` and would otherwise leak (along with the Go-side handler
+        // goroutine blocked on it) — close it directly.
         await requestTransport?.close();
         await responseTransport?.close();
+        if (!responseAdoptStarted) {
+          closePosixFdForCleanup(accept.responseBodyFd);
+        }
         if (!_requests.isClosed) _requests.addError(error, stackTrace);
       }
     }());

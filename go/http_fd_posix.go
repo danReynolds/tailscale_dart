@@ -183,6 +183,25 @@ func (s *httpBindingState) close() {
 		close(s.done)
 		_ = s.ln.Close()
 	})
+	// Drain requests that were enqueued but never accepted by Dart and release
+	// their fds; otherwise each queued entry leaks two Dart-side descriptors and
+	// strands the serveHTTPFdRequest goroutine still blocked on its Go-side
+	// response conn. Closing the Dart-side fds here also unblocks that goroutine
+	// (its read sees EOF, and its defers close the Go-side conns). The drain
+	// runs outside once.Do and is invoked both on explicit close and again when
+	// http.Serve returns, so entries that raced the `done` close (Go's select
+	// can still pick the enqueue case once done is closed) are reclaimed.
+	for {
+		select {
+		case req := <-s.requests:
+			if req != nil {
+				_ = unix.Close(req.RequestBodyFD)
+				_ = unix.Close(req.ResponseBodyFD)
+			}
+		default:
+			return
+		}
+	}
 }
 
 // HttpStart starts one tailnet HTTP request and returns private fd capabilities

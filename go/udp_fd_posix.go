@@ -113,11 +113,19 @@ func runUdpFdBridge(goFd int, pc net.PacketConn) {
 
 	go func() {
 		defer closeAll()
-		buf := make([]byte, udpMaxPayloadBytes)
+		// Read into a buffer one byte larger than the max payload so an
+		// oversized datagram can be detected (n > udpMaxPayloadBytes) and
+		// dropped rather than silently truncated to the buffer size and
+		// delivered as a valid-looking-but-short datagram.
+		buf := make([]byte, udpMaxPayloadBytes+1)
 		for {
 			n, addr, err := pc.ReadFrom(buf)
 			if err != nil {
 				return
+			}
+			if n > udpMaxPayloadBytes {
+				logInfo("UDP fd bridge dropped oversized inbound datagram (%d > %d bytes)", n, udpMaxPayloadBytes)
+				continue
 			}
 			envelope, err := encodeUdpEnvelope(addr, buf[:n])
 			if err != nil {

@@ -38,6 +38,12 @@ class WaitingFile {
   const WaitingFile({required this.name, required this.size});
 
   /// File name as chosen by the sender.
+  ///
+  /// This is attacker-controlled: a sending peer can put anything here,
+  /// including path separators, `..` segments, or an absolute path. Never use
+  /// it directly to build a filesystem path. Sanitize it first (strip
+  /// directory components, e.g. via `path.basename`, and reject `.`/`..`) and
+  /// write into a directory you control.
   final String name;
 
   /// Total size in bytes.

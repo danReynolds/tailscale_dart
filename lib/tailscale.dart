@@ -367,11 +367,23 @@ class Tailscale implements TailscaleClient {
   ///
   /// [stateDir] is an app-owned directory where Tailscale persists
   /// its node identity, keys, and profile data under a `tailscale/`
-  /// subdirectory. Pick somewhere durable — on Flutter, the
-  /// `application_documents_directory` is a good default. On a fresh
-  /// install this directory is empty; after the first successful
-  /// [up], it contains credentials that let subsequent launches
-  /// reconnect without an auth key.
+  /// subdirectory. The library creates that subdirectory `0700` and
+  /// stores the node private key in an owner-only (`0600`) database.
+  /// On a fresh install this directory is empty; after the first
+  /// successful [up], it contains credentials that let subsequent
+  /// launches reconnect without an auth key.
+  ///
+  /// Pick somewhere durable but **excluded from cloud backups** — the
+  /// directory holds the node's WireGuard private key, and a key that
+  /// leaks into iCloud/Google backups can be restored onto another
+  /// device and silently impersonate this node. Prefer the application
+  /// support directory (`getApplicationSupportDirectory()`) over the
+  /// documents directory, which on iOS is included in iCloud backups
+  /// and visible in the Files app, and on Android is reachable via
+  /// Auto Backup. Mark the directory excluded from backup:
+  /// `NSURLIsExcludedFromBackupKey` on iOS; `dataExtractionRules` /
+  /// `fullBackupContent` rules on Android. For nodes that should not
+  /// persist identity at all, register an ephemeral node instead.
   static void init({
     required String stateDir,
     TailscaleLogLevel logLevel = TailscaleLogLevel.silent,
@@ -477,6 +489,9 @@ class Tailscale implements TailscaleClient {
         controlUrl: resolvedControlUrl.toString(),
         stateDir: _stateDir,
       );
+      // Close any client from a prior up() before replacing it so repeated
+      // up() calls don't leak the previous instance.
+      _http?.close();
       _http = TailscaleHttpClient();
       startReturned = true;
 

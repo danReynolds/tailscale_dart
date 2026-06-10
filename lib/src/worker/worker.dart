@@ -101,6 +101,16 @@ final class Worker {
   final _receivePort = ReceivePort();
   Future<SendPort> get _sendPort => _sendPortCompleter.future;
 
+  /// Set once the worker isolate has terminated. After this, the cached
+  /// `_sendPort` points at a dead port, so requests must fail fast rather than
+  /// send into the void and hang on a completer nothing will ever complete.
+  bool _disposed = false;
+
+  static const _workerTerminated = TailscaleOperationException(
+    'worker',
+    'Worker terminated.',
+  );
+
   Future<void> _start() async {
     _receivePort.listen(_handleWorkerMessage);
     try {
@@ -138,26 +148,27 @@ final class Worker {
       case _WorkerPeersEvent(:final peers):
         publishNodes(peers);
       case _WorkerResponse():
+        // FIFO invariant: exactly one response per command, in order. Guard
+        // against a stray/extra response so an invariant violation surfaces as
+        // a dropped message rather than an unhandled throw in this listener.
+        if (_pendingRequests.isEmpty) return;
         _pendingRequests.removeFirst().complete(message);
     }
   }
 
   void _dispose() {
+    if (_disposed) return;
+    _disposed = true;
     native.duneStopWatch();
     native.duneSetDartPort(0);
     native.duneStop();
     _receivePort.close();
 
-    final error = const TailscaleOperationException(
-      'worker',
-      'Worker terminated.',
-    );
-
     if (!_sendPortCompleter.isCompleted) {
-      _sendPortCompleter.completeError(error);
+      _sendPortCompleter.completeError(_workerTerminated);
     }
     for (final c in _pendingRequests) {
-      c.completeError(error);
+      c.completeError(_workerTerminated);
     }
     _pendingRequests.clear();
   }
@@ -165,7 +176,12 @@ final class Worker {
   Future<TResponse> _request<TResponse extends _WorkerResponse>(
     _WorkerCommand request,
   ) async {
+    if (_disposed) throw _workerTerminated;
     final sendPort = await _sendPort;
+    // The worker may have died while we awaited the (already-completed)
+    // send port; if so the port is dead and a send would be silently dropped,
+    // leaving the completer below to hang forever. Fail fast instead.
+    if (_disposed) throw _workerTerminated;
     final completer = Completer<_WorkerResponse>();
     _pendingRequests.addLast(completer);
     try {

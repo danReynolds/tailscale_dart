@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
 
+# Least privilege: these jobs only read the repo. Prevents a compromised
+# third-party action from using a write-scoped GITHUB_TOKEN to push to the
+# repo or tamper with releases.
+permissions:
+  contents: read
+
 jobs:
   go-tests:
     name: Go tests

@@ -14,9 +14,18 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/netutil"
 	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 )
+
+// funnelMaxConcurrentConns bounds the number of simultaneously-accepted
+// connections on a public Funnel listener. Funnel is reachable from the
+// anonymous internet, so without a cap a remote attacker could open
+// connections (or drip slow request bodies) until the embedded node exhausts
+// goroutines/file descriptors. Excess connections wait in the kernel accept
+// backlog and are served as slots free up.
+const funnelMaxConcurrentConns = 512
 
 var (
 	funnelMu            sync.Mutex
@@ -96,10 +105,11 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	defer funnelMu.Unlock()
 	ff := funnelForwarders[port]
 	if ff == nil {
-		ln, err := s.ListenFunnel("tcp", fmt.Sprintf(":%d", port), tsnet.FunnelOnly())
+		rawLn, err := s.ListenFunnel("tcp", fmt.Sprintf(":%d", port), tsnet.FunnelOnly())
 		if err != nil {
 			return servePublication{}, err
 		}
+		ln := netutil.LimitListener(rawLn, funnelMaxConcurrentConns)
 		ff = &funnelForwarder{
 			port:    port,
 			domain:  domain,
@@ -239,7 +249,32 @@ func (ff *funnelForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Funnel exposes this listener to the anonymous public internet. The
+	// Tailscale-* request headers (Tailscale-User-Login, Tailscale-User-Name,
+	// Tailscale-User-Profile-Pic, …) are reserved for tailscaled-injected,
+	// authenticated identity context — they are only trustworthy on the Serve
+	// path, where tailscaled strips client-supplied copies and re-sets them
+	// from an authenticated WhoIs. This bespoke proxy bypasses that, so without
+	// stripping, a public client could send `Tailscale-User-Login: admin@corp`
+	// and have it forwarded verbatim to the loopback backend. Delete any the
+	// client supplied before proxying so they can never be mistaken for trusted
+	// identity, and pin the forwarded-proto/host the backend sees.
+	stripReservedIdentityHeaders(r.Header)
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("X-Forwarded-Host", r.Host)
 	target.proxy.ServeHTTP(w, r)
+}
+
+// stripReservedIdentityHeaders deletes request headers reserved for
+// Tailscale-injected identity context. These must never originate from a
+// (potentially anonymous, public) client; only tailscaled's authenticated
+// Serve path is allowed to set them.
+func stripReservedIdentityHeaders(h http.Header) {
+	for name := range h {
+		if strings.HasPrefix(http.CanonicalHeaderKey(name), "Tailscale-") {
+			delete(h, name)
+		}
+	}
 }
 
 func (ff *funnelForwarder) match(path string) (funnelTarget, bool) {

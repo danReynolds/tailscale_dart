@@ -231,10 +231,18 @@ final class PosixFdTransport {
   Future<void> close() async {
     if (_closed) return;
 
+    // Ownership: once registration succeeded the reactor owns this fd (it is
+    // in the reactor's `states`) and closes it exactly once — on this close
+    // command, on a read/write error, or during its shard-exit cleanup. If the
+    // send throws because the reactor is already gone, that exit path has
+    // already released the fd, so closing it again here would double-close it
+    // and, under fd-number reuse, could sever an unrelated descriptor. `close`
+    // is only reachable on a successfully-registered transport, so `_reactor`
+    // is always initialized.
     try {
       _reactor.send(<Object>[_Cmd.close, _transportId]);
     } catch (_) {
-      closePosixFdForCleanup(fd);
+      // Reactor already released the fd on its way out; nothing to do.
     }
     _teardown(pendingWriteError: StateError('fd transport is closed'));
   }

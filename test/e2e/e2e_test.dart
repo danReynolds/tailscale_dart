@@ -3,8 +3,9 @@
 /// Run via: test/e2e/run_e2e.sh (handles Docker setup and teardown).
 ///
 /// Required environment variables:
-///   HEADSCALE_URL      - e.g. http://localhost:8080
-///   HEADSCALE_AUTH_KEY  - pre-auth key from headscale
+///   HEADSCALE_URL               - e.g. http://localhost:8080
+///   HEADSCALE_AUTH_KEY          - ephemeral pre-auth key from headscale
+///   HEADSCALE_PERSIST_AUTH_KEY  - non-ephemeral pre-auth key from headscale
 @TestOn('mac-os || linux')
 library;
 
@@ -25,9 +26,13 @@ import 'support/state_waiters.dart';
 void main() {
   final controlUrl = Platform.environment['HEADSCALE_URL'];
   final authKey = Platform.environment['HEADSCALE_AUTH_KEY'];
+  final persistAuthKey = Platform.environment['HEADSCALE_PERSIST_AUTH_KEY'];
 
-  if (controlUrl == null || authKey == null) {
-    print('Skipping E2E tests: HEADSCALE_URL and HEADSCALE_AUTH_KEY required.');
+  if (controlUrl == null || authKey == null || persistAuthKey == null) {
+    print(
+      'Skipping E2E tests: HEADSCALE_URL, HEADSCALE_AUTH_KEY, and '
+      'HEADSCALE_PERSIST_AUTH_KEY required.',
+    );
     print('Run test/e2e/run_e2e.sh to set up the environment.');
     return;
   }
@@ -62,7 +67,7 @@ void main() {
       NodeState.running,
       () => tsnet.up(
         hostname: 'dune-e2e-test',
-        authKey: authKey,
+        authKey: persistAuthKey,
         controlUrl: Uri.parse(controlUrl),
       ),
     );
@@ -139,6 +144,7 @@ void main() {
         stateDir: peerStateDir,
         controlUrl: controlUrl,
         authKey: authKey,
+        ephemeral: true,
         hostname: 'dune-e2e-peer',
         responseBody: peerResponseBody,
       );
@@ -409,7 +415,7 @@ void main() {
       final peer = await PeerProcess.spawn(
         stateDir: persistStateDir,
         controlUrl: controlUrl,
-        authKey: authKey,
+        authKey: persistAuthKey,
         hostname: 'dune-e2e-persist',
       );
       firstIpv4 = peer.ipv4;
@@ -467,7 +473,7 @@ void main() {
     const hostname = 'dune-e2e-lifecycle';
     Future<void> bringUp() => tsnet.up(
       hostname: hostname,
-      authKey: authKey,
+      authKey: persistAuthKey,
       controlUrl: Uri.parse(controlUrl),
     );
     Future<void> reconnect() =>

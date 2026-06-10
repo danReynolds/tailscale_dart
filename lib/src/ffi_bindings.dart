@@ -19,6 +19,7 @@ import 'package:ffi/ffi.dart';
     ffi.Pointer<Utf8>,
     ffi.Pointer<Utf8>,
     ffi.Pointer<Utf8>,
+    ffi.Int32,
   )
 >(symbol: 'DuneStart')
 external ffi.Pointer<Utf8> duneStart(
@@ -26,6 +27,7 @@ external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> authKey,
   ffi.Pointer<Utf8> controlURL,
   ffi.Pointer<Utf8> stateDir,
+  int ephemeral,
 );
 
 /// Starts one outgoing tailnet HTTP request.

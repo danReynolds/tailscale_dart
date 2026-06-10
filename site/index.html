@@ -130,9 +130,9 @@ print(res.statusCode);</code></pre>
             <tbody>
               <tr>
                 <td>Node lifecycle</td>
-                <td><code>init</code>, <code>up</code>, <code>down</code>, <code>logout</code>, <code>status</code></td>
+                <td><code>init</code>, <code>up(ephemeral)</code>, <code>down</code>, <code>logout</code>, <code>status</code></td>
                 <td><span class="status done">Implemented</span></td>
-                <td>Backed by embedded <code>tsnet.Server</code> lifecycle.</td>
+                <td>Backed by embedded <code>tsnet.Server</code> lifecycle, including disposable nodes for CI and tests.</td>
               </tr>
               <tr>
                 <td>Nodes and identity</td>
@@ -162,7 +162,13 @@ print(res.statusCode);</code></pre>
                 <td>Serve and Funnel</td>
                 <td><code>serve.forward</code>, <code>funnel.forward</code></td>
                 <td><span class="status done">Implemented</span></td>
-                <td>Forward an existing loopback HTTP server to the tailnet or Funnel edge.</td>
+                <td>Forward an existing loopback HTTP server. Serve includes tailnet identity headers; Funnel is public and does not.</td>
+              </tr>
+              <tr>
+                <td>Tailscale Services</td>
+                <td>N/A</td>
+                <td><span class="status planned">Not yet</span></td>
+                <td>Upstream <code>ListenService</code> is newer than the current <code>tailscale.com v1.92.2</code> pin.</td>
               </tr>
               <tr>
                 <td>Routing controls</td>
@@ -225,11 +231,14 @@ print(res.statusCode);</code></pre>
             <button class="tab" id="example-tab-tls" data-example="tls" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
               <span>05</span> Terminate Tailscale TLS
             </button>
+            <button class="tab" id="example-tab-shelf" data-example="shelf" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
+              <span>06</span> Serve Shelf directly
+            </button>
             <button class="tab" id="example-tab-funnel" data-example="funnel" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
-              <span>06</span> Publish a local Shelf server
+              <span>07</span> Forward loopback HTTP
             </button>
             <button class="tab" id="example-tab-prefs" data-example="prefs" type="button" role="tab" aria-selected="false" aria-controls="example-panel" tabindex="-1">
-              <span>07</span> Update routing prefs
+              <span>08</span> Update routing prefs
             </button>
             <p class="example-note">
               Examples assume <code>Tailscale.init</code> has already run and
@@ -339,7 +348,7 @@ print(res.statusCode);</code></pre>
             </article>
             <article>
               <h3>Forwarding is intentionally loopback</h3>
-              <p><code>serve.forward</code> and <code>funnel.forward</code> are for existing local HTTP servers, such as Shelf or <code>dart:io</code>.</p>
+              <p><code>serve.forward</code> and <code>funnel.forward</code> are for existing local HTTP servers. Shelf handlers can also run directly on <code>http.bind</code> with the tested adapter example.</p>
             </article>
           </div>
         </div>
@@ -351,12 +360,12 @@ print(res.statusCode);</code></pre>
             <p class="eyebrow">Install</p>
             <h2>Package metadata and docs.</h2>
             <p>
-              Requires Dart 3.10+, Go 1.25+, and the native toolchain for the
+              Requires Dart 3.10.4+, Go 1.25+, and the native toolchain for the
               target platform. Supported today: Android, iOS, macOS, Linux.
             </p>
           </div>
           <pre><code>dependencies:
-  tailscale: ^0.3.0</code></pre>
+  tailscale: ^0.3.1</code></pre>
           <div class="install-actions">
             <a class="button button-primary" href="https://pub.dev/packages/tailscale">Open pub.dev</a>
             <a class="button button-secondary" href="api/">Generated Dart docs</a>

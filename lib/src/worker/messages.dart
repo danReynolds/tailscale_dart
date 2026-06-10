@@ -173,6 +173,7 @@ final class _WorkerStartCommand extends _WorkerCommand {
   const _WorkerStartCommand({
     required this.hostname,
     required this.authKey,
+    required this.ephemeral,
     required this.controlUrl,
     required this.stateDir,
     required this.hostNetworkSnapshot,
@@ -180,6 +181,7 @@ final class _WorkerStartCommand extends _WorkerCommand {
 
   final String hostname;
   final String authKey;
+  final bool ephemeral;
   final String controlUrl;
   final String stateDir;
   final String hostNetworkSnapshot;

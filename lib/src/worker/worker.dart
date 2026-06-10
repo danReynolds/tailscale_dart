@@ -204,6 +204,7 @@ final class Worker {
   Future<void> start({
     required String hostname,
     required String authKey,
+    required bool ephemeral,
     required String controlUrl,
     required String stateDir,
   }) async {
@@ -212,6 +213,7 @@ final class Worker {
       _WorkerStartCommand(
         hostname: hostname,
         authKey: authKey,
+        ephemeral: ephemeral,
         controlUrl: controlUrl,
         stateDir: stateDir,
         hostNetworkSnapshot: hostNetworkSnapshot,

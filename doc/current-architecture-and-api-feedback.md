@@ -235,110 +235,24 @@ await server.close();
 
 ### Shelf Adapter Example
 
-Shelf can be layered as an adapter over `TailscaleHttpServer.requests`.
-This avoids `shelf_io.serve`, because there is no `dart:io` server socket.
+Shelf support should stay as a tested adapter example instead of a core
+dependency. The adapter lives in [`example/shelf_adapter.dart`](../example/shelf_adapter.dart)
+as an extension on `Http`, so app code reads like a native namespace method:
 
 ```dart
-import 'dart:async';
-
-import 'package:shelf/shelf.dart' as shelf;
-import 'package:shelf_router/shelf_router.dart';
-import 'package:tailscale/tailscale.dart';
-
-Future<TailscaleHttpServer> bindShelf({
-  required Tailscale tailscale,
-  required int port,
-  required shelf.Handler handler,
-}) async {
-  final server = await tailscale.http.bind(port: port);
-
-  server.requests.listen((request) async {
-    try {
-      final shelfRequest = shelf.Request(
-        request.method,
-        _requestedUri(request),
-        protocolVersion: _protocolVersion(request.protocolVersion),
-        headers: {
-          for (final entry in request.headersAll.entries)
-            entry.key: entry.value.length == 1
-                ? entry.value.single
-                : entry.value,
-        },
-        body: request.body,
-        context: {
-          'tailscale.local': request.local,
-          'tailscale.remote': request.remote,
-          'tailscale.request': request,
-        },
-      );
-
-      final shelfResponse = await handler(shelfRequest);
-
-      request.response.statusCode = shelfResponse.statusCode;
-      for (final entry in shelfResponse.headers.entries) {
-        final value = entry.value;
-        if (value is Iterable) {
-          for (final item in value) {
-            request.response.addHeader(entry.key, item.toString());
-          }
-        } else {
-          request.response.setHeader(entry.key, value.toString());
-        }
-      }
-      await request.response.writeAll(shelfResponse.read());
-      await request.response.close();
-    } catch (_) {
-      await request.respond(
-        statusCode: 500,
-        headers: {'content-type': 'text/plain'},
-        body: 'Internal Server Error',
-      );
-    }
-  });
-
-  return server;
-}
-
-Uri _requestedUri(TailscaleHttpRequest request) {
-  final path = request.requestUri.startsWith('/')
-      ? request.requestUri
-      : '/${request.requestUri}';
-  final host = request.host.isEmpty ? request.local.toString() : request.host;
-  return Uri.parse('http://$host$path');
-}
-
-String _protocolVersion(String proto) =>
-    proto.startsWith('HTTP/') ? proto.substring(5) : proto;
-```
-
-Example Shelf app:
-
-```dart
-final ts = await startNode();
-
-final router = Router()
-  ..get('/health', (shelf.Request request) {
-    return shelf.Response.ok('ok');
-  })
-  ..post('/echo', (shelf.Request request) async {
-    final body = await request.readAsString();
-    return shelf.Response.ok(
-      'echo: $body',
-      headers: {'content-type': 'text/plain'},
-    );
-  });
-
 final handler = const shelf.Pipeline()
     .addMiddleware(shelf.logRequests())
-    .addHandler(router.call);
+    .addHandler((request) => shelf.Response.ok('ok'));
 
-final server = await bindShelf(tailscale: ts, port: 8080, handler: handler);
+final server = await ts.http.bindShelf(port: 8080, handler: handler);
 
 print('Shelf app listening on ${server.tailnet}');
 ```
 
-Current limitation: hijacking/WebSocket upgrade is not part of v1.
-Normal request/response Shelf handlers map cleanly.
+This path avoids `shelf_io.serve` entirely: normal request/response Shelf
+handlers run on `http.bind`, while `serve.forward` remains the right API for an
+HTTP server that is already listening on loopback. Current limitation:
+hijacking/WebSocket upgrade is not part of v1.
 
 ### TCP Server
 

@@ -44,6 +44,7 @@ upstream version skew visible when adding new wrappers.
 | [`funnel`](#funnel)     | Public-internet HTTPS forwarding via Tailscale Funnel              | Optional  | ✅               |
 | [`taildrop`](#taildrop) | Node-to-node file transfer                                          | Optional  | Planned          |
 | [`serve`](#serve)       | Tailnet publication for existing local HTTP services                | Optional  | ✅               |
+| [`services`](#tailscale-services) | Tailscale Services hosts via upstream `ListenService`       | Optional  | Planned          |
 | [`exitNode`](#exitnode) | Route outbound traffic through another node                                | Advanced  | ✅        |
 | [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Optional  | Planned          |
 | [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Advanced  | ✅        |
@@ -67,7 +68,7 @@ returning a transitional state such as `starting`.
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
 | `Tailscale.init({stateDir, logLevel})` | ✅ | One-time library configuration at app startup. | `Tailscale.init(stateDir: '/app/state');` |
-| `up({hostname, authKey, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; resolves on the first stable state only. Throws `TailscaleUpException` if startup fails before that. | `final s = await tsnet.up(authKey: 'tskey-...');` |
+| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; `ephemeral: true` registers short-lived CI/test nodes. Resolves on the first stable state only. Throws `TailscaleUpException` if startup fails before that. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
 | `down()` | ✅ | Stop engine, keep persisted credentials. | `await tsnet.down();` |
 | `logout()` | ✅ | Stop + wipe persisted credentials. | `await tsnet.logout();` |
 | `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. | `final s = await tsnet.status();` |
@@ -82,7 +83,10 @@ returning a transitional state such as `starting`.
 HTTP conveniences layered on top of the tailnet. The `client` routes
 every request over the tailnet tunnel; `bind` accepts incoming tailnet
 HTTP and exposes package-native request/response objects backed by fd
-streams.
+streams. Shelf users can copy the tested adapter in
+[`example/shelf_adapter.dart`](../example/shelf_adapter.dart) to run a
+Shelf `Handler` directly on `http.bind` without adding Shelf as a core package
+dependency.
 
 **Status:** fully working.
 
@@ -201,6 +205,11 @@ endpoints. `http.bind()` remains the package-native in-process HTTP server and
 should be preferred when the handler lives in Dart and does not need a local TCP
 listener.
 
+For tailnet clients, Serve follows upstream Tailscale Serve semantics and
+forwards Tailscale identity headers such as `Tailscale-User-Login`,
+`Tailscale-User-Name`, and `Tailscale-User-Profile-Pic` to the loopback backend.
+Public Funnel traffic does not include those identity headers.
+
 Serve/Funnel publications created by this package are process-scoped rather
 than persistent `tailscale serve --bg` configuration. Close the returned
 `TailscalePublishedService` explicitly; `Tailscale.down()` also removes
@@ -214,6 +223,19 @@ get/set remains a possible future escape hatch.
 | `serve.forward({tailnetPort, localPort, localAddress, path, https})` → `Future<TailscalePublishedService>` | ✅ | Publish a local HTTP service inside the tailnet. | `final p = await tsnet.serve.forward(tailnetPort: 443, localPort: 3000);` |
 | `serve.clear({tailnetPort, path})` | ✅ | Remove a tailnet Serve publication. | `await tsnet.serve.clear(tailnetPort: 443);` |
 | `TailscalePublishedService` | ✅ | Publication handle with `url`, local target metadata, and `close()`. | `print(p.url); await p.close();` |
+
+## Tailscale Services
+
+Upstream `tsnet.Server.ListenService` advertises a named Tailscale Service from
+a tagged node. It is not exposed by this package yet because the current repo pin
+is `tailscale.com v1.92.2`, while `ListenService` is a newer upstream API.
+
+**Status:** planned after the Tailscale module pin is bumped and the public Dart
+shape is designed.
+
+| API | Status | Description | Example |
+| --- | ------ | ----------- | ------- |
+| `services.*` | ⛔ | No public Dart API yet. Likely future shape mirrors `tsnet.Server.ListenService` while preserving package-native listener types. | N/A |
 
 ## `exitNode`
 

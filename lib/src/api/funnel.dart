@@ -16,6 +16,10 @@ import 'serve.dart';
 /// the node must have the Funnel node attribute, and the requested port must be
 /// allowed by policy.
 ///
+/// Unlike [Serve.forward], public Funnel requests do not include Tailscale
+/// identity headers. Authenticate public callers at the forwarded service layer
+/// if the endpoint is not intentionally anonymous.
+///
 /// Funnel publications are process-scoped in this package. Close returned
 /// handles explicitly; `Tailscale.down()` also tears down package-created
 /// Funnel listeners and clears their Funnel config best-effort.
@@ -24,7 +28,7 @@ abstract class Funnel {
   ///
   /// [publicPort] defaults to 443. Tailscale currently allows Funnel only on
   /// policy-approved ports (commonly 443, 8443, and 10000; see
-  /// https://tailscale.com/kb/1223/funnel); unsupported ports throw
+  /// https://tailscale.com/docs/features/tailscale-funnel); unsupported ports throw
   /// [TailscaleFunnelException] with a structured error code where the native
   /// runtime can classify it.
   ///

@@ -163,8 +163,26 @@ func TestStart_NoOpWithoutAuthKey(t *testing.T) {
 		mu.Unlock()
 	}()
 
-	if err := Start("host", "", "https://control", t.TempDir()); err != nil {
+	if err := Start("host", "", "https://control", t.TempDir(), false); err != nil {
 		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestStart_AppliesEphemeralFlag(t *testing.T) {
+	Stop()
+	t.Cleanup(Stop)
+
+	if err := Start("ephemeral-test", "", "", t.TempDir(), true); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if srv == nil {
+		t.Fatal("Start did not commit a server")
+	}
+	if !srv.Ephemeral {
+		t.Fatal("Start did not apply Ephemeral=true to tsnet.Server")
 	}
 }
 

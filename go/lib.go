@@ -126,7 +126,7 @@ func stopLocked() {
 }
 
 // Start initializes the Tailscale node.
-func Start(hostname, authKey, controlURL, stateDir string) (err error) {
+func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err error) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -185,6 +185,7 @@ func Start(hostname, authKey, controlURL, stateDir string) (err error) {
 		ControlURL: controlURL,
 		Dir:        stateDir,
 		Store:      newStore,
+		Ephemeral:  ephemeral,
 		Logf: func(format string, args ...any) {
 			if atomic.LoadInt32(&LogLevel) >= 2 {
 				log.Printf("TSNET: "+format, args...)

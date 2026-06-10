@@ -41,6 +41,11 @@ Future<void> main(List<String> args) async {
     return;
   }
 
+  if (args.contains('--pipelined')) {
+    await _runPipelinedExperiment();
+    return;
+  }
+
   final options = _Options.parse(args);
   ensurePosixFdTransportAvailable();
 
@@ -521,6 +526,106 @@ Future<void> _writePayload(
   }
 }
 
+/// Like [_writePayload] but issues every chunk without awaiting it, modelling a
+/// real bulk transfer (e.g. Go's io.Copy filling the socketpair) rather than the
+/// latency-bound await-each-chunk pattern. This is the only mode in which the
+/// socketpair accumulates multiple chunks, so it is the only mode that exercises
+/// inbound read batching and socketpair-buffer sizing.
+Future<void> _writePayloadPipelined(
+  PosixFdTransport transport, {
+  required int totalBytes,
+  required int chunkBytes,
+}) async {
+  final chunk = _payload(chunkBytes);
+  final futures = <Future<void>>[];
+  var remaining = totalBytes;
+  while (remaining > 0) {
+    final n = remaining < chunk.length ? remaining : chunk.length;
+    futures.add(
+      transport.write(
+        n == chunk.length ? chunk : Uint8List.sublistView(chunk, 0, n),
+      ),
+    );
+    remaining -= n;
+  }
+  await Future.wait(futures);
+}
+
+/// Self-contained experiment: pipelined throughput across a small matrix of
+/// socketpair buffer size and receiver read-chunk size. Run with `--pipelined`.
+Future<void> _runPipelinedExperiment() async {
+  ensurePosixFdTransportAvailable();
+  const payloadPerPair = 16 * 1024 * 1024;
+  const writeChunk = 64 * 1024;
+  print('');
+  print('=== pipelined throughput experiment ===');
+  print('payload ${payloadPerPair ~/ (1024 * 1024)} MiB/pair, write chunk '
+      '${writeChunk ~/ 1024} KiB, pipelined (no per-chunk await)');
+  print('');
+  for (final pairs in <int>[1, 4]) {
+    for (final sockBufKiB in <int>[0, 256]) {
+      for (final readKiB in <int>[64, 256]) {
+        // Two runs; keep the faster to suppress scheduling noise.
+        var best = 0.0;
+        for (var run = 0; run < 2; run++) {
+          final mibs = await _measurePipelined(
+            pairs: pairs,
+            payloadBytesPerPair: payloadPerPair,
+            writeChunkBytes: writeChunk,
+            readChunkBytes: readKiB * 1024,
+            socketBufferBytes: sockBufKiB * 1024,
+          );
+          if (mibs > best) best = mibs;
+        }
+        final buf = sockBufKiB == 0 ? 'default' : '${sockBufKiB}KiB';
+        print('pairs=$pairs sockbuf=$buf read=${readKiB}KiB  ->  '
+            '${best.toStringAsFixed(1)} MiB/s');
+      }
+    }
+    print('');
+  }
+}
+
+Future<double> _measurePipelined({
+  required int pairs,
+  required int payloadBytesPerPair,
+  required int writeChunkBytes,
+  required int readChunkBytes,
+  required int socketBufferBytes,
+}) async {
+  final transports = <_TransportPair>[];
+  final drains = <Future<int>>[];
+  try {
+    for (var i = 0; i < pairs; i++) {
+      final pair = await _connectedPair(
+        maxReadChunkSize: readChunkBytes,
+        maxPendingWriteBytes: payloadBytesPerPair,
+        socketBufferBytes: socketBufferBytes,
+      );
+      transports.add(pair);
+      drains.add(_drainUntilEof(pair.right.input));
+    }
+    final elapsed = await _measure(() async {
+      await Future.wait(<Future<void>>[
+        for (final pair in transports)
+          _writePayloadPipelined(
+            pair.left,
+            totalBytes: payloadBytesPerPair,
+            chunkBytes: writeChunkBytes,
+          ),
+      ]);
+      await Future.wait(<Future<void>>[
+        for (final pair in transports) pair.left.closeWrite(),
+      ]);
+      await Future.wait(drains);
+    });
+    final totalMiB = (pairs * payloadBytesPerPair) / (1024 * 1024);
+    return totalMiB / (elapsed.inMicroseconds / 1e6);
+  } finally {
+    await _closePairs(transports);
+  }
+}
+
 Future<void> _writeSmallPayloads(
   PosixFdTransport transport, {
   required Uint8List payload,
@@ -553,8 +658,13 @@ Future<Duration> _measure(Future<void> Function() fn) async {
 Future<_TransportPair> _connectedPair({
   int maxReadChunkSize = 64 * 1024,
   int maxPendingWriteBytes = 1024 * 1024,
+  int socketBufferBytes = 0,
 }) async {
   final (:leftFd, :rightFd) = _socketPair();
+  if (socketBufferBytes > 0) {
+    _setSockBuf(leftFd, socketBufferBytes);
+    _setSockBuf(rightFd, socketBufferBytes);
+  }
   final left = await PosixFdTransport.adopt(
     leftFd,
     maxReadChunkSize: maxReadChunkSize,
@@ -826,17 +936,23 @@ final class _BenchPosixBindings {
     : _socketpair = DynamicLibrary.process()
           .lookupFunction<_SocketPairNative, _SocketPairDart>('socketpair'),
       _close = DynamicLibrary.process()
-          .lookupFunction<_CloseNative, _CloseDart>('close');
+          .lookupFunction<_CloseNative, _CloseDart>('close'),
+      _setsockopt = DynamicLibrary.process()
+          .lookupFunction<_SetsockoptNative, _SetsockoptDart>('setsockopt');
 
   static final instance = _BenchPosixBindings._();
 
   final _SocketPairDart _socketpair;
   final _CloseDart _close;
+  final _SetsockoptDart _setsockopt;
 
   int socketpair(int domain, int type, int protocol, Pointer<Int32> fds) =>
       _socketpair(domain, type, protocol, fds);
 
   int close(int fd) => _close(fd);
+
+  int setsockopt(int fd, int level, int opt, Pointer<Void> val, int len) =>
+      _setsockopt(fd, level, opt, val, len);
 }
 
 typedef _SocketPairNative = Int32 Function(Int32, Int32, Int32, Pointer<Int32>);
@@ -844,3 +960,24 @@ typedef _SocketPairDart = int Function(int, int, int, Pointer<Int32>);
 
 typedef _CloseNative = Int32 Function(Int32);
 typedef _CloseDart = int Function(int);
+
+typedef _SetsockoptNative =
+    Int32 Function(Int32, Int32, Int32, Pointer<Void>, Uint32);
+typedef _SetsockoptDart = int Function(int, int, int, Pointer<Void>, int);
+
+// SO_SNDBUF/SO_RCVBUF and SOL_SOCKET differ between Darwin and Linux.
+final int _solSocket = Platform.isMacOS ? 0xffff : 1;
+final int _soSndBuf = Platform.isMacOS ? 0x1001 : 7;
+final int _soRcvBuf = Platform.isMacOS ? 0x1002 : 8;
+
+/// Best-effort enlarge SO_SNDBUF/SO_RCVBUF on [fd]. Mirrors what the real Go
+/// `newSocketPairConn` does, which the harness's raw socketpair does not get.
+void _setSockBuf(int fd, int bytes) {
+  final p = calloc<Int32>()..value = bytes;
+  try {
+    _BenchPosixBindings.instance.setsockopt(fd, _solSocket, _soSndBuf, p.cast(), 4);
+    _BenchPosixBindings.instance.setsockopt(fd, _solSocket, _soRcvBuf, p.cast(), 4);
+  } finally {
+    calloc.free(p);
+  }
+}

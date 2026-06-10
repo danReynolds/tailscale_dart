@@ -74,7 +74,28 @@ For a quick smoke run while iterating:
   --http-requests=20
 ```
 
-Interpretation guidance:
+## Pipelined bulk transfer
+
+The default scenarios await each chunk write, which is latency-bound and cannot
+exercise pipelining-dependent effects (socketpair buffer sizing, inbound read
+batching) — only one chunk is ever in flight, so the socketpair never
+accumulates. Real bulk transfer (e.g. Go's `io.Copy` filling the socketpair)
+pipelines, and that is where socketpair buffers dominate.
+
+```sh
+dart run --enable-experiment=native-assets benchmark/fd_transport.dart --pipelined
+```
+
+This runs a small matrix over socketpair buffer size and receiver read-chunk
+size with a pipelined writer. Findings on the reference machine: enlarging the
+socketpair buffer from the OS default to 256 KiB is a ~4× single-pair win under
+pipelining (which is why the real `newSocketPairConn` sets it); a larger
+receiver read chunk adds little once the buffer is sized. Note this measures the
+socketpair hop in isolation — in production the tsnet/WireGuard/tailnet link is
+usually the bottleneck, so socketpair throughput well above a few Gbps does not
+translate to real-world gains except on fast LAN-direct peers.
+
+## Interpretation guidance
 
 - Compare the same machine, same power mode, same SDK, and same command.
 - Run each branch more than once; first runs include native asset build and VM

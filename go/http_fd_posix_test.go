@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTailnetHTTPClientUsesTailscaleTLSVerifier(t *testing.T) {
@@ -72,5 +73,16 @@ func TestHTTPResponseHeadRejectsOversizedWriteEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "HTTP response head too large") {
 		t.Fatalf("error = %q, want oversized head", err)
+	}
+}
+
+func TestHTTPBindingServerUsesBoundedTimeouts(t *testing.T) {
+	server := newHTTPBindingServer(&httpBindingState{})
+
+	if server.ReadHeaderTimeout != 10*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %s, want 10s", server.ReadHeaderTimeout)
+	}
+	if server.IdleTimeout != 120*time.Second {
+		t.Fatalf("IdleTimeout = %s, want 120s", server.IdleTimeout)
 	}
 }

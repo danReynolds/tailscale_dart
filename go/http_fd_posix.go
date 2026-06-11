@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/tlsdial"
@@ -20,8 +21,10 @@ import (
 )
 
 const (
-	httpAcceptBacklog = 128
-	httpMaxHeadBytes  = 256 * 1024
+	httpAcceptBacklog     = 128
+	httpMaxHeadBytes      = 256 * 1024
+	httpReadHeaderTimeout = 10 * time.Second
+	httpIdleTimeout       = 120 * time.Second
 )
 
 type HttpFdRequest struct {
@@ -62,6 +65,7 @@ type httpResponseHead struct {
 type httpBindingState struct {
 	binding  HttpBinding
 	ln       net.Listener
+	server   *http.Server
 	requests chan *HttpIncomingRequest
 	done     chan struct{}
 	once     sync.Once
@@ -107,6 +111,7 @@ func HttpBind(tailnetPort int) (*HttpBinding, error) {
 		requests: make(chan *HttpIncomingRequest, httpAcceptBacklog),
 		done:     make(chan struct{}),
 	}
+	state.server = newHTTPBindingServer(state)
 
 	mu.Lock()
 	if srv != s {
@@ -121,9 +126,7 @@ func HttpBind(tailnetPort int) (*HttpBinding, error) {
 	httpBindingMu.Unlock()
 
 	go func() {
-		_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			serveHTTPFdRequest(state, w, r)
-		}))
+		_ = state.server.Serve(ln)
 		state.close()
 		httpBindingMu.Lock()
 		if httpBindingRegistry[id] == state {
@@ -133,6 +136,16 @@ func HttpBind(tailnetPort int) (*HttpBinding, error) {
 	}()
 
 	return &state.binding, nil
+}
+
+func newHTTPBindingServer(state *httpBindingState) *http.Server {
+	return &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			serveHTTPFdRequest(state, w, r)
+		}),
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		IdleTimeout:       httpIdleTimeout,
+	}
 }
 
 func HttpAccept(bindingID int64) (*HttpIncomingRequest, bool, error) {
@@ -181,7 +194,12 @@ func closeAllHttpBindings() {
 func (s *httpBindingState) close() {
 	s.once.Do(func() {
 		close(s.done)
-		_ = s.ln.Close()
+		if s.server != nil {
+			_ = s.server.Close()
+		}
+		if s.ln != nil {
+			_ = s.ln.Close()
+		}
 	})
 	// Drain requests that were enqueued but never accepted by Dart and release
 	// their fds; otherwise each queued entry leaks two Dart-side descriptors and

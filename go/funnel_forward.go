@@ -98,7 +98,7 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	target := funnelTarget{
 		localAddress: localAddress,
 		localPort:    localPort,
-		proxy:        httputil.NewSingleHostReverseProxy(targetURL),
+		proxy:        newFunnelReverseProxy(targetURL),
 	}
 
 	funnelMu.Lock()
@@ -249,20 +249,46 @@ func (ff *funnelForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Funnel exposes this listener to the anonymous public internet. The
-	// Tailscale-* request headers (Tailscale-User-Login, Tailscale-User-Name,
-	// Tailscale-User-Profile-Pic, …) are reserved for tailscaled-injected,
-	// authenticated identity context — they are only trustworthy on the Serve
-	// path, where tailscaled strips client-supplied copies and re-sets them
-	// from an authenticated WhoIs. This bespoke proxy bypasses that, so without
-	// stripping, a public client could send `Tailscale-User-Login: admin@corp`
-	// and have it forwarded verbatim to the loopback backend. Delete any the
-	// client supplied before proxying so they can never be mistaken for trusted
-	// identity, and pin the forwarded-proto/host the backend sees.
-	stripReservedIdentityHeaders(r.Header)
-	r.Header.Set("X-Forwarded-Proto", "https")
-	r.Header.Set("X-Forwarded-Host", r.Host)
 	target.proxy.ServeHTTP(w, r)
+}
+
+func newFunnelReverseProxy(targetURL *url.URL) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(targetURL)
+			// Preserve the existing Host behavior of NewSingleHostReverseProxy
+			// while still using Rewrite's sanitized outbound request.
+			pr.Out.Host = pr.In.Host
+
+			// ReverseProxy removes Forwarded/X-Forwarded-* before Rewrite runs.
+			// Clear other common client-IP proxy headers before setting the
+			// values this Funnel layer wants the backend to trust.
+			stripUntrustedProxyHeaders(pr.Out.Header)
+			pr.SetXForwarded()
+			pr.Out.Header.Set("X-Forwarded-Proto", "https")
+			pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
+			stripReservedIdentityHeaders(pr.Out.Header)
+		},
+	}
+}
+
+// stripUntrustedProxyHeaders deletes proxy-supplied client metadata that is
+// spoofable at the public Funnel edge. Forwarded and X-Forwarded-* are already
+// removed by httputil.ReverseProxy before Rewrite, but keeping them here makes
+// the trust boundary explicit and covers headers Go does not special-case.
+func stripUntrustedProxyHeaders(h http.Header) {
+	for _, name := range []string{
+		"Forwarded",
+		"X-Forwarded-For",
+		"X-Forwarded-Host",
+		"X-Forwarded-Port",
+		"X-Forwarded-Proto",
+		"X-Forwarded-Ssl",
+		"X-Original-Forwarded-For",
+		"X-Real-Ip",
+	} {
+		h.Del(name)
+	}
 }
 
 // stripReservedIdentityHeaders deletes request headers reserved for
@@ -270,6 +296,16 @@ func (ff *funnelForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // (potentially anonymous, public) client; only tailscaled's authenticated
 // Serve path is allowed to set them.
 func stripReservedIdentityHeaders(h http.Header) {
+	// Funnel exposes this listener to the anonymous public internet. The
+	// Tailscale-* request headers (Tailscale-User-Login, Tailscale-User-Name,
+	// Tailscale-User-Profile-Pic, etc.) are reserved for tailscaled-injected,
+	// authenticated identity context. They are only trustworthy on the Serve
+	// path, where tailscaled strips client-supplied copies and re-sets them
+	// from an authenticated WhoIs. This bespoke proxy bypasses that, so without
+	// stripping, a public client could send `Tailscale-User-Login: admin@corp`
+	// and have it forwarded verbatim to the loopback backend. Delete any the
+	// client supplied before proxying so they can never be mistaken for trusted
+	// identity.
 	for name := range h {
 		if strings.HasPrefix(http.CanonicalHeaderKey(name), "Tailscale-") {
 			delete(h, name)

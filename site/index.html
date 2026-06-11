@@ -168,7 +168,7 @@ print(res.statusCode);</code></pre>
                 <td>Tailscale Services</td>
                 <td>N/A</td>
                 <td><span class="status planned">Not yet</span></td>
-                <td>Upstream <code>ListenService</code> is newer than the current <code>tailscale.com v1.92.2</code> pin.</td>
+                <td>Upstream <code>ListenService</code> is available in the current pin; no Dart wrapper yet.</td>
               </tr>
               <tr>
                 <td>Routing controls</td>
@@ -360,12 +360,13 @@ print(res.statusCode);</code></pre>
             <p class="eyebrow">Install</p>
             <h2>Package metadata and docs.</h2>
             <p>
-              Requires Dart 3.10.4+, Go 1.25+, and the native toolchain for the
+              Requires Dart 3.10.4+, Go 1.26+ (or Go 1.25+ with
+              <code>GOTOOLCHAIN=auto</code>), and the native toolchain for the
               target platform. Supported today: Android, iOS, macOS, Linux.
             </p>
           </div>
           <pre><code>dependencies:
-  tailscale: ^0.3.1</code></pre>
+  tailscale: ^0.4.0</code></pre>
           <div class="install-actions">
             <a class="button button-primary" href="https://pub.dev/packages/tailscale">Open pub.dev</a>
             <a class="button button-secondary" href="api/">Generated Dart docs</a>

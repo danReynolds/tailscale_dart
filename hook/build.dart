@@ -4,7 +4,7 @@
 // and registers it as a native code asset. Runs automatically during
 // `dart run` or `flutter build`.
 //
-// Requires Go 1.25+ installed and on PATH.
+// Requires Go 1.26+ installed and on PATH, or Go 1.25+ with GOTOOLCHAIN=auto.
 //
 // How the pieces connect:
 //
@@ -93,8 +93,8 @@ void main(List<String> args) async {
         ? outDir.resolve('libtailscale.a').toFilePath()
         : libPath;
 
-    // Idempotency: if the output library is already newer than every Go
-    // source file (and, on iOS, the intermediate archive exists), skip
+    // Idempotency: if the output library is already newer than every native
+    // build input (and, on iOS, the intermediate archive exists), skip
     // running `go build` entirely. This matters beyond pure speed: on
     // Linux, rewriting an mmap'd .so under a process that has it loaded
     // crashes that process with SIGBUS. The Dart hooks framework can
@@ -102,13 +102,9 @@ void main(List<String> args) async {
     // still has the .so mmap'd; short-circuiting here keeps the file
     // bit-for-bit stable across subprocess invocations.
     final goDir = p.join(packageRoot, 'go');
-    final goSources = Directory(goDir)
-        .listSync(recursive: true)
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.go'))
-        .toList(growable: false);
+    final goBuildInputs = _goBuildInputs(goDir);
 
-    if (_outputIsUpToDate(libPath, goSources) &&
+    if (_outputIsUpToDate(libPath, goBuildInputs) &&
         (!isIOS || File(goOutput).existsSync())) {
       // Skip the build; just register the asset and dependencies below.
     } else {
@@ -160,23 +156,47 @@ void main(List<String> args) async {
       ),
     );
 
-    // Register Go source files as dependencies so the hook re-runs on changes.
-    for (final source in goSources) {
+    // Register native build inputs as dependencies so the hook re-runs on
+    // Go source, cgo header/C, and module version changes.
+    for (final source in goBuildInputs) {
       output.dependencies.add(source.uri);
     }
   });
 }
 
+List<File> _goBuildInputs(String goDir) {
+  const extensions = <String>{
+    '.c',
+    '.cc',
+    '.cpp',
+    '.cxx',
+    '.go',
+    '.h',
+    '.hpp',
+    '.m',
+    '.mm',
+    '.mod',
+    '.s',
+    '.sum',
+    '.S',
+  };
+  return Directory(goDir)
+      .listSync(recursive: true)
+      .whereType<File>()
+      .where((f) => extensions.contains(p.extension(f.path)))
+      .toList(growable: false);
+}
+
 /// Returns true if [outputPath] exists and was modified at or after every
-/// source in [sources]. Used to skip an otherwise-unnecessary `go build`
+/// input in [inputs]. Used to skip an otherwise-unnecessary `go build`
 /// invocation that would rewrite the output and crash any process that
 /// currently has it mmap'd (Linux ELF dlopen + mutate = SIGBUS).
-bool _outputIsUpToDate(String outputPath, List<File> sources) {
+bool _outputIsUpToDate(String outputPath, List<File> inputs) {
   final out = File(outputPath);
   if (!out.existsSync()) return false;
   final outMtime = out.statSync().modified;
-  for (final source in sources) {
-    if (source.statSync().modified.isAfter(outMtime)) return false;
+  for (final input in inputs) {
+    if (input.statSync().modified.isAfter(outMtime)) return false;
   }
   return true;
 }
@@ -236,7 +256,8 @@ Future<String> _findGo() async {
   throw Exception(
     'Go toolchain not found.\n'
     '\n'
-    'tailscale requires Go 1.25+ to compile its native library.\n'
+    'tailscale requires Go 1.26+ to compile its native library, or Go 1.25+\n'
+    'with GOTOOLCHAIN=auto so Go can fetch the module toolchain.\n'
     'Install from: https://go.dev/dl/\n'
     '\n'
     'After installing, ensure `go` is on your PATH, or set the GOROOT\n'
@@ -244,10 +265,12 @@ Future<String> _findGo() async {
   );
 }
 
-const _minGoMajor = 1;
-const _minGoMinor = 25;
+const _requiredGoMajor = 1;
+const _requiredGoMinor = 26;
+const _bootstrapGoMajor = 1;
+const _bootstrapGoMinor = 25;
 
-/// Verifies the Go version is at least 1.25.
+/// Verifies the Go toolchain can satisfy the Go module directive.
 Future<void> _checkGoVersion(String goBin) async {
   final result = await Process.run(goBin, ['version']);
   if (result.exitCode != 0) {
@@ -267,12 +290,37 @@ Future<void> _checkGoVersion(String goBin) async {
   final major = int.parse(match.group(1)!);
   final minor = int.parse(match.group(2)!);
 
-  if (major < _minGoMajor || (major == _minGoMajor && minor < _minGoMinor)) {
-    throw Exception(
-      'Go $_minGoMajor.$_minGoMinor+ required, found go$major.$minor.\n'
-      'Update from: https://go.dev/dl/',
-    );
+  if (_versionAtLeast(major, minor, _requiredGoMajor, _requiredGoMinor)) {
+    return;
   }
+  if (_versionAtLeast(major, minor, _bootstrapGoMajor, _bootstrapGoMinor) &&
+      _goToolchainCanAutoUpgrade()) {
+    return;
+  }
+
+  throw Exception(
+    'Go $_requiredGoMajor.$_requiredGoMinor+ required, found go$major.$minor.\n'
+    'Install Go $_requiredGoMajor.$_requiredGoMinor+ or enable '
+    'GOTOOLCHAIN=auto on Go $_bootstrapGoMajor.$_bootstrapGoMinor+.\n'
+    'Update from: https://go.dev/dl/',
+  );
+}
+
+bool _versionAtLeast(
+  int major,
+  int minor,
+  int requiredMajor,
+  int requiredMinor,
+) {
+  return major > requiredMajor ||
+      (major == requiredMajor && minor >= requiredMinor);
+}
+
+bool _goToolchainCanAutoUpgrade() {
+  final raw = Platform.environment['GOTOOLCHAIN']?.trim().toLowerCase();
+  if (raw == null || raw.isEmpty) return true;
+  if (raw == 'auto') return true;
+  return raw.endsWith('+auto');
 }
 
 // ---------------------------------------------------------------------------

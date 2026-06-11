@@ -29,7 +29,7 @@ HTTP, TCP, UDP, TLS, Funnel, and future service listeners follow
 `tsnet`; node introspection, diagnostics, prefs, profiles, serve
 config, exit nodes, and taildrop follow LocalAPI via `local.Client`.
 
-**Version note:** the current repo pin is `tailscale.com v1.92.2`. Keep
+**Version note:** the current repo pin is `tailscale.com v1.100.0`. Keep
 upstream version skew visible when adding new wrappers.
 
 ## Namespace overview
@@ -227,11 +227,10 @@ get/set remains a possible future escape hatch.
 ## Tailscale Services
 
 Upstream `tsnet.Server.ListenService` advertises a named Tailscale Service from
-a tagged node. It is not exposed by this package yet because the current repo pin
-is `tailscale.com v1.92.2`, while `ListenService` is a newer upstream API.
+a tagged node. It is available in the current upstream pin but is not exposed by
+this package yet.
 
-**Status:** planned after the Tailscale module pin is bumped and the public Dart
-shape is designed.
+**Status:** planned after the public Dart shape is designed.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |

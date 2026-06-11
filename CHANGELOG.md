@@ -40,11 +40,11 @@ public API shape changes.
 
 **Dependencies and build:**
 
-- Bumped `tailscale.com` from v1.92.2 to v1.96.5.
-- **Now requires the Go 1.26.1 toolchain** (up from 1.25.5), enforced by the Go
+- Bumped `tailscale.com` from v1.92.2 to v1.100.0.
+- **Now requires the Go 1.26.4 toolchain** (up from 1.25.5), enforced by the Go
   module directive. With the default `GOTOOLCHAIN=auto`, Go fetches it
-  automatically — including on a Go 1.25 base — so no manual toolchain install is
-  needed unless `GOTOOLCHAIN` is set to `local`/`off`.
+  automatically — including on a Go 1.25+ base — so no manual toolchain install
+  is needed unless `GOTOOLCHAIN` disables auto-upgrade.
 - Added Dependabot (Go modules, pub, and GitHub Actions) and a least-privilege CI
   token.
 

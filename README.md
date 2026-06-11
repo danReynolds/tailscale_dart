@@ -63,8 +63,9 @@ The first `dart run`, `dart test`, or `flutter build` triggers a native build ho
 Prerequisites:
 
 - Dart SDK 3.10.4 or newer.
-- Go 1.26 or newer on `PATH` (or Go 1.25 with the default `GOTOOLCHAIN=auto`,
-  which auto-fetches the 1.26.1 toolchain that `tailscale.com` requires).
+- Go 1.26 or newer on `PATH` (or Go 1.25+ with the default
+  `GOTOOLCHAIN=auto`, which auto-fetches the 1.26.4 toolchain that
+  `tailscale.com` requires).
 - Native toolchain for the target platform: Xcode for iOS/macOS, Android NDK through Flutter for Android, and a C toolchain for Linux.
 
 ## Quick start
@@ -120,7 +121,7 @@ Raw UDP | `udp.bind` | Supported | Message-preserving datagrams with remote endp
 TLS listener | `tls.bind`, `tls.domains` | Supported | Requires MagicDNS and HTTPS enabled on the tailnet.
 Serve | `serve.forward`, `serve.clear` | Supported | Tailnet-only publication for an existing loopback HTTP server.
 Funnel | `funnel.forward`, `funnel.clear` | Supported | Public HTTPS publication through Tailscale Funnel policy.
-Tailscale Services | N/A | Planned | Upstream `tsnet.Server.ListenService` is newer than the current `tailscale.com v1.92.2` pin.
+Tailscale Services | N/A | Planned | Upstream `tsnet.Server.ListenService` is available in the current pin; no Dart wrapper yet.
 Routing controls | `prefs`, `exitNode` | Supported | Subnet routes, Shields Up, tags, hostname, auto-update, and exit nodes.
 Diagnostics | `diag` | Supported | Ping, metrics, DERP map, and update checks.
 Taildrop | `taildrop` | Planned | Exported as a stub; not implemented in this release.

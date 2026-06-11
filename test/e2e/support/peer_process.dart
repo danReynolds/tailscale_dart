@@ -27,10 +27,10 @@ final class PeerProcess {
         ...Platform.environment,
         'STATE_DIR': stateDir,
         'HOSTNAME': hostname,
-        if (controlUrl != null) 'CONTROL_URL': controlUrl,
-        if (authKey != null) 'AUTH_KEY': authKey,
+        'CONTROL_URL': ?controlUrl,
+        'AUTH_KEY': ?authKey,
         if (ephemeral) 'EPHEMERAL': '1',
-        if (responseBody != null) 'RESPONSE_BODY': responseBody,
+        'RESPONSE_BODY': ?responseBody,
         if (advertisedRoutes.isNotEmpty)
           'ADVERTISED_ROUTES': advertisedRoutes.join(','),
       },

@@ -20,6 +20,28 @@ class TailscaleNodeIdentity {
     required this.tailscaleIPs,
   });
 
+  /// Decodes the identity fields of a native WhoIs/accept JSON object.
+  ///
+  /// Does not inspect the `found` flag — callers that distinguish
+  /// not-found from found (e.g. [Tailscale.whois]) must check it before
+  /// calling. Missing or mistyped fields fall back to empty values.
+  factory TailscaleNodeIdentity.fromJson(Map<String, dynamic> json) =>
+      TailscaleNodeIdentity(
+        nodeId: json['nodeId'] as String? ?? '',
+        hostName: json['hostName'] as String? ?? '',
+        userLoginName: json['userLoginName'] as String? ?? '',
+        tags:
+            (json['tags'] as List?)?.whereType<String>().toList(
+              growable: false,
+            ) ??
+            const [],
+        tailscaleIPs:
+            (json['tailscaleIPs'] as List?)?.whereType<String>().toList(
+              growable: false,
+            ) ??
+            const [],
+      );
+
   /// Stable Tailscale node identifier (e.g. `n1234AbCd`). Persists
   /// across key rotations; prefer over public keys for durable
   /// identity references.

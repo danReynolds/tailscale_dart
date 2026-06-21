@@ -94,7 +94,7 @@ func DuneHttpAccept(bindingID C.longlong) *C.char {
 	if closed {
 		return C.CString(`{"closed":true}`)
 	}
-	result, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"bindingId":      req.BindingID,
 		"requestBodyFd":  req.RequestBodyFD,
 		"responseBodyFd": req.ResponseBodyFD,
@@ -108,7 +108,11 @@ func DuneHttpAccept(bindingID C.longlong) *C.char {
 		"remotePort":     req.RemotePort,
 		"localAddress":   req.LocalAddress,
 		"localPort":      req.LocalPort,
-	})
+	}
+	if req.Identity != nil {
+		payload["identity"] = req.Identity
+	}
+	result, _ := json.Marshal(payload)
 	return C.CString(string(result))
 }
 
@@ -184,13 +188,17 @@ func DuneTcpAcceptFd(listenerID C.longlong) *C.char {
 	if closed {
 		return C.CString(`{"closed": true}`)
 	}
-	result, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"fd":            conn.FD,
 		"localAddress":  conn.LocalAddress,
 		"localPort":     conn.LocalPort,
 		"remoteAddress": conn.RemoteAddress,
 		"remotePort":    conn.RemotePort,
-	})
+	}
+	if conn.Identity != nil {
+		payload["identity"] = conn.Identity
+	}
+	result, _ := json.Marshal(payload)
 	return C.CString(string(result))
 }
 

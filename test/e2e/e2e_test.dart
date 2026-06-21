@@ -278,6 +278,123 @@ void main() {
       }
     });
 
+    test('inbound TCP accept attaches the dialer node identity', () async {
+      final status = await tsnet.status();
+      final selfIp = status.ipv4;
+      expect(selfIp, isNotNull, reason: 'main node has no IPv4 yet');
+
+      // Accept-time identity is best-effort: make sure the peer is already
+      // resolvable so the lookup isn't racing netmap propagation.
+      for (var i = 0; i < 30; i++) {
+        if (await tsnet.whois(peer.ipv4) != null) break;
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+
+      final listener = await tsnet.tcp.bind(port: 0);
+      addTearDown(listener.close);
+      final accepted = StreamIterator(listener.connections);
+      addTearDown(accepted.cancel);
+
+      // Ask the peer to dial our listener so we accept an inbound connection.
+      await peer.sendCommand('DIAL $selfIp ${listener.local.port}');
+
+      final didAccept = await accepted.moveNext().timeout(
+        const Duration(seconds: 30),
+      );
+      expect(didAccept, isTrue, reason: 'listener never accepted the peer');
+
+      final conn = accepted.current;
+      try {
+        expect(conn.remote.address, peer.ipv4);
+        expect(
+          conn.identity,
+          isNotNull,
+          reason: 'accept-time WhoIs did not attach identity',
+        );
+        expect(conn.identity!.hostName, peer.hostname);
+        expect(conn.identity!.nodeId, isNotEmpty);
+        expect(conn.identity!.tailscaleIPs, contains(peer.ipv4));
+      } finally {
+        await conn.close();
+      }
+    });
+
+    test('inbound HTTP request carries the caller node identity', () async {
+      final status = await tsnet.status();
+      final selfIp = status.ipv4;
+      expect(selfIp, isNotNull, reason: 'main node has no IPv4 yet');
+
+      // Make sure the peer is resolvable so the accept-time lookup isn't racing
+      // netmap propagation.
+      for (var i = 0; i < 30; i++) {
+        if (await tsnet.whois(peer.ipv4) != null) break;
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+
+      final server = await tsnet.http.bind(port: 8080);
+      addTearDown(server.close);
+      final requests = StreamIterator(server.requests);
+      addTearDown(requests.cancel);
+
+      // Ask the peer to GET our bound HTTP server so we accept an inbound
+      // request and can assert the identity attached to it.
+      await peer.sendCommand('HTTPGET $selfIp 8080 /whoami');
+
+      final didReceive = await requests.moveNext().timeout(
+        const Duration(seconds: 30),
+      );
+      expect(
+        didReceive,
+        isTrue,
+        reason: 'server never received the peer request',
+      );
+
+      final req = requests.current;
+      try {
+        expect(req.remote.address, peer.ipv4);
+        expect(
+          req.identity,
+          isNotNull,
+          reason: 'accept-time WhoIs did not attach identity to the request',
+        );
+        expect(req.identity!.hostName, peer.hostname);
+        expect(req.identity!.nodeId, isNotEmpty);
+        expect(req.identity!.tailscaleIPs, contains(peer.ipv4));
+      } finally {
+        await req.respond(body: 'ok');
+      }
+    });
+
+    test('whois latency — the per-accept identity cost', () async {
+      // Warm up so the netmap entry is hot, matching the steady state an
+      // accept sees.
+      for (var i = 0; i < 30; i++) {
+        if (await tsnet.whois(peer.ipv4) != null) break;
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+
+      const samples = 50;
+      final micros = <int>[];
+      for (var i = 0; i < samples; i++) {
+        final sw = Stopwatch()..start();
+        final identity = await tsnet.whois(peer.ipv4);
+        sw.stop();
+        expect(identity, isNotNull);
+        micros.add(sw.elapsedMicroseconds);
+      }
+      micros.sort();
+      int pct(int p) => micros[((micros.length - 1) * p) ~/ 100];
+      // ignore: avoid_print
+      print(
+        'whois latency over $samples samples (upper bound on per-accept cost, '
+        'since the accept path skips the FFI+isolate hop): '
+        'p50=${pct(50)}us p95=${pct(95)}us p99=${pct(99)}us '
+        'max=${micros.last}us',
+      );
+      // Loose sanity bound; the real number is in the printed line above.
+      expect(pct(50), lessThan(250000));
+    });
+
     test('udp.bind sends and receives datagrams end-to-end', () async {
       final binding = await tsnet.udp
           .bind(port: 0)

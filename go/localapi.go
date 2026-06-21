@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -70,35 +71,132 @@ func WhoIs(ip string) string {
 		return localAPIError(err)
 	}
 	// A successful response without a Node would be a LocalAPI
-	// contract violation, but guard anyway so we don't panic.
-	if resp == nil || resp.Node == nil {
+	// contract violation; nodeIdentityFromWhoIs returns nil in that case
+	// so we report not-found rather than panic.
+	identity := nodeIdentityFromWhoIs(resp)
+	if identity == nil {
 		b, _ := json.Marshal(map[string]any{"found": false})
 		return string(b)
 	}
 
-	ips := make([]string, 0, len(resp.Node.Addresses))
-	for _, p := range resp.Node.Addresses {
-		ips = append(ips, p.Addr().String())
-	}
-
-	tags := resp.Node.Tags
-	if tags == nil {
-		tags = []string{}
-	}
-
 	out := map[string]any{
 		"found":         true,
-		"nodeId":        string(resp.Node.StableID),
-		"hostName":      resp.Node.ComputedName,
-		"userLoginName": resp.UserProfile.LoginName,
-		"tags":          tags,
-		"tailscaleIPs":  ips,
+		"nodeId":        identity.NodeID,
+		"hostName":      identity.HostName,
+		"userLoginName": identity.UserLoginName,
+		"tags":          identity.Tags,
+		"tailscaleIPs":  identity.TailscaleIPs,
 	}
 	b, err := json.Marshal(out)
 	if err != nil {
 		return jsonError(err)
 	}
 	return string(b)
+}
+
+// nodeIdentity is the typed identity of a tailnet node, shared by the
+// LocalAPI WhoIs JSON wrapper and the accept-time identity attached to
+// inbound connections. JSON tags match the Dart TailscaleNodeIdentity
+// shape so the struct can be embedded directly into accept results.
+//
+// Treat instances as immutable once built: the identity cache aliases one
+// *nodeIdentity under every address of a node and hands it to concurrent
+// accept goroutines while the watcher builds the next index, so a caller that
+// mutated a returned value or its slices would introduce a data race.
+type nodeIdentity struct {
+	NodeID        string   `json:"nodeId"`
+	HostName      string   `json:"hostName"`
+	UserLoginName string   `json:"userLoginName"`
+	Tags          []string `json:"tags"`
+	TailscaleIPs  []string `json:"tailscaleIPs"`
+}
+
+// nodeIdentityFromWhoIs maps a LocalAPI WhoIs response into the typed
+// identity shape. Returns nil when the response carries no node (an
+// unknown IP or a contract-violating empty response), so callers can
+// treat nil uniformly as "no identity".
+func nodeIdentityFromWhoIs(resp *apitype.WhoIsResponse) *nodeIdentity {
+	if resp == nil || resp.Node == nil {
+		return nil
+	}
+	var loginName string
+	if resp.UserProfile != nil {
+		loginName = resp.UserProfile.LoginName
+	}
+	return nodeIdentityFromView(resp.Node.View(), loginName)
+}
+
+// nodeIdentityFromView builds the typed identity from a node view plus a
+// resolved login name. Shared by the LocalAPI WhoIs path and the netmap
+// identity cache so both map a node's fields the same way. The loginName is
+// resolved by each caller (WhoIs reads resp.UserProfile; the cache reads the
+// netmap's UserProfiles) — same underlying data, but it can differ for a
+// tagged node if one source lacks its synthetic profile. Tags and IPs are
+// always non-nil slices so they serialize as [] rather than null.
+func nodeIdentityFromView(n tailcfg.NodeView, loginName string) *nodeIdentity {
+	if !n.Valid() {
+		return nil
+	}
+	addrs := n.Addresses()
+	ips := make([]string, 0, addrs.Len())
+	for i := range addrs.Len() {
+		ips = append(ips, addrs.At(i).Addr().String())
+	}
+	tagsView := n.Tags()
+	tags := make([]string, 0, tagsView.Len())
+	for i := range tagsView.Len() {
+		tags = append(tags, tagsView.At(i))
+	}
+	return &nodeIdentity{
+		NodeID:        string(n.StableID()),
+		HostName:      n.ComputedName(),
+		UserLoginName: loginName,
+		Tags:          tags,
+		TailscaleIPs:  ips,
+	}
+}
+
+// identityLookupTimeout bounds the accept-time WhoIs call so a slow or
+// stuck LocalAPI never stalls an accept. Identity resolution is
+// best-effort: on timeout or any error the connection is delivered
+// without it.
+const identityLookupTimeout = 2 * time.Second
+
+// lookupNodeIdentity resolves the identity of a remote tailnet IP at accept
+// time. It reads the in-memory identity cache (mirrored from the netmap by the
+// state watcher) for a near-constant-time lookup off the accept hot path. When
+// the cache is cold — before the watcher has delivered the first netmap, or
+// after it was torn down — it falls back to an authoritative LocalAPI WhoIs so
+// early accepts still resolve. Best-effort and non-fatal: any failure returns
+// nil and the connection is delivered with IP-only metadata. Callers that
+// require a hard identity guarantee should still gate on the returned value.
+func lookupNodeIdentity(ip string) *nodeIdentity {
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return nil
+	}
+	if id, ok := identityCache.lookup(addr); ok {
+		return id
+	}
+	return lookupNodeIdentityViaLocalAPI(addr)
+}
+
+// lookupNodeIdentityViaLocalAPI is the cold-cache fallback: a live WhoIs over
+// the LocalAPI loopback. Takes an already-parsed addr (the caller validated it)
+// and is bounded by identityLookupTimeout so a stuck LocalAPI never stalls an
+// accept.
+func lookupNodeIdentityViaLocalAPI(addr netip.Addr) *nodeIdentity {
+	lc, err := lcOr("lookupNodeIdentity")
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), identityLookupTimeout)
+	defer cancel()
+	resp, err := lc.WhoIs(ctx, addr.String())
+	if err != nil {
+		return nil
+	}
+	return nodeIdentityFromWhoIs(resp)
 }
 
 // isNotFound is true when err wraps a LocalAPI 404. Covers both the

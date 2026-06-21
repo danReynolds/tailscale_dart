@@ -1,3 +1,32 @@
+## 0.5.0
+
+A feature and performance release. Inbound connections and HTTP requests now
+carry the calling node's Tailscale identity, resolved at accept time, and the
+LocalAPI loopback that backs `whois()` is dramatically faster.
+
+**Features:**
+
+- Inbound TCP/TLS connections accepted from a listener now expose the calling
+  node's identity as `TailscaleConnection.identity` (`TailscaleNodeIdentity?`) —
+  host name, stable node ID, tags, and tailnet IPs. It is `null` for outbound
+  `tcp.dial` (you chose the target) and when the caller can't be resolved;
+  resolution is best-effort and never blocks or fails an accept.
+- Inbound `Http.bind` requests expose the same via `TailscaleHttpRequest.identity`
+  — the in-process counterpart to the `Tailscale-User-Login` headers that
+  `serve.forward` adds. `null` for public Funnel callers, which originate
+  outside the tailnet.
+
+**Performance:**
+
+- `whois()` (and every other LocalAPI call) no longer forks `lsof` per request.
+  The loopback auth path was hunting a macOS GUI credential file that an
+  embedded tsnet process can never have; skipping it cuts a `whois()` round-trip
+  from ~40 ms to ~0.3 ms.
+- Attaching identity to an inbound connection is a ~80 ns read from an in-memory
+  index mirrored from the netmap, not a per-accept LocalAPI round-trip. The
+  index falls back to a live lookup while cold and is dropped on teardown, so
+  identity is never stale.
+
 ## 0.4.0
 
 A security and reliability release. It hardens the embedded-tsnet data plane,

@@ -14,6 +14,7 @@ import '../fd_transport.dart';
 import '../ffi_bindings.dart' as native;
 import '../http_fd_protocol.dart';
 import 'connection.dart';
+import 'identity.dart';
 
 const int _maxPendingHttpAccepts = 128;
 
@@ -48,6 +49,7 @@ TailscaleHttpRequest createHttpRequestForTesting({
     address: '100.64.0.1',
     port: 80,
   ),
+  TailscaleNodeIdentity? identity,
   required PosixFdTransport requestTransport,
   required PosixFdTransport responseTransport,
 }) => _TailscaleHttpRequest(
@@ -59,6 +61,7 @@ TailscaleHttpRequest createHttpRequestForTesting({
   contentLength: contentLength,
   remote: remote,
   local: local,
+  identity: identity,
   requestTransport: requestTransport,
   responseTransport: responseTransport,
 );
@@ -112,6 +115,19 @@ abstract interface class TailscaleHttpRequest {
   Map<String, List<String>> get headersAll;
   TailscaleEndpoint get local;
   TailscaleEndpoint get remote;
+
+  /// Identity of the calling tailnet node, resolved at accept time.
+  ///
+  /// Populated when [remote] maps to a known tailnet node — the same
+  /// accept-time resolution that backs [TailscaleConnection.identity]. Null
+  /// for public Funnel requests (which originate outside the tailnet), and
+  /// null when the lookup found nothing or failed — resolution is best-effort
+  /// and never blocks the request. For a hard identity check you can still
+  /// call `Tailscale.instance.whois(remote.address)`.
+  ///
+  /// This is the in-process counterpart to the `Tailscale-User-Login` headers
+  /// that `serve.forward` exposes; here you get the typed identity directly.
+  TailscaleNodeIdentity? get identity;
 
   /// Single-subscription request body stream.
   ///
@@ -295,7 +311,7 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
       unawaited(close());
       return;
     }
-    if (message is! List || message.length != 14 || message[0] != 'accepted') {
+    if (message is! List || message.length != 15 || message[0] != 'accepted') {
       return;
     }
 
@@ -318,6 +334,8 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
         address: message[11] as String,
         port: message[12] as int,
       ),
+      // message[13] is bindingId (echoed for diagnostics); identity is [14].
+      identity: message[14] as TailscaleNodeIdentity?,
     );
     if (_requests.isPaused || _pendingAccepts.isNotEmpty) {
       _enqueueAccepted(accept);
@@ -358,6 +376,7 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
           contentLength: accept.contentLength,
           remote: accept.remote,
           local: accept.local,
+          identity: accept.identity,
           requestTransport: requestTransport,
           responseTransport: responseTransport,
         );
@@ -400,6 +419,7 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
     required this.contentLength,
     required this.remote,
     required this.local,
+    required this.identity,
     required PosixFdTransport requestTransport,
     required PosixFdTransport responseTransport,
   }) : headersAll = Map.unmodifiable(headersAll),
@@ -471,6 +491,9 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
 
   @override
   final TailscaleEndpoint remote;
+
+  @override
+  final TailscaleNodeIdentity? identity;
 
   @override
   Stream<Uint8List> get body => _body.stream;
@@ -709,6 +732,7 @@ final class _PendingHttpAccept {
     required this.contentLength,
     required this.remote,
     required this.local,
+    required this.identity,
   });
 
   final int requestBodyFd;
@@ -721,6 +745,7 @@ final class _PendingHttpAccept {
   final int? contentLength;
   final TailscaleEndpoint remote;
   final TailscaleEndpoint local;
+  final TailscaleNodeIdentity? identity;
 
   void close() {
     closePosixFdForCleanup(requestBodyFd);
@@ -778,6 +803,14 @@ void _httpAcceptLoop(List<Object> args) {
       return;
     }
 
+    // Identity is attached by the backend at accept time when the caller's IP
+    // resolves to a known node; absent for Funnel/unknown callers. Decode it
+    // here so the immutable value crosses the isolate boundary already typed,
+    // mirroring the TCP accept loop.
+    final identityJson = result['identity'];
+    final identity = identityJson is Map<String, dynamic>
+        ? TailscaleNodeIdentity.fromJson(identityJson)
+        : null;
     sendPort.send(<Object?>[
       'accepted',
       requestBodyFd,
@@ -793,6 +826,7 @@ void _httpAcceptLoop(List<Object> args) {
       result['localAddress'] as String? ?? '',
       result['localPort'] as int? ?? 0,
       result['bindingId'] as int? ?? bindingId,
+      identity,
     ]);
   }
 }

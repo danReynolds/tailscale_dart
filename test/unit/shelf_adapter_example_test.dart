@@ -289,6 +289,9 @@ final class _FakeRequest implements TailscaleHttpRequest {
   );
 
   @override
+  final TailscaleNodeIdentity? identity = null;
+
+  @override
   final _FakeResponse response;
 
   @override

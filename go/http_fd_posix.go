@@ -52,6 +52,11 @@ type HttpIncomingRequest struct {
 	RemotePort     int
 	LocalAddress   string
 	LocalPort      int
+	// Identity is the resolved identity of the calling node, attached at
+	// accept time the same way inbound TCP/TLS connections carry it. Nil for
+	// public Funnel callers (no tailnet node) and when the accept-time lookup
+	// found nothing or failed.
+	Identity *nodeIdentity
 }
 
 type httpResponseHead struct {
@@ -398,6 +403,11 @@ func serveHTTPFdRequest(state *httpBindingState, w http.ResponseWriter, r *http.
 		RemotePort:     remotePort,
 		LocalAddress:   localAddress,
 		LocalPort:      localPort,
+		// Best-effort, like the TCP accept path: a nil result still delivers
+		// the request (IP-only). A map read against the netmap identity cache
+		// once warm; only the brief cold-cache window falls back to a live
+		// WhoIs (bounded by identityLookupTimeout).
+		Identity: lookupNodeIdentity(remoteAddress),
 	}
 
 	select {

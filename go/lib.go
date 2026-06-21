@@ -111,6 +111,13 @@ func stopLocked() {
 	closeAllHttpBindings()
 	closeAllFunnelForwarders()
 
+	// Stop the state watcher and drop cached identities together. StopWatch
+	// cancels the watcher's ctx and invalidates the cache under watchMu, and
+	// the watcher gates its cache mirror on that same ctx — so no in-flight
+	// netmap tick can re-warm a torn-down cache. Idempotent, so it's safe even
+	// when Dart already called StopWatch on its own teardown path.
+	StopWatch()
+
 	if srv != nil {
 		srv.Close()
 		srv = nil
@@ -206,6 +213,20 @@ func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err 
 
 	if startErr := newSrv.Start(); startErr != nil {
 		return fmt.Errorf("failed to start tsnet: %v", startErr)
+	}
+
+	// tsnet's LocalClient reaches the LocalAPI over an in-process memory pipe,
+	// yet local.Client still runs its per-request auth-token lookup on every
+	// call. On darwin that lookup forks `lsof` to find the macOS GUI app's
+	// "sameuserproof" credential file — which never exists in an embedded
+	// process — costing ~40ms per call and taxing every LocalAPI op
+	// (WhoIs/Status/Prefs/Ping) on the shared DoLocalRequest path. The
+	// in-process pipe is already a trust boundary we own, so opt out of the
+	// token dance once: each call drops from ~40ms to ~0.1ms. Done under mu
+	// before srv is published, so no in-flight call races the write. See
+	// loopback_latency_diag_test.go for the bisection.
+	if lc, lcErr := newSrv.LocalClient(); lcErr == nil {
+		lc.OmitAuth = true
 	}
 
 	// Commit to package state only after every allocation succeeded.

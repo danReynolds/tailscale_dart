@@ -654,19 +654,7 @@ TailscalePrefs _parsePrefs(Map<String, dynamic> json) {
 
 TailscaleNodeIdentity? _parseWhoIsResponse(Map<String, dynamic> json) {
   if (json['found'] != true) return null;
-  return TailscaleNodeIdentity(
-    nodeId: json['nodeId'] as String? ?? '',
-    hostName: json['hostName'] as String? ?? '',
-    userLoginName: json['userLoginName'] as String? ?? '',
-    tags:
-        (json['tags'] as List?)?.whereType<String>().toList(growable: false) ??
-        const [],
-    tailscaleIPs:
-        (json['tailscaleIPs'] as List?)?.whereType<String>().toList(
-          growable: false,
-        ) ??
-        const [],
-  );
+  return TailscaleNodeIdentity.fromJson(json);
 }
 
 PingResult _parsePingResult(Map<String, dynamic> json) {

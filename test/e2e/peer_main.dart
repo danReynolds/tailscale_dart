@@ -110,8 +110,54 @@ Future<void> main(List<String> args) async {
   stdout.write('\nREADY $ipv4\n');
   await stdout.flush();
 
-  // Shut down when the parent closes stdin.
-  await stdin.drain<void>();
+  // Process newline commands from the parent until stdin closes. Commands:
+  //   DIAL <host> <port>          — open an outbound TCP connection to the
+  //                                 parent's listener, so the parent can assert
+  //                                 the identity attached to the accepted conn.
+  //   HTTPGET <host> <port> <path> — issue an inbound HTTP GET to the parent's
+  //                                 http.bind server, so the parent can assert
+  //                                 the identity attached to the request.
+  // Closing stdin ends the loop and triggers shutdown.
+  final commands = stdin
+      .transform(utf8.decoder)
+      .transform(const LineSplitter());
+  await for (final line in commands) {
+    final parts = line.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty) continue;
+    switch (parts[0]) {
+      case 'DIAL' when parts.length == 3:
+        final host = parts[1];
+        final port = int.tryParse(parts[2]);
+        if (port == null) continue;
+        try {
+          final conn = await tsnet.tcp.dial(
+            host,
+            port,
+            timeout: const Duration(seconds: 15),
+          );
+          await conn.output.write(utf8.encode('hello-from-peer'));
+          await conn.output.close();
+          // Give the parent time to accept and read before tearing down.
+          await conn.done.timeout(const Duration(seconds: 5), onTimeout: () {});
+          await conn.close();
+        } catch (e) {
+          stderr.writeln('peer: DIAL $host:$port failed: $e');
+        }
+      case 'HTTPGET' when parts.length == 4:
+        final host = parts[1];
+        final port = int.tryParse(parts[2]);
+        final path = parts[3];
+        if (port == null) continue;
+        try {
+          final resp = await tsnet.http.client
+              .get(Uri.parse('http://$host:$port$path'))
+              .timeout(const Duration(seconds: 15));
+          stderr.writeln('peer: HTTPGET $host:$port$path -> ${resp.statusCode}');
+        } catch (e) {
+          stderr.writeln('peer: HTTPGET $host:$port$path failed: $e');
+        }
+    }
+  }
 
   try {
     await udpEcho.close();

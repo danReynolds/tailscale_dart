@@ -55,11 +55,13 @@ abstract interface class TailscaleConnection {
   /// Remote tailnet endpoint for this connection.
   TailscaleEndpoint get remote;
 
-  /// Remote node identity, when the backend attached one.
+  /// Remote node identity, resolved at accept time via a WhoIs lookup.
   ///
-  /// POSIX fd-backed TCP does not currently attach this for accepted
-  /// connections. Use `Tailscale.instance.whois(remote.address)` when an
-  /// authorization decision requires identity.
+  /// Populated for connections accepted by a [TailscaleListener] when the
+  /// remote IP maps to a known tailnet node. Null for outbound dials, and
+  /// null when the accept-time lookup found nothing or failed — resolution
+  /// is best-effort and never blocks an accept. For a hard identity check
+  /// you can still call `Tailscale.instance.whois(remote.address)`.
   TailscaleNodeIdentity? get identity;
 
   /// Single-subscription byte stream received from the remote node.
@@ -448,6 +450,13 @@ void _tcpAcceptLoop(List<Object> args) {
         sendPort.send(<Object>['fatal', 'native accept returned invalid fd']);
         return;
       }
+      // Identity is attached by the backend at accept time when the remote
+      // IP resolves to a known node; absent otherwise. Decode it here so the
+      // immutable value crosses the isolate boundary already typed.
+      final identityJson = result['identity'];
+      final identity = identityJson is Map<String, dynamic>
+          ? TailscaleNodeIdentity.fromJson(identityJson)
+          : null;
       sendPort.send(<Object?>[
         'accepted',
         fd,
@@ -455,7 +464,7 @@ void _tcpAcceptLoop(List<Object> args) {
         result['localPort'] as int? ?? 0,
         result['remoteAddress'] as String? ?? '',
         result['remotePort'] as int? ?? 0,
-        null,
+        identity,
       ]);
     }
   } catch (error) {

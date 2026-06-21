@@ -9,10 +9,85 @@ import (
 	"strings"
 	"testing"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 )
+
+func TestNodeIdentityFromWhoIsMapsFields(t *testing.T) {
+	resp := &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{
+			StableID:     tailcfg.StableNodeID("nABC123"),
+			ComputedName: "peer-1",
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix("100.64.0.2/32"),
+				netip.MustParsePrefix("fd7a:115c:a1e0::2/128"),
+			},
+			Tags: []string{"tag:server", "tag:prod"},
+		},
+		UserProfile: &tailcfg.UserProfile{LoginName: "alice@example.com"},
+	}
+
+	id := nodeIdentityFromWhoIs(resp)
+	if id == nil {
+		t.Fatal("nodeIdentityFromWhoIs returned nil for a populated response")
+	}
+	if id.NodeID != "nABC123" {
+		t.Errorf("NodeID = %q, want nABC123", id.NodeID)
+	}
+	if id.HostName != "peer-1" {
+		t.Errorf("HostName = %q, want peer-1", id.HostName)
+	}
+	if id.UserLoginName != "alice@example.com" {
+		t.Errorf("UserLoginName = %q, want alice@example.com", id.UserLoginName)
+	}
+	if got, want := strings.Join(id.Tags, ","), "tag:server,tag:prod"; got != want {
+		t.Errorf("Tags = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(id.TailscaleIPs, ","), "100.64.0.2,fd7a:115c:a1e0::2"; got != want {
+		t.Errorf("TailscaleIPs = %q, want %q", got, want)
+	}
+}
+
+func TestNodeIdentityFromWhoIsNilWhenNoNode(t *testing.T) {
+	if got := nodeIdentityFromWhoIs(nil); got != nil {
+		t.Errorf("nodeIdentityFromWhoIs(nil) = %+v, want nil", got)
+	}
+	if got := nodeIdentityFromWhoIs(&apitype.WhoIsResponse{}); got != nil {
+		t.Errorf("nodeIdentityFromWhoIs(no node) = %+v, want nil", got)
+	}
+}
+
+// Tags/TailscaleIPs must serialize as [] rather than null so the Dart
+// TailscaleNodeIdentity always sees a list. A tagged node also has no
+// user, and a missing UserProfile must not panic.
+func TestNodeIdentityFromWhoIsEmptySlicesAndNilUser(t *testing.T) {
+	resp := &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{StableID: tailcfg.StableNodeID("n1")},
+	}
+	id := nodeIdentityFromWhoIs(resp)
+	if id == nil {
+		t.Fatal("unexpected nil")
+	}
+	if id.UserLoginName != "" {
+		t.Errorf("UserLoginName = %q, want empty", id.UserLoginName)
+	}
+	if id.Tags == nil {
+		t.Error("Tags is nil; want non-nil empty slice")
+	}
+	if id.TailscaleIPs == nil {
+		t.Error("TailscaleIPs is nil; want non-nil empty slice")
+	}
+	b, err := json.Marshal(id)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"tags":[]`) {
+		t.Errorf("marshaled identity = %s, want tags:[]", b)
+	}
+}
 
 func TestPeerStatusAddrMatchesHostAndDNSName(t *testing.T) {
 	peer := &ipnstate.PeerStatus{

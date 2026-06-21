@@ -67,6 +67,15 @@ final class PeerProcess {
     return PeerProcess._(process, ipv4, hostname);
   }
 
+  /// Sends a newline-terminated command to the peer over stdin.
+  ///
+  /// The peer understands `DIAL <host> <port>`, which makes it open an
+  /// outbound TCP connection to the given tailnet endpoint.
+  Future<void> sendCommand(String command) async {
+    _process.stdin.writeln(command);
+    await _process.stdin.flush();
+  }
+
   /// Gracefully shut the peer down by closing its stdin; falls back to SIGTERM
   /// if it doesn't exit within 15 seconds.
   Future<void> shutdown() async {

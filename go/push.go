@@ -125,6 +125,19 @@ func StartWatch() {
 				})
 			}
 			if n.NetMap != nil {
+				// Mirror the netmap into the accept-path identity cache before
+				// the debounced peer publish: identity must be fresh the moment
+				// a connection is accepted, whereas the Dart peer snapshot can
+				// coalesce. Build outside watchMu, then apply only while this
+				// watcher's ctx is live. StopWatch cancels ctx and invalidates
+				// under watchMu, so gating the swap the same way stops an
+				// in-flight tick from re-warming a torn-down cache.
+				idx := buildIdentityIndex(n.NetMap)
+				watchMu.Lock()
+				if ctx.Err() == nil {
+					identityCache.replace(idx)
+				}
+				watchMu.Unlock()
 				schedulePeerPublish(ctx, lc)
 			}
 		}
@@ -188,6 +201,9 @@ func StopWatch() {
 		publishTimer.Stop()
 		publishTimer = nil
 	}
+	// Once we stop receiving netmap ticks the cache can drift from the live
+	// netmap; mark it cold so accept-time lookups fall back to a live WhoIs.
+	identityCache.invalidate()
 }
 
 // publishState posts a synthetic state-change event to Dart subscribers.

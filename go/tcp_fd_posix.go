@@ -22,6 +22,10 @@ type TcpFdConn struct {
 	LocalPort     int
 	RemoteAddress string
 	RemotePort    int
+	// Identity is the resolved identity of the remote node, attached at
+	// accept time for inbound connections. Nil for outbound dials and
+	// when the accept-time WhoIs lookup found nothing or failed.
+	Identity *nodeIdentity
 }
 
 type TcpFdListener struct {
@@ -181,6 +185,10 @@ func TcpAcceptFd(listenerID int64) (*TcpFdConn, bool, error) {
 	configureTCP(tailConn)
 	localAddress, localPort := endpointFromAddr(tailConn.LocalAddr())
 	remoteAddress, remotePort := endpointFromAddr(tailConn.RemoteAddr())
+	// Resolve the remote node's identity before handing the connection to
+	// Dart so authorization decisions don't need a second async round-trip.
+	// Best-effort: a nil result still delivers the connection (IP-only).
+	identity := lookupNodeIdentity(remoteAddress)
 	go pipe(goConn, tailConn)
 	return &TcpFdConn{
 		FD:            dartFd,
@@ -188,6 +196,7 @@ func TcpAcceptFd(listenerID int64) (*TcpFdConn, bool, error) {
 		LocalPort:     localPort,
 		RemoteAddress: remoteAddress,
 		RemotePort:    remotePort,
+		Identity:      identity,
 	}, false, nil
 }
 

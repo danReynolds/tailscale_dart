@@ -6,7 +6,7 @@ require (
 	golang.org/x/mobile v0.0.0-20251209145715-2553ed8ce294
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.46.0
-	modernc.org/sqlite v1.52.0
+	modernc.org/sqlite v1.53.0
 	tailscale.com v1.100.0
 )
 
@@ -59,7 +59,7 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8 // indirect
-	modernc.org/libc v1.72.3 // indirect
+	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )

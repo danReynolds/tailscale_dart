@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
@@ -73,6 +74,44 @@ func TestLogout_RemovesDir(t *testing.T) {
 
 	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
 		t.Errorf("Logout should remove the state directory, but it still exists")
+	}
+}
+
+func TestLogout_NoCachedControlURLWipesWithoutHang(t *testing.T) {
+	// Persisted machine key but no cached control URL (e.g. Logout without a
+	// prior Start this process). Logout must still wipe, and must NOT attempt a
+	// transient revoke that could block on an unreachable control plane.
+	mu.Lock()
+	srv = nil
+	lastControlURL = ""
+	mu.Unlock()
+
+	dir := t.TempDir()
+	store, err := NewSQLiteStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteState(ipn.MachineKeyStateKey, []byte("fake-machine-key")); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	if !HasState(dir) {
+		t.Fatal("precondition: state should exist")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- Logout(dir) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Logout returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Logout hung — without a cached control URL it must skip the transient revoke")
+	}
+
+	if HasState(dir) {
+		t.Error("Logout must wipe state even when it cannot revoke")
 	}
 }
 

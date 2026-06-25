@@ -22,10 +22,17 @@ import (
 var LogLevel int32 // default 0 (silent)
 
 var (
-	mu sync.Mutex // protects srv and store
+	mu sync.Mutex // protects srv, store, and the cached start config below
 
 	srv   *tsnet.Server
 	store *SQLiteStore // package-owned; tsnet.Server doesn't close its Store, so we do in stopLocked
+
+	// lastHostname and lastControlURL remember the most recent successful Start
+	// so Logout can re-establish a transient client to revoke the node key even
+	// when the caller already stopped the server. An empty lastControlURL just
+	// means we fall back to a local-only wipe.
+	lastHostname   string
+	lastControlURL string
 )
 
 // HasState checks if the state directory contains a valid machine key.
@@ -61,9 +68,17 @@ func Logout(stateDir string) error {
 
 	mu.Lock()
 	s := srv
+	host := lastHostname
+	ctrlURL := lastControlURL
 	mu.Unlock()
 	if s != nil {
 		revokeNodeKey(s)
+	} else if ctrlURL != "" && HasState(stateDir) {
+		// The caller stopped the server before logging out, so there's no live
+		// client to revoke through. Briefly bring the persisted node back up to
+		// expire its key at the control plane — a logout must clear the node
+		// from the tailnet, not just wipe the local credential.
+		revokeStoppedNode(host, ctrlURL, stateDir)
 	}
 
 	Stop()
@@ -232,6 +247,8 @@ func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err 
 	// Commit to package state only after every allocation succeeded.
 	srv = newSrv
 	store = newStore
+	lastHostname = hostname
+	lastControlURL = controlURL
 	return nil
 }
 
@@ -303,6 +320,45 @@ func revokeNodeKey(s *tsnet.Server) {
 	if err := lc.Logout(ctx); err != nil {
 		logInfo("logout: control-plane revoke failed (continuing with local wipe): %v", err)
 	}
+}
+
+// revokeStoppedNode best-effort revokes the node key when Logout is called with
+// no running server. It briefly brings the persisted node back up from local
+// state (reusing the existing node key, no auth key) so the LocalAPI logout can
+// reach the control plane, then tears the transient server down. Failures are
+// logged and swallowed; the caller wipes local state regardless.
+func revokeStoppedNode(hostname, controlURL, stateDir string) {
+	st, err := NewSQLiteStore(stateDir + "/state.db")
+	if err != nil {
+		logInfo("logout: cannot open persisted state to revoke stopped node: %v", err)
+		return
+	}
+	s := &tsnet.Server{
+		Hostname:   hostname,
+		ControlURL: controlURL,
+		Dir:        stateDir,
+		Store:      st,
+		Logf: func(format string, args ...any) {
+			if atomic.LoadInt32(&LogLevel) >= 2 {
+				log.Printf("TSNET: "+format, args...)
+			}
+		},
+	}
+	defer func() {
+		s.Close()
+		st.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// Up reconnects using the persisted node key (no auth key needed) so the
+	// control plane can act on the logout; bounded by ctx so an unreachable
+	// control server can't hang teardown.
+	if _, err := s.Up(ctx); err != nil {
+		logInfo("logout: transient bring-up to revoke stopped node failed: %v", err)
+		return
+	}
+	revokeNodeKey(s)
 }
 
 func jsonError(err error) string {

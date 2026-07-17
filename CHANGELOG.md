@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.1
 
 A correctness and reliability release addressing a performance/correctness
 audit.

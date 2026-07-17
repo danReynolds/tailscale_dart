@@ -289,7 +289,10 @@ void main() {
         // entire burst of flows to one shard. Round-robin assignment must
         // spread them. Only meaningful when more than one shard exists.
         final load0 = await debugPosixFdReactorShardLoad();
-        final shardCount = math.max(1, math.min(Platform.numberOfProcessors, 2));
+        final shardCount = math.max(
+          1,
+          math.min(Platform.numberOfProcessors, 2),
+        );
 
         final pairs = <({PosixFdTransport left, PosixFdTransport right})>[];
         for (var i = 0; i < 8; i++) {
@@ -311,8 +314,11 @@ void main() {
           // No shard should hold everything — round-robin keeps it balanced.
           final total = load.values.fold<int>(0, (a, b) => a + b);
           for (final count in load.values) {
-            expect(count, lessThan(total),
-                reason: 'one shard holds all transports: $load');
+            expect(
+              count,
+              lessThan(total),
+              reason: 'one shard holds all transports: $load',
+            );
           }
         }
       });
@@ -324,25 +330,22 @@ void main() {
         // error must not escape as an uncaught async error — which would
         // terminate a root-zone `dart run` process.
         final captured = <Object>[];
-        await runZonedGuarded(
-          () async {
-            final (:leftFd, :rightFd) = socketPair(sockStream);
-            final transport = await PosixFdTransport.adopt(leftFd);
-            // Close the peer so the reactor's write(2) fails with EPIPE.
-            TestPosixBindings.instance.close(rightFd);
-            for (var i = 0; i < 3; i++) {
-              try {
-                await transport.write(Uint8List(64 * 1024));
-              } catch (_) {
-                // Caller handles the write error; it never touches `done`.
-              }
+        await runZonedGuarded(() async {
+          final (:leftFd, :rightFd) = socketPair(sockStream);
+          final transport = await PosixFdTransport.adopt(leftFd);
+          // Close the peer so the reactor's write(2) fails with EPIPE.
+          TestPosixBindings.instance.close(rightFd);
+          for (var i = 0; i < 3; i++) {
+            try {
+              await transport.write(Uint8List(64 * 1024));
+            } catch (_) {
+              // Caller handles the write error; it never touches `done`.
             }
-            // Let `done`'s (unobserved) error settle.
-            await Future<void>.delayed(const Duration(milliseconds: 100));
-            await transport.close();
-          },
-          (error, stack) => captured.add(error),
-        );
+          }
+          // Let `done`'s (unobserved) error settle.
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          await transport.close();
+        }, (error, stack) => captured.add(error));
         expect(
           captured,
           isEmpty,
@@ -370,11 +373,15 @@ void main() {
           TestPosixBindings.instance.close(rightFd);
         });
 
-        final first = Uint8List(datagramBytes)..fillRange(0, datagramBytes, 0xAA);
+        final first = Uint8List(datagramBytes)
+          ..fillRange(0, datagramBytes, 0xAA);
         final second = Uint8List(datagramBytes)
           ..fillRange(0, datagramBytes, 0xBB);
         expect(TestPosixBindings.instance.write(rightFd, first), datagramBytes);
-        expect(TestPosixBindings.instance.write(rightFd, second), datagramBytes);
+        expect(
+          TestPosixBindings.instance.write(rightFd, second),
+          datagramBytes,
+        );
 
         final chunks = await receiver.input
             .take(2)
@@ -386,10 +393,16 @@ void main() {
         expect(chunks, hasLength(2));
         expect(chunks[0], hasLength(datagramBytes));
         expect(chunks[1], hasLength(datagramBytes));
-        expect(chunks[0].every((b) => b == 0xAA), isTrue,
-            reason: 'first datagram corrupted');
-        expect(chunks[1].every((b) => b == 0xBB), isTrue,
-            reason: 'second datagram truncated or corrupted');
+        expect(
+          chunks[0].every((b) => b == 0xAA),
+          isTrue,
+          reason: 'first datagram corrupted',
+        );
+        expect(
+          chunks[1].every((b) => b == 0xBB),
+          isTrue,
+          reason: 'second datagram truncated or corrupted',
+        );
       });
     },
   );

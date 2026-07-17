@@ -562,10 +562,7 @@ void _readReactorState(
     // datagram, which the next iteration's guard absorbs.
     final readLimit = state.datagram
         ? state.maxReadChunkSize
-        : math.min(
-            state.maxReadChunkSize,
-            math.min(availableInbound, budget),
-          );
+        : math.min(state.maxReadChunkSize, math.min(availableInbound, budget));
 
     metrics.readSyscalls++;
     final n = backend.read(state.fd, state.scratch.read, readLimit);

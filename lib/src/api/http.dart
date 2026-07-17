@@ -881,7 +881,10 @@ void _httpAcceptLoop(List<Object> args) {
     // A malformed native result or any other unexpected throw would otherwise
     // kill this isolate silently and hang the parent's request stream. Surface
     // it as a terminal 'fatal' so the parent errors out and closes.
-    sendPort.send(<Object>['fatal', 'tailnet HTTP accept loop crashed: $error']);
+    sendPort.send(<Object>[
+      'fatal',
+      'tailnet HTTP accept loop crashed: $error',
+    ]);
   }
 }
 

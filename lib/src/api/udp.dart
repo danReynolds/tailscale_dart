@@ -23,7 +23,9 @@ const int tailscaleMaxDatagramPayloadBytes = 60 * 1024;
 /// would truncate the datagram (which the length-free envelope cannot detect).
 /// Must mirror `udpMaxEnvelopeBytes` in go/udp_fd_posix.go.
 const int _udpMaxEnvelopeBytes =
-    _udpEnvelopeHeaderBytes + _udpMaxAddressBytes + tailscaleMaxDatagramPayloadBytes;
+    _udpEnvelopeHeaderBytes +
+    _udpMaxAddressBytes +
+    tailscaleMaxDatagramPayloadBytes;
 
 typedef UdpBindFn =
     Future<({int fd, TailscaleEndpoint local})> Function(String host, int port);

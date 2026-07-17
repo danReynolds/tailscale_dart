@@ -125,8 +125,11 @@ void main() {
 
         await binding.close();
 
-        expect(closedFds, <int>[leftFd],
-            reason: 'Go-side close must run once, keyed by the binding fd');
+        expect(
+          closedFds,
+          <int>[leftFd],
+          reason: 'Go-side close must run once, keyed by the binding fd',
+        );
 
         // Idempotent: a second close does not re-signal Go.
         await binding.close();

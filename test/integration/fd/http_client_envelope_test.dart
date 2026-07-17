@@ -46,6 +46,49 @@ void main() {
     );
   });
 
+  test('lowercases canonical-case response headers so package:http and '
+      'UTF-8 decoding work', () async {
+    final (:leftFd, :rightFd) = socketPair(sockStream);
+    final transport = await PosixFdTransport.adopt(leftFd);
+    addTearDown(transport.close);
+
+    final requestBodyDone = Completer<void>();
+    final request = http.Request('GET', Uri.parse('http://100.64.0.2/json'));
+    final responseFuture = parseHttpFdResponseForTesting(
+      responseTransport: transport,
+      request: request,
+      requestBodyDone: requestBodyDone.future,
+    );
+
+    // Go forwards resp.Header verbatim: canonical-cased keys.
+    final head = _responseHead(<String, Object?>{
+      'statusCode': 200,
+      'headers': <String, List<String>>{
+        'Content-Type': <String>['application/json; charset=utf-8'],
+      },
+    });
+    final body = utf8.encode('{"name":"Zoë"}');
+    expect(
+      TestPosixBindings.instance.write(
+        rightFd,
+        Uint8List.fromList(<int>[...head, ...body]),
+      ),
+      isPositive,
+    );
+    TestPosixBindings.instance.close(rightFd);
+    requestBodyDone.complete();
+
+    final streamed = await responseFuture.timeout(const Duration(seconds: 5));
+    // Keys are lowercased for package:http's case-sensitive lookups.
+    expect(streamed.headers['content-type'], 'application/json; charset=utf-8');
+    // http.Response uses headers['content-type'] to pick the charset; the
+    // lowercase key makes it decode UTF-8 rather than defaulting to latin1.
+    final response = await http.Response.fromStream(
+      streamed,
+    ).timeout(const Duration(seconds: 5));
+    expect(response.body, '{"name":"Zoë"}');
+  });
+
   test('fails if response fd closes before a response head', () async {
     final (:leftFd, :rightFd) = socketPair(sockStream);
     final transport = await PosixFdTransport.adopt(leftFd);

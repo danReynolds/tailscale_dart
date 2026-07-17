@@ -13,6 +13,16 @@ audit.
   close works.
 - A remote peer resetting a TCP/HTTP connection can no longer crash a
   root-zone Dart process via an unobserved transport error.
+- `http.client` responses now expose lowercase header names, so `response.body`
+  decodes UTF-8 (and other charsets) correctly instead of defaulting to latin1,
+  and case-insensitive header lookups work.
+- Inbound `http.bind` streaming responses (SSE, long-poll) now flush each chunk
+  to the wire instead of stalling in the server's buffer until it fills.
+- `TailscaleHttpRequest.respond()` now closes the request/response transports
+  even if writing the body fails, instead of leaking the fds and Go handler
+  goroutine.
+- Unawaited sequential `TailscaleHttpResponse.write()` calls now reach the wire
+  in call order rather than racing and reordering the body.
 - `funnel.forward` can no longer wedge the whole native API surface (including
   `stop()`) when the node changes state mid-call.
 - The inbound-connection/request identity is dropped if the state watcher dies,

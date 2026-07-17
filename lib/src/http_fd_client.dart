@@ -314,7 +314,13 @@ Map<String, String> _parseHeaders(Object? raw) {
   return {
     for (final entry in raw.entries)
       if (entry.key is String)
-        entry.key as String: switch (entry.value) {
+        // Lowercase the key: the Go side forwards `resp.Header` verbatim, whose
+        // keys are canonical-cased ("Content-Type"), but `package:http` looks
+        // headers up by their lowercase name (e.g. `Response.body` reads
+        // `headers['content-type']` to pick the charset). Without this a
+        // UTF-8 `application/json; charset=utf-8` body decodes as latin1, and
+        // any lowercase header lookup silently misses.
+        (entry.key as String).toLowerCase(): switch (entry.value) {
           final List<dynamic> values => values.join(', '),
           final String value => value,
           final Object value => value.toString(),

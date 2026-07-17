@@ -13,11 +13,11 @@ final class _SharedFdReactorProxy {
   }) : _commands = commands,
        _handle = handle;
 
-  /// Returns the proxy for the shard owning [fd], spawning a new reactor
-  /// isolate if none is alive. A second call before the spawn completes
+  /// Returns a proxy for the shard this transport is assigned, spawning a new
+  /// reactor isolate if none is alive. A second call before the spawn completes
   /// returns the in-flight Future rather than racing two spawns.
   static Future<_SharedFdReactorProxy> forTransport(int fd) {
-    final shard = _shardForFd(fd);
+    final shard = _assignShard();
     final active = _activeProxies[shard];
     if (active != null && !active._closed) {
       return Future<_SharedFdReactorProxy>.value(active);
@@ -38,6 +38,7 @@ final class _SharedFdReactorProxy {
   static final _instances = <int, Future<_SharedFdReactorProxy>>{};
   static final _activeProxies = <int, _SharedFdReactorProxy>{};
   static int _nextTransportId = 0;
+  static int _nextShard = 0;
 
   static List<_SharedFdReactorProxy> get activeProxies =>
       <_SharedFdReactorProxy>[
@@ -45,7 +46,20 @@ final class _SharedFdReactorProxy {
           if (!proxy._closed) proxy,
       ];
 
-  static int _shardForFd(int fd) => fd % _reactorShardCount;
+  /// Round-robin shard assignment. Keying on the fd (`fd % count`) pins every
+  /// flow in a burst to one shard: a run of `socketpair(2)` calls hands the
+  /// Dart side fds of constant parity (always `fds[0]`, spaced two apart), so
+  /// the low bit — the only thing a 2-shard modulo looks at — never varies, and
+  /// the second shard sits idle exactly when concurrency is highest. A
+  /// monotonic counter distributes adoptions evenly regardless of fd allocation
+  /// order. Assignment is one-shot per transport (the proxy is captured at
+  /// adoption; there is no later fd->shard lookup), so it needs no fd->shard
+  /// table, and a register retry simply lands on the next shard.
+  static int _assignShard() {
+    final shard = _nextShard % _reactorShardCount;
+    _nextShard++;
+    return shard;
+  }
 
   final int shard;
   final SendPort _commands;
@@ -98,6 +112,7 @@ final class _SharedFdReactorProxy {
     required int fd,
     required int maxReadChunkSize,
     required int maxInboundQueuedBytes,
+    required bool datagram,
     required SendPort eventPort,
   }) async {
     final id = ++_nextTransportId;
@@ -108,6 +123,7 @@ final class _SharedFdReactorProxy {
         fd,
         maxReadChunkSize,
         maxInboundQueuedBytes,
+        datagram,
         eventPort,
         replyPort,
       ],
@@ -402,17 +418,22 @@ int _remainingIdleMillis(Duration elapsed) {
 }
 
 /// Drains the queued commands posted by the proxy, mutating `states` and
-/// `metrics` in place. Returns true if at least one `register` was processed
-/// during this drain — the main loop uses this signal to decide whether the
-/// shard has crossed from "bootstrap empty" to "has serviced traffic," which
-/// is what arms the idle-exit path.
+/// `metrics` in place. Returns true if at least one `register` command was
+/// *attempted* during this drain (whether or not it succeeded) — the main loop
+/// uses this signal to decide whether the shard has crossed from "bootstrap
+/// empty" to "has seen a registration," which is what arms the idle-exit path.
+///
+/// It must fire on failed registrations too: a shard whose only registration
+/// fails natively has no live transports and no reason to stay resident, so if
+/// this only reported successes that shard would never arm idle-exit and would
+/// block forever in the poller, keeping the isolate (and the process) alive.
 bool _processReactorCommands(
   _ReactorBackend backend,
   Map<int, _ReactorTransportState> states,
   _ReactorMetrics metrics,
   Queue<Object?> pendingCommands,
 ) {
-  var registeredTransport = false;
+  var sawRegister = false;
   while (pendingCommands.isNotEmpty) {
     final message = pendingCommands.removeFirst();
     if (message is! List || message.isEmpty) continue;
@@ -422,13 +443,19 @@ bool _processReactorCommands(
       case _Cmd.snapshot when message.length == 2 && message[1] is SendPort:
         (message[1] as SendPort).send(_reactorSnapshot(states, metrics));
         continue;
-      case _Cmd.register when message.length == 7:
+      case _Cmd.register when message.length == 8:
         final id = message[1] as int;
         final fd = message[2] as int;
         final maxReadChunkSize = message[3] as int;
         final maxInboundQueuedBytes = message[4] as int;
-        final eventPort = message[5] as SendPort;
-        final replyPort = message[6] as SendPort;
+        final datagram = message[5] as bool;
+        final eventPort = message[6] as SendPort;
+        final replyPort = message[7] as SendPort;
+        // Arm idle-exit on the attempt, before the checks below: even a
+        // rejected registration must let this shard idle-exit, or a shard whose
+        // first (and only) registration fails would block in the poller
+        // forever. Does not imply ownership — see the ownership rule below.
+        sawRegister = true;
         // Ownership rule: the reactor owns an fd if and only if it is in
         // `states` (registration succeeded). On a registration failure the fd
         // is NOT ours to close — the main isolate (`_registerWithReactor`'s
@@ -450,9 +477,9 @@ bool _processReactorCommands(
           fd: fd,
           maxReadChunkSize: maxReadChunkSize,
           maxInboundQueuedBytes: maxInboundQueuedBytes,
+          datagram: datagram,
           eventPort: eventPort,
         );
-        registeredTransport = true;
         replyPort.send('ok');
         continue;
     }
@@ -497,7 +524,7 @@ bool _processReactorCommands(
         continue;
     }
   }
-  return registeredTransport;
+  return sawRegister;
 }
 
 /// Drains readable bytes from `state.fd` until the per-iteration byte budget
@@ -524,10 +551,18 @@ void _readReactorState(
       _updateReactorInterest(backend, states, metrics, state);
       return;
     }
-    final readLimit = math.min(
-      state.maxReadChunkSize,
-      math.min(availableInbound, budget),
-    );
+    // Datagram fds must read a full buffer: a short read(2) on a datagram
+    // socket discards the datagram's tail, and the envelope carries no length
+    // field to detect it. The queue-credit and per-iteration budget clamps that
+    // are safe for a byte stream would silently corrupt a datagram, so in
+    // datagram mode they only gate *whether* to read (the `availableInbound` and
+    // `budget` loop guards), never *how much*. `maxReadChunkSize` is sized at or
+    // above the largest datagram by the adopting layer, so a full-buffer read
+    // never truncates; at worst the inbound queue overshoots its cap by one
+    // datagram, which the next iteration's guard absorbs.
+    final readLimit = state.datagram
+        ? state.maxReadChunkSize
+        : math.min(state.maxReadChunkSize, math.min(availableInbound, budget));
 
     metrics.readSyscalls++;
     final n = backend.read(state.fd, state.scratch.read, readLimit);
@@ -793,6 +828,7 @@ final class _ReactorTransportState {
     required this.fd,
     required this.maxReadChunkSize,
     required this.maxInboundQueuedBytes,
+    required this.datagram,
     required this.eventPort,
   }) : scratch = _ScratchBuffers(
          readBytes: maxReadChunkSize,
@@ -803,6 +839,11 @@ final class _ReactorTransportState {
   final int fd;
   final int maxReadChunkSize;
   final int maxInboundQueuedBytes;
+
+  /// True for a `SOCK_DGRAM` fd: reads preserve message boundaries, so the read
+  /// length is never clamped below [maxReadChunkSize] (a short datagram read
+  /// discards the tail).
+  final bool datagram;
   final SendPort eventPort;
   final _ScratchBuffers scratch;
   final writes = Queue<_ReactorWrite>();
@@ -1080,6 +1121,7 @@ final class ReactorTestHarness {
     required SendPort replyPort,
     int maxReadChunkSize = 64 * 1024,
     int maxInboundQueuedBytes = 1024 * 1024,
+    bool datagram = false,
   }) {
     _commands.add(<Object>[
       _Cmd.register,
@@ -1087,6 +1129,7 @@ final class ReactorTestHarness {
       fd,
       maxReadChunkSize,
       maxInboundQueuedBytes,
+      datagram,
       eventPort,
       replyPort,
     ]);
@@ -1095,8 +1138,11 @@ final class ReactorTestHarness {
   /// Queues a close command for transport [id].
   void enqueueClose(int id) => _commands.add(<Object>[_Cmd.close, id]);
 
-  /// Drains all queued commands through the reactor's processor.
-  void processCommands() =>
+  /// Drains all queued commands through the reactor's processor. Returns the
+  /// idle-exit arming signal (true if any `register` was attempted this drain,
+  /// success or failure) so tests can assert a failed registration still lets
+  /// the shard idle-exit.
+  bool processCommands() =>
       _processReactorCommands(backend, _states, _metrics, _commands);
 
   /// Transports the reactor currently considers registered.

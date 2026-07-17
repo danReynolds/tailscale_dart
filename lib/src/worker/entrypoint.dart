@@ -230,6 +230,11 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.tcpCloseFdListener),
             );
+          case _WorkerUdpCloseFdCommand request:
+            native.duneUdpCloseFd(request.fd);
+            sendPort.send(
+              const _WorkerAckResponse(_WorkerOperation.udpCloseFd),
+            );
           case _WorkerTlsListenFdCommand request:
             final hostPtr = request.tailnetHost.toNativeUtf8();
             try {

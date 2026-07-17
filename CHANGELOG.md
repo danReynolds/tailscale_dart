@@ -1,3 +1,33 @@
+## Unreleased
+
+A correctness and reliability release addressing a performance/correctness
+audit.
+
+**Bug fixes:**
+
+- UDP datagrams larger than ~2 KiB no longer fail and tear down the binding on
+  macOS/iOS. The datagram socketpair now sizes its buffers like the TCP path, so
+  the advertised 60 KiB payload works on every platform.
+- Closing a UDP binding now reclaims the tailnet port, bridge goroutines, and OS
+  threads instead of leaking them; rebinding the same port immediately after
+  close works.
+- A remote peer resetting a TCP/HTTP connection can no longer crash a
+  root-zone Dart process via an unobserved transport error.
+- `funnel.forward` can no longer wedge the whole native API surface (including
+  `stop()`) when the node changes state mid-call.
+- The inbound-connection/request identity is dropped if the state watcher dies,
+  so a reassigned tailnet address is never misattributed to the previous node.
+- Hardened the `http.bind` accept loop (crash-safe worker, dead-isolate
+  detection, and fd cleanup for accepts that race `close()`), matching the TCP
+  listener.
+
+**Internal:**
+
+- Reactor shards are assigned round-robin rather than by fd parity (which pinned
+  concurrent flows to one shard); a shard whose first registration fails no
+  longer keeps the process alive; and on Linux a peer half-close no longer spins
+  epoll at 100% CPU while reads are disabled.
+
 ## 0.5.0
 
 A feature and performance release. Inbound connections and HTTP requests now

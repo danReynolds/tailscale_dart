@@ -154,6 +154,12 @@ external void duneTcpCloseFdListener(int listenerId);
 )
 external ffi.Pointer<Utf8> duneUdpBindFd(ffi.Pointer<Utf8> host, int port);
 
+/// Tears down the UDP bridge for the Dart-side [fd] (closes the tsnet
+/// PacketConn, wakes and exits both bridge goroutines). Keyed by the fd Dart
+/// was handed; must be called before Dart releases that fd.
+@ffi.Native<ffi.Void Function(ffi.Int32)>(symbol: 'DuneUdpCloseFd')
+external void duneUdpCloseFd(int fd);
+
 /// Creates one native fd reactor poller and returns an opaque handle, or -1 on
 /// failure.
 @ffi.Native<ffi.Int64 Function()>(symbol: 'DuneReactorCreate')

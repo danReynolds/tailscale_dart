@@ -61,7 +61,7 @@ void main() {
             replyPort: reply.sendPort,
           );
 
-        harness.processCommands();
+        final armedIdleExit = harness.processCommands();
 
         expect(await reply.first, 'native reactor register failed');
         expect(harness.registeredCount, 0);
@@ -72,6 +72,14 @@ void main() {
         );
         expect(backend.shutdownFds, isEmpty);
         expect(backend.unregistered, isEmpty);
+        // A failed registration must still arm idle-exit: otherwise a shard
+        // whose first (and only) registration fails would block in the poller
+        // forever, keeping the isolate and the whole process alive.
+        expect(
+          armedIdleExit,
+          isTrue,
+          reason: 'failed registration must still let the shard idle-exit',
+        );
       },
     );
 

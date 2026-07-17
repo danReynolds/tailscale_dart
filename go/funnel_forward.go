@@ -27,6 +27,12 @@ import (
 // backlog and are served as slots free up.
 const funnelMaxConcurrentConns = 512
 
+// funnelUpTimeout bounds how long startFunnelForward waits for the node to
+// reach Running before giving up. tsnet.Up otherwise blocks on the IPN bus with
+// no deadline (e.g. NeedsLogin / key expiry), which would hang the Dart FFI
+// call forever with no error surface.
+const funnelUpTimeout = 30 * time.Second
+
 var (
 	funnelMu            sync.Mutex
 	funnelForwarders    = map[uint16]*funnelForwarder{}
@@ -79,9 +85,11 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 		return servePublication{}, errors.New("FunnelForward called before Start")
 	}
 
-	st, err := s.Up(context.Background())
+	upCtx, cancel := context.WithTimeout(context.Background(), funnelUpTimeout)
+	st, err := s.Up(upCtx)
+	cancel()
 	if err != nil {
-		return servePublication{}, err
+		return servePublication{}, fmt.Errorf("bring node up for funnel: %w", err)
 	}
 	if err := ipn.CheckFunnelAccess(port, st.Self); err != nil {
 		return servePublication{}, err
@@ -101,50 +109,82 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 		proxy:        newFunnelReverseProxy(targetURL),
 	}
 
+	// Fast path: an existing forwarder for this port just gains a mount. No
+	// ListenFunnel here, so holding funnelMu is safe.
 	funnelMu.Lock()
-	defer funnelMu.Unlock()
-	ff := funnelForwarders[port]
-	if ff == nil {
-		rawLn, err := s.ListenFunnel("tcp", fmt.Sprintf(":%d", port), tsnet.FunnelOnly())
-		if err != nil {
-			return servePublication{}, err
+	if ff := funnelForwarders[port]; ff != nil {
+		if ff.domain != domain {
+			funnelMu.Unlock()
+			return servePublication{}, fmt.Errorf("funnel port %d is already serving domain %s", port, ff.domain)
 		}
-		ln := netutil.LimitListener(rawLn, funnelMaxConcurrentConns)
-		ff = &funnelForwarder{
-			port:    port,
-			domain:  domain,
-			targets: map[string]funnelTarget{},
-		}
-		ff.server = &http.Server{
-			Handler: ff,
-			// Funnel is public-facing. Bound header reads without imposing a
-			// response WriteTimeout that would break long streaming responses.
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       120 * time.Second,
-		}
-		ff.listener = ln
-		funnelForwarders[port] = ff
-		go func() {
-			_ = ff.server.Serve(ln)
-		}()
-	} else if ff.domain != domain {
-		return servePublication{}, fmt.Errorf("funnel port %d is already serving domain %s", port, ff.domain)
+		pub := attachFunnelTargetLocked(ff, mount, target, domain, port)
+		funnelMu.Unlock()
+		return pub, nil
+	}
+	funnelMu.Unlock()
+
+	// No forwarder for this port yet. ListenFunnel blocks on tsnet.Up
+	// internally (with an unbounded context we don't control), so it must NOT
+	// run under funnelMu: Stop() takes funnelMu while holding the global mu, so
+	// a ListenFunnel stalled under funnelMu would wedge every FFI entry point
+	// behind that mu. Create the listener first, then install under a fresh
+	// lock, resolving any forwarder a concurrent call created meanwhile.
+	rawLn, err := s.ListenFunnel("tcp", fmt.Sprintf(":%d", port), tsnet.FunnelOnly())
+	if err != nil {
+		return servePublication{}, err
 	}
 
+	funnelMu.Lock()
+	defer funnelMu.Unlock()
+	if existing := funnelForwarders[port]; existing != nil {
+		// Lost the create race; drop our listener and fold into the winner.
+		_ = rawLn.Close()
+		if existing.domain != domain {
+			return servePublication{}, fmt.Errorf("funnel port %d is already serving domain %s", port, existing.domain)
+		}
+		return attachFunnelTargetLocked(existing, mount, target, domain, port), nil
+	}
+
+	ln := netutil.LimitListener(rawLn, funnelMaxConcurrentConns)
+	ff := &funnelForwarder{
+		port:    port,
+		domain:  domain,
+		targets: map[string]funnelTarget{},
+	}
+	ff.server = &http.Server{
+		Handler: ff,
+		// Funnel is public-facing. Bound header reads without imposing a
+		// response WriteTimeout that would break long streaming responses.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	ff.listener = ln
+	funnelForwarders[port] = ff
+	go func() {
+		_ = ff.server.Serve(ln)
+	}()
+	return attachFunnelTargetLocked(ff, mount, target, domain, port), nil
+}
+
+// attachFunnelTargetLocked registers a mount on an existing forwarder and
+// records the publication. The caller must hold funnelMu; the lock order it
+// takes (funnelMu -> ff.mu, funnelMu -> funnelPublicationMu) matches every
+// other path, so holding funnelMu across it cannot deadlock
+// closeAllFunnelForwarders.
+func attachFunnelTargetLocked(ff *funnelForwarder, mount string, target funnelTarget, domain string, port uint16) servePublication {
 	ff.mu.Lock()
 	ff.targets[mount] = target
 	ff.mu.Unlock()
 	trackFunnelPublication(servePublicationKey{host: domain, port: port, path: mount})
-
 	return servePublication{
 		URL:          serveURL(true, domain, port, mount),
 		Port:         int(port),
-		LocalAddress: localAddress,
-		LocalPort:    int(localPort),
+		LocalAddress: target.localAddress,
+		LocalPort:    int(target.localPort),
 		Path:         mount,
 		HTTPS:        true,
 		Funnel:       true,
-	}, nil
+	}
 }
 
 func clearFunnelForward(payload serveClearPayload) error {

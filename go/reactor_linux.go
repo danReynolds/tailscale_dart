@@ -151,13 +151,7 @@ func (p *epollReactorPoller) Wait(out []ReactorEvent, timeoutMillis int) (int, e
 }
 
 func (p *epollReactorPoller) epollCtl(op int, fd int, events int) error {
-	flags := uint32(unix.EPOLLERR | unix.EPOLLHUP | unix.EPOLLRDHUP)
-	if events&ReactorEventRead != 0 {
-		flags |= unix.EPOLLIN
-	}
-	if events&ReactorEventWrite != 0 {
-		flags |= unix.EPOLLOUT
-	}
+	flags := epollInterestFlags(events)
 	if err := unix.EpollCtl(p.epfd, op, fd, &unix.EpollEvent{
 		Events: flags,
 		Fd:     int32(fd),
@@ -165,6 +159,33 @@ func (p *epollReactorPoller) epollCtl(op int, fd int, events int) error {
 		return fmt.Errorf("epoll ctl fd %d: %w", fd, err)
 	}
 	return nil
+}
+
+// epollInterestFlags maps the reactor's read/write interest to an epoll event
+// mask.
+//
+// EPOLLERR and EPOLLHUP are always reported by epoll regardless of the mask, so
+// listing them is documentation, not a subscription. EPOLLRDHUP, by contrast,
+// IS maskable — and is deliberately armed only alongside read interest. epoll
+// is level-triggered, so a peer half-close (FIN) leaves EPOLLRDHUP asserted
+// indefinitely; if it were armed while the Dart side has reads disabled (paused
+// for backpressure, not yet listened, or already drained to EOF) nothing would
+// consume it and epoll_wait would return immediately forever, pinning a core at
+// 100% CPU. Tying EPOLLRDHUP to EPOLLIN means the half-close is delivered
+// exactly when the reactor is prepared to act on it, and is silently deferred —
+// not spun on — until the consumer re-enables reads (which re-arms it).
+//
+// (A genuine full-duplex EPOLLHUP/EPOLLERR is unmaskable and still delivered;
+// that is a real terminal event, not the spurious half-close spin fixed here.)
+func epollInterestFlags(events int) uint32 {
+	flags := uint32(unix.EPOLLERR | unix.EPOLLHUP)
+	if events&ReactorEventRead != 0 {
+		flags |= unix.EPOLLIN | unix.EPOLLRDHUP
+	}
+	if events&ReactorEventWrite != 0 {
+		flags |= unix.EPOLLOUT
+	}
+	return flags
 }
 
 func (p *epollReactorPoller) drainWake() {

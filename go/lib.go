@@ -110,6 +110,7 @@ func stopLocked() {
 	closeAllTcpFdListeners()
 	closeAllHttpBindings()
 	closeAllFunnelForwarders()
+	closeAllUdpBindings()
 
 	// Stop the state watcher and drop cached identities together. StopWatch
 	// cancels the watcher's ctx and invalidates the cache under watchMu, and

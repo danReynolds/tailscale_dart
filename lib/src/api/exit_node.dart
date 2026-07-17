@@ -136,29 +136,51 @@ final class _ExitNode extends ExitNode {
     controller,
   ) {
     var canceled = false;
+    var closed = false;
     TailscaleNode? last;
     var hasLast = false;
+
+    // Adds must be guarded against a closed controller: `add`/`addError` throw
+    // `StateError` after close, and since emissions are serialized on a chain
+    // below, an escaped throw would permanently kill the chain (all later emits
+    // stop). `closed` is set synchronously before `controller.close()`, so a
+    // guarded emit can't race the close. `canceled` covers consumer teardown.
+    void addSafe(TailscaleNode? node) {
+      if (canceled || closed) return;
+      controller.add(node);
+    }
+
+    void addErrorSafe(Object error, StackTrace stackTrace) {
+      if (canceled || closed) return;
+      controller.addError(error, stackTrace);
+    }
+
+    void closeController() {
+      if (closed) return;
+      closed = true;
+      controller.close();
+    }
 
     Future<void> emitIfChanged() async {
       try {
         final current = await _current();
-        if (canceled) return;
+        if (canceled || closed) return;
         final same = hasLast && current?.stableNodeId == last?.stableNodeId;
         if (same) return;
         hasLast = true;
         last = current;
-        controller.add(current);
+        addSafe(current);
       } catch (error, stackTrace) {
-        if (!canceled) controller.addError(error, stackTrace);
+        addErrorSafe(error, stackTrace);
       }
     }
 
     // Serialize emissions. Each trigger does an async `_current()` fetch and
-    // then a read-modify-write of `last`/`hasLast`; running them
-    // concurrently lets two see `hasLast == false` (duplicate first emit) or
-    // finish out of order (a stale `current()` published after a newer one).
-    // A chain makes each emit atomic and ordered. `emitIfChanged` never
-    // throws (it addErrors internally), so the chain can't break.
+    // then a read-modify-write of `last`/`hasLast`; running them concurrently
+    // lets two see `hasLast == false` (duplicate first emit) or finish out of
+    // order (a stale `current()` published after a newer one). A chain makes
+    // each emit atomic and ordered; `addSafe`/`addErrorSafe` keep a
+    // post-close throw from breaking the chain.
     var emitChain = Future<void>.value();
     void scheduleEmit() {
       emitChain = emitChain.then((_) => emitIfChanged());
@@ -167,13 +189,13 @@ final class _ExitNode extends ExitNode {
     scheduleEmit();
     final nodeSub = _nodeChanges.listen(
       (_) => scheduleEmit(),
-      onError: controller.addError,
-      onDone: controller.close,
+      onError: addErrorSafe,
+      onDone: closeController,
     );
     final localSub = _localChanges.stream.listen(
       (_) => scheduleEmit(),
-      onError: controller.addError,
-      onDone: controller.close,
+      onError: addErrorSafe,
+      onDone: closeController,
     );
     controller.onCancel = () {
       canceled = true;

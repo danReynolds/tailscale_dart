@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 
@@ -25,6 +26,69 @@ type UdpFdBinding struct {
 	FD           int
 	LocalAddress string
 	LocalPort    int
+}
+
+// udpFdBindingRegistry tracks live UDP bridges so they can be torn down
+// explicitly. Keyed by the Dart-side fd (which Dart already holds and passes
+// back to UdpCloseFd), so no separate binding id needs threading through the
+// bind response. A datagram socketpair peer-close does NOT wake a goroutine
+// parked in read on the other end (unlike a stream socket), so without an
+// explicit close the bridge goroutines, the tailnet PacketConn (and its port),
+// and two OS threads would leak until process exit.
+var (
+	udpFdBindingMu       sync.Mutex
+	udpFdBindingRegistry = map[int]*udpBridge{}
+)
+
+type udpBridge struct {
+	closeOnce sync.Once
+	// close tears down the bridge: closes the tsnet PacketConn (waking the
+	// inbound goroutine) and the netpoller-integrated Go conn (waking the
+	// outbound goroutine — a raw fd close cannot unblock a parked read, but a
+	// net.Conn close routes through the poller and does).
+	closeFn func()
+}
+
+func (b *udpBridge) close() { b.closeOnce.Do(b.closeFn) }
+
+func registerUdpBridge(dartFd int, bridge *udpBridge) {
+	udpFdBindingMu.Lock()
+	udpFdBindingRegistry[dartFd] = bridge
+	udpFdBindingMu.Unlock()
+}
+
+func deregisterUdpBridge(dartFd int, bridge *udpBridge) {
+	udpFdBindingMu.Lock()
+	if udpFdBindingRegistry[dartFd] == bridge {
+		delete(udpFdBindingRegistry, dartFd)
+	}
+	udpFdBindingMu.Unlock()
+}
+
+// UdpCloseFd tears down the UDP bridge for the Dart-side [fd]. Idempotent and a
+// no-op for an unknown fd. Must be called before Dart releases the fd, so the
+// key can't collide with a reused descriptor.
+func UdpCloseFd(fd int) {
+	udpFdBindingMu.Lock()
+	bridge := udpFdBindingRegistry[fd]
+	delete(udpFdBindingRegistry, fd)
+	udpFdBindingMu.Unlock()
+	if bridge != nil {
+		bridge.close()
+	}
+}
+
+func closeAllUdpBindings() {
+	udpFdBindingMu.Lock()
+	bridges := make([]*udpBridge, 0, len(udpFdBindingRegistry))
+	for fd, bridge := range udpFdBindingRegistry {
+		bridges = append(bridges, bridge)
+		delete(udpFdBindingRegistry, fd)
+	}
+	udpFdBindingMu.Unlock()
+	for _, bridge := range bridges {
+		bridge.close()
+	}
 }
 
 // UdpBindFd opens a tailnet UDP packet listener and returns a POSIX datagram fd
@@ -53,7 +117,7 @@ func UdpBindFd(host string, port int) (*UdpFdBinding, error) {
 		return nil, fmt.Errorf("tsnet listen packet %s: %w", addr, err)
 	}
 
-	dartFd, goFd, err := newDatagramSocketPair()
+	dartFd, goConn, err := newDatagramSocketPairConn()
 	if err != nil {
 		pc.Close()
 		return nil, err
@@ -63,7 +127,7 @@ func UdpBindFd(host string, port int) (*UdpFdBinding, error) {
 	if localAddress == "" {
 		localAddress = host
 	}
-	go runUdpFdBridge(goFd, pc)
+	runUdpFdBridge(dartFd, goConn, pc)
 	return &UdpFdBinding{
 		FD:           dartFd,
 		LocalAddress: localAddress,
@@ -76,24 +140,58 @@ func newDatagramSocketPair() (int, int, error) {
 	if err != nil {
 		return -1, -1, err
 	}
+	// Unlike a stream socketpair, SO_SNDBUF/SO_RCVBUF on a datagram socketpair
+	// bounds the *maximum single datagram*, not just throughput. The macOS/iOS
+	// default (net.local.dgram.maxdgram = 2048) is far below the 60 KiB payload
+	// this transport advertises, so without this an envelope larger than ~2 KiB
+	// fails with EMSGSIZE and tears the whole binding down. Must stay >=
+	// udpMaxEnvelopeBytes; tuneSocketPairBuffers' 256 KiB target clears it with
+	// room for a few datagrams in flight. Set before the fd is wrapped; the
+	// option lives on the socket and survives the net.FileConn dup.
+	tuneSocketPairBuffers(dartFd, goFd)
 	return dartFd, goFd, nil
 }
 
-func runUdpFdBridge(goFd int, pc net.PacketConn) {
-	var once sync.Once
-	closeAll := func() {
-		once.Do(func() {
-			_ = pc.Close()
-			_ = unix.Shutdown(goFd, unix.SHUT_RDWR)
-			_ = unix.Close(goFd)
-		})
+// newDatagramSocketPairConn creates the datagram socketpair and wraps the Go
+// end in a netpoller-integrated net.Conn. Returns the raw Dart-side fd and the
+// Go-side conn.
+func newDatagramSocketPairConn() (int, net.Conn, error) {
+	dartFd, goFd, err := newDatagramSocketPair()
+	if err != nil {
+		return -1, nil, err
 	}
+	// Wrap the Go end in the netpoller so reads/writes don't each pin a blocked
+	// OS thread, and — critically — so closing the conn unblocks a parked read
+	// (a raw datagram socketpair peer-close does not).
+	file := os.NewFile(uintptr(goFd), "tailscale-dart-udp-go")
+	if file == nil {
+		_ = unix.Close(dartFd)
+		_ = unix.Close(goFd)
+		return -1, nil, errors.New("udp socketpair fd could not be wrapped")
+	}
+	goConn, err := net.FileConn(file)
+	_ = file.Close()
+	if err != nil {
+		_ = unix.Close(dartFd)
+		return -1, nil, fmt.Errorf("wrap udp socketpair fd: %w", err)
+	}
+	return dartFd, goConn, nil
+}
+
+func runUdpFdBridge(dartFd int, goConn net.Conn, pc net.PacketConn) {
+	bridge := &udpBridge{}
+	bridge.closeFn = func() {
+		deregisterUdpBridge(dartFd, bridge)
+		_ = pc.Close()
+		_ = goConn.Close()
+	}
+	registerUdpBridge(dartFd, bridge)
 
 	go func() {
-		defer closeAll()
+		defer bridge.close()
 		buf := make([]byte, udpMaxEnvelopeBytes)
 		for {
-			n, err := unix.Read(goFd, buf)
+			n, err := goConn.Read(buf)
 			if err != nil {
 				return
 			}
@@ -112,7 +210,7 @@ func runUdpFdBridge(goFd int, pc net.PacketConn) {
 	}()
 
 	go func() {
-		defer closeAll()
+		defer bridge.close()
 		// Read into a buffer one byte larger than the max payload so an
 		// oversized datagram can be detected (n > udpMaxPayloadBytes) and
 		// dropped rather than silently truncated to the buffer size and
@@ -132,7 +230,7 @@ func runUdpFdBridge(goFd int, pc net.PacketConn) {
 				logInfo("UDP fd bridge dropped inbound datagram: %v", err)
 				continue
 			}
-			if err := writeDatagramFd(goFd, envelope); err != nil {
+			if _, err := goConn.Write(envelope); err != nil {
 				return
 			}
 		}

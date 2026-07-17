@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:tailscale/src/fd_transport.dart';
@@ -280,6 +281,115 @@ void main() {
         expect(snapshot!.registeredTransports, greaterThanOrEqualTo(2));
         expect(snapshot.readSyscalls, greaterThan(0));
         expect(snapshot.writeSyscalls, greaterThan(0));
+      });
+
+      test('concurrent adoptions distribute across reactor shards', () async {
+        // Regression for fd-parity shard pinning: `socketpair(2)` hands the
+        // Dart side fds of constant parity, so `fd % shardCount` used to pin an
+        // entire burst of flows to one shard. Round-robin assignment must
+        // spread them. Only meaningful when more than one shard exists.
+        final load0 = await debugPosixFdReactorShardLoad();
+        final shardCount = math.max(1, math.min(Platform.numberOfProcessors, 2));
+
+        final pairs = <({PosixFdTransport left, PosixFdTransport right})>[];
+        for (var i = 0; i < 8; i++) {
+          pairs.add(await _connectedPair());
+        }
+        addTearDown(() async {
+          for (final pair in pairs) {
+            await _closeBoth(pair.left, pair.right);
+          }
+        });
+
+        final load = await debugPosixFdReactorShardLoad();
+        if (shardCount > 1) {
+          expect(
+            load.length,
+            greaterThan(1),
+            reason: 'adoptions pinned to a single shard: $load (was $load0)',
+          );
+          // No shard should hold everything — round-robin keeps it balanced.
+          final total = load.values.fold<int>(0, (a, b) => a + b);
+          for (final count in load.values) {
+            expect(count, lessThan(total),
+                reason: 'one shard holds all transports: $load');
+          }
+        }
+      });
+
+      test('abnormal close does not leak an unhandled zone error', () async {
+        // A write failure (peer reset) completes the transport's `done` with an
+        // error. Callers routinely never await `done` (the write error is
+        // already delivered through the write future), so an unobserved `done`
+        // error must not escape as an uncaught async error — which would
+        // terminate a root-zone `dart run` process.
+        final captured = <Object>[];
+        await runZonedGuarded(
+          () async {
+            final (:leftFd, :rightFd) = socketPair(sockStream);
+            final transport = await PosixFdTransport.adopt(leftFd);
+            // Close the peer so the reactor's write(2) fails with EPIPE.
+            TestPosixBindings.instance.close(rightFd);
+            for (var i = 0; i < 3; i++) {
+              try {
+                await transport.write(Uint8List(64 * 1024));
+              } catch (_) {
+                // Caller handles the write error; it never touches `done`.
+              }
+            }
+            // Let `done`'s (unobserved) error settle.
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+            await transport.close();
+          },
+          (error, stack) => captured.add(error),
+        );
+        expect(
+          captured,
+          isEmpty,
+          reason: 'transport done error escaped to the enclosing zone',
+        );
+      });
+
+      test('datagram mode never truncates a datagram under queue '
+          'backpressure', () async {
+        // Two datagrams whose combined size (2800) exceeds the inbound-queue
+        // credit (1800). After the first is read, only 400 bytes of credit
+        // remain — in stream mode that would clamp (and silently truncate) the
+        // second datagram's read. Datagram mode must read the whole datagram
+        // regardless of remaining credit.
+        const datagramBytes = 1400; // below macOS maxdgram (2048)
+        final (:leftFd, :rightFd) = socketPair(sockDgram);
+        final receiver = await PosixFdTransport.adopt(
+          leftFd,
+          datagram: true,
+          maxReadChunkSize: 64 * 1024,
+          maxInboundQueuedBytes: 1800,
+        );
+        addTearDown(() async {
+          await receiver.close();
+          TestPosixBindings.instance.close(rightFd);
+        });
+
+        final first = Uint8List(datagramBytes)..fillRange(0, datagramBytes, 0xAA);
+        final second = Uint8List(datagramBytes)
+          ..fillRange(0, datagramBytes, 0xBB);
+        expect(TestPosixBindings.instance.write(rightFd, first), datagramBytes);
+        expect(TestPosixBindings.instance.write(rightFd, second), datagramBytes);
+
+        final chunks = await receiver.input
+            .take(2)
+            .toList()
+            .timeout(const Duration(seconds: 5));
+
+        // Exactly two datagrams, each whole and uncorrupted — boundaries
+        // preserved and neither truncated by the credit clamp.
+        expect(chunks, hasLength(2));
+        expect(chunks[0], hasLength(datagramBytes));
+        expect(chunks[1], hasLength(datagramBytes));
+        expect(chunks[0].every((b) => b == 0xAA), isTrue,
+            reason: 'first datagram corrupted');
+        expect(chunks[1].every((b) => b == 0xBB), isTrue,
+            reason: 'second datagram truncated or corrupted');
       });
     },
   );

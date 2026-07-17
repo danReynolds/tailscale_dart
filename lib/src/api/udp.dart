@@ -13,13 +13,26 @@ import 'identity.dart';
 
 const int _udpEnvelopeVersion = 1;
 const int _udpEnvelopeHeaderBytes = 4;
+const int _udpMaxAddressBytes = 255;
 
 /// Maximum public UDP payload accepted by the v1 package-native transport.
 const int tailscaleMaxDatagramPayloadBytes = 60 * 1024;
 
+/// Largest wire envelope: header + max address + max payload. The datagram
+/// transport must read into a buffer at least this large, or a short read(2)
+/// would truncate the datagram (which the length-free envelope cannot detect).
+/// Must mirror `udpMaxEnvelopeBytes` in go/udp_fd_posix.go.
+const int _udpMaxEnvelopeBytes =
+    _udpEnvelopeHeaderBytes + _udpMaxAddressBytes + tailscaleMaxDatagramPayloadBytes;
+
 typedef UdpBindFn =
     Future<({int fd, TailscaleEndpoint local})> Function(String host, int port);
 typedef UdpDefaultAddressFn = Future<String?> Function();
+
+/// Tears down the Go-side UDP bridge for the given Dart fd. A datagram
+/// socketpair peer-close does not wake the Go bridge's reader, so the binding
+/// must signal Go explicitly on close, or the port + goroutines + threads leak.
+typedef UdpCloseFn = Future<void> Function(int fd);
 
 /// One UDP datagram received over the tailnet.
 final class TailscaleDatagram {
@@ -103,22 +116,35 @@ abstract class Udp {
 Udp createUdp({
   required UdpBindFn bindFn,
   required UdpDefaultAddressFn defaultAddressFn,
-}) => _Udp(bindFn, defaultAddressFn);
+  required UdpCloseFn closeFn,
+}) => _Udp(bindFn, defaultAddressFn, closeFn);
 
 @internal
 Future<TailscaleDatagramBinding> createFdTailscaleDatagramBinding({
   required int fd,
   required TailscaleEndpoint local,
+  UdpCloseFn? closeFn,
 }) async {
-  final transport = await PosixFdTransport.adopt(fd);
-  return _FdTailscaleDatagramBinding(transport: transport, local: local);
+  // Datagram mode: preserve message boundaries and read into a full-envelope
+  // buffer so the reactor never truncates a datagram under queue backpressure.
+  final transport = await PosixFdTransport.adopt(
+    fd,
+    datagram: true,
+    maxReadChunkSize: _udpMaxEnvelopeBytes,
+  );
+  return _FdTailscaleDatagramBinding(
+    transport: transport,
+    local: local,
+    closeFn: closeFn,
+  );
 }
 
 final class _Udp implements Udp {
-  const _Udp(this._bind, this._defaultAddress);
+  const _Udp(this._bind, this._defaultAddress, this._close);
 
   final UdpBindFn _bind;
   final UdpDefaultAddressFn _defaultAddress;
+  final UdpCloseFn _close;
 
   @override
   Future<TailscaleDatagramBinding> bind({
@@ -136,7 +162,11 @@ final class _Udp implements Udp {
     }
     try {
       final (:fd, :local) = await _bind(resolvedAddress, port);
-      return createFdTailscaleDatagramBinding(fd: fd, local: local);
+      return createFdTailscaleDatagramBinding(
+        fd: fd,
+        local: local,
+        closeFn: _close,
+      );
     } catch (e) {
       if (e is TailscaleUdpException) rethrow;
       throw TailscaleUdpException(
@@ -151,7 +181,9 @@ final class _FdTailscaleDatagramBinding implements TailscaleDatagramBinding {
   _FdTailscaleDatagramBinding({
     required PosixFdTransport transport,
     required this.local,
-  }) : _transport = transport {
+    UdpCloseFn? closeFn,
+  }) : _transport = transport,
+       _closeFn = closeFn {
     _datagrams = StreamController<TailscaleDatagram>(onCancel: close);
     _subscription = _transport.input.listen(
       _handleEnvelope,
@@ -167,9 +199,14 @@ final class _FdTailscaleDatagramBinding implements TailscaleDatagramBinding {
         },
       ),
     );
+    // `_completeDone`/`close()` can complete `done` with an error; absorb the
+    // orphaned completion so a caller that never awaits `done` can't leak an
+    // unhandled async error. Awaiters still observe it.
+    _done.future.ignore();
   }
 
   final PosixFdTransport _transport;
+  final UdpCloseFn? _closeFn;
   late final StreamController<TailscaleDatagram> _datagrams;
   late final StreamSubscription<Uint8List> _subscription;
   final _done = Completer<void>();
@@ -202,6 +239,20 @@ final class _FdTailscaleDatagramBinding implements TailscaleDatagramBinding {
     } catch (error, stackTrace) {
       closeError = error;
       closeStackTrace = stackTrace;
+    }
+    // Tear down the Go-side bridge before releasing the fd. A datagram
+    // socketpair peer-close won't wake the Go reader, so without this the
+    // tailnet port, both bridge goroutines, and two OS threads leak. Keyed by
+    // the fd, so it must run while the fd still uniquely identifies this
+    // binding — i.e. before `_transport.close()` frees it for reuse.
+    final closeFn = _closeFn;
+    if (closeFn != null) {
+      try {
+        await closeFn(_transport.fd);
+      } catch (error, stackTrace) {
+        closeError ??= error;
+        closeStackTrace ??= stackTrace;
+      }
     }
     try {
       await _transport.close();

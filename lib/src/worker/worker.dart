@@ -293,6 +293,10 @@ final class Worker {
     );
   }
 
+  Future<void> udpCloseFd({required int fd}) async {
+    await _request<_WorkerAckResponse>(_WorkerUdpCloseFdCommand(fd: fd));
+  }
+
   Future<({int listenerId, TailscaleEndpoint local})> tlsListenFd({
     required int tailnetPort,
     required String tailnetHost,

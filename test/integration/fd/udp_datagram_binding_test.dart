@@ -109,6 +109,29 @@ void main() {
         );
         expect(error, isA<TailscaleUdpException>());
       });
+
+      test('close signals the Go-side bridge with the binding fd', () async {
+        // Regression for the UDP leak: closing a binding must tell Go to tear
+        // down its bridge (a datagram peer-close won't wake the Go reader), and
+        // it must do so keyed by the fd, before the fd is released.
+        final (:leftFd, :rightFd) = _socketPair();
+        final closedFds = <int>[];
+        final binding = await createFdTailscaleDatagramBinding(
+          fd: leftFd,
+          local: const TailscaleEndpoint(address: '100.64.0.1', port: 7001),
+          closeFn: (fd) async => closedFds.add(fd),
+        );
+        addTearDown(() => TestPosixBindings.instance.close(rightFd));
+
+        await binding.close();
+
+        expect(closedFds, <int>[leftFd],
+            reason: 'Go-side close must run once, keyed by the binding fd');
+
+        // Idempotent: a second close does not re-signal Go.
+        await binding.close();
+        expect(closedFds, <int>[leftFd]);
+      });
     },
   );
 

@@ -79,6 +79,16 @@ void main() {
     });
   });
 
+  group('duneUdpCloseFd', () {
+    test('resolves and is a no-op for an unknown fd', () {
+      // Verifies the DuneUdpCloseFd export resolves end-to-end; an fd with no
+      // registered bridge is a safe no-op.
+      expect(native.duneUdpCloseFd, isNotNull);
+      native.duneUdpCloseFd(-1);
+      native.duneUdpCloseFd(999999);
+    });
+  });
+
   group('duneSetLogLevel', () {
     test('can set to silent without crashing', () {
       native.duneSetLogLevel(0);

@@ -224,6 +224,11 @@ func DuneUdpBindFd(host *C.char, port C.int) *C.char {
 	return C.CString(string(result))
 }
 
+//export DuneUdpCloseFd
+func DuneUdpCloseFd(fd C.int) {
+	tailscale.UdpCloseFd(int(fd))
+}
+
 //export DuneReactorCreate
 func DuneReactorCreate() C.longlong {
 	handle, err := tailscale.ReactorCreate()

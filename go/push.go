@@ -100,8 +100,24 @@ func StartWatch() {
 		for {
 			n, err := watcher.Next()
 			if err != nil {
+				// A non-cancel error means this watcher is dying while still
+				// active (IPN-bus stream/decode error, tailscaled dropping a
+				// lagging watcher). Nothing re-arms the watch, so a frozen
+				// identity index would drift from the live netmap and — worst
+				// case — misattribute a reassigned tailnet address to the old
+				// node on the accept path. Drop it so accept-time lookups fall
+				// back to a live WhoIs. Gate on ctx like the replace path below
+				// so a StopWatch/newer StartWatch that already superseded us
+				// keeps ownership of the cache lifecycle (it invalidates or
+				// re-warms on its own).
+				watchMu.Lock()
+				superseded := ctx.Err() != nil
+				if !superseded {
+					identityCache.invalidate()
+				}
+				watchMu.Unlock()
 				// Context cancelled = normal shutdown, don't report.
-				if ctx.Err() == nil {
+				if !superseded {
 					postMessage(map[string]any{
 						"type":  "error",
 						"code":  "watcher",

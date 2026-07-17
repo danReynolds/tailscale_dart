@@ -266,19 +266,25 @@ func newSocketPairConn() (int, net.Conn, error) {
 	// socket and survives the net.FileConn dup below.
 	tuneSocketPairBuffers(dartFd, goFd)
 
-	success := false
-	defer func() {
-		if success {
-			return
-		}
-		_ = unix.Close(dartFd)
-		_ = unix.Close(goFd)
-	}()
-
 	file := os.NewFile(uintptr(goFd), "tailscale-dart-tcp-go")
 	if file == nil {
+		_ = unix.Close(dartFd)
+		_ = unix.Close(goFd)
 		return -1, nil, errors.New("socketpair fd could not be wrapped")
 	}
+
+	// From here on `file` owns goFd; file.Close() (below) closes it exactly
+	// once, on both the success and the FileConn-error path. So the cleanup
+	// defer must NOT also close goFd — doing so double-closes it, and under fd
+	// pressure (EMFILE, which is exactly when FileConn's dup fails) the second
+	// close can sever an unrelated freshly-allocated descriptor.
+	success := false
+	defer func() {
+		if !success {
+			_ = unix.Close(dartFd)
+		}
+	}()
+
 	conn, err := net.FileConn(file)
 	_ = file.Close()
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,11 +61,14 @@ type HttpIncomingRequest struct {
 }
 
 type httpResponseHead struct {
-	StatusCode    int                 `json:"statusCode,omitempty"`
-	ReasonPhrase  string              `json:"reasonPhrase,omitempty"`
-	Headers       map[string][]string `json:"headers,omitempty"`
-	ContentLength int64               `json:"contentLength,omitempty"`
-	Error         string              `json:"error,omitempty"`
+	StatusCode   int                 `json:"statusCode,omitempty"`
+	ReasonPhrase string              `json:"reasonPhrase,omitempty"`
+	Headers      map[string][]string `json:"headers,omitempty"`
+	// No omitempty: a legitimate Content-Length: 0 (204, empty 200) must reach
+	// Dart as 0, not be dropped to null. Unknown length is sent as -1, which
+	// the Dart parser maps to null.
+	ContentLength int64  `json:"contentLength"`
+	Error         string `json:"error,omitempty"`
 }
 
 type httpBindingState struct {
@@ -340,8 +344,10 @@ func runHttpFdRequest(
 	defer resp.Body.Close()
 
 	if err := writeHTTPResponseHead(responseConn, httpResponseHead{
-		StatusCode:    resp.StatusCode,
-		ReasonPhrase:  resp.Status,
+		StatusCode: resp.StatusCode,
+		// resp.Status is the full status line ("200 OK"); package:http expects
+		// just the reason phrase ("OK"). Strip the leading "<code> ".
+		ReasonPhrase:  strings.TrimPrefix(resp.Status, strconv.Itoa(resp.StatusCode)+" "),
 		Headers:       map[string][]string(resp.Header),
 		ContentLength: resp.ContentLength,
 	}); err != nil {

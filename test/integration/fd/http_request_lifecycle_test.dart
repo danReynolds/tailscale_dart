@@ -42,6 +42,34 @@ void main() {
       },
     );
 
+    test('lowercases inbound request header names', () async {
+      // Go forwards canonical-cased header keys; the request must expose them
+      // lowercase so `request.headers['content-type']` (dart:io / shelf
+      // convention) works instead of missing.
+      final (
+        :requestPeer,
+        :responsePeer,
+        :responseSub,
+        :request,
+      ) = await _requestWithBody(
+        headersAll: const {
+          'Content-Type': ['application/json'],
+          'X-Custom-Header': ['a', 'b'],
+        },
+      );
+      addTearDown(() => _closePeers(requestPeer, responsePeer, responseSub));
+      // This test never calls respond()/response.close(), so close the request's
+      // own transports here or they stay registered and the reactor never
+      // idle-exits (the VM then hangs waiting for the shard isolate at exit).
+      addTearDown(() => request.response.close());
+
+      expect(request.headers['content-type'], 'application/json');
+      expect(request.headers['x-custom-header'], 'a, b');
+      expect(request.headersAll['content-type'], ['application/json']);
+      // Original canonical case no longer present.
+      expect(request.headers.containsKey('Content-Type'), isFalse);
+    });
+
     test('serializes unawaited sequential writes in call order', () async {
       final responseBytes = <int>[];
       final (
@@ -121,7 +149,10 @@ Future<
     TailscaleHttpRequest request,
   })
 >
-_requestWithBody({void Function(Uint8List chunk)? onResponseChunk}) async {
+_requestWithBody({
+  void Function(Uint8List chunk)? onResponseChunk,
+  Map<String, List<String>> headersAll = const {},
+}) async {
   final (leftFd: requestLeftFd, rightFd: requestRightFd) = socketPair(
     sockStream,
   );
@@ -144,6 +175,7 @@ _requestWithBody({void Function(Uint8List chunk)? onResponseChunk}) async {
       responsePeer: responsePeer,
       responseSub: responseSub,
       request: createHttpRequestForTesting(
+        headersAll: headersAll,
         requestTransport: requestTransport,
         responseTransport: responseTransport,
       ),

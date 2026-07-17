@@ -131,6 +131,21 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	// lock, resolving any forwarder a concurrent call created meanwhile.
 	rawLn, err := s.ListenFunnel("tcp", fmt.Sprintf(":%d", port), tsnet.FunnelOnly())
 	if err != nil {
+		// A concurrent call for this same port may have already bound the funnel
+		// listener, so ours fails with "address in use". If a forwarder now
+		// exists, fold into it rather than surfacing a spurious error to the
+		// caller (a plain retry would hit the fast path anyway).
+		funnelMu.Lock()
+		existing := funnelForwarders[port]
+		if existing != nil && existing.domain == domain {
+			pub := attachFunnelTargetLocked(existing, mount, target, domain, port)
+			funnelMu.Unlock()
+			return pub, nil
+		}
+		funnelMu.Unlock()
+		if existing != nil {
+			return servePublication{}, fmt.Errorf("funnel port %d is already serving domain %s", port, existing.domain)
+		}
 		return servePublication{}, err
 	}
 

@@ -494,14 +494,29 @@ class Tailscale implements TailscaleClient {
       }
     });
 
+    // `timeout` must bound the whole operation, not just the wait for a stable
+    // state. `_worker.start` runs the native bring-up (which on the re-auth path
+    // includes a 10s Logout plus a tsnet start) and has no timeout of its own,
+    // so without bounding it here `up(timeout:)` could block far past its
+    // budget or hang if the native call wedges.
+    final elapsed = Stopwatch()..start();
     try {
-      await _worker.start(
-        hostname: hostname,
-        authKey: authKey ?? '',
-        ephemeral: ephemeral,
-        controlUrl: resolvedControlUrl.toString(),
-        stateDir: _stateDir,
-      );
+      try {
+        await _worker
+            .start(
+              hostname: hostname,
+              authKey: authKey ?? '',
+              ephemeral: ephemeral,
+              controlUrl: resolvedControlUrl.toString(),
+              stateDir: _stateDir,
+            )
+            .timeout(timeout);
+      } on TimeoutException {
+        throw TailscaleUpException(
+          'Node did not start within $timeout. The native runtime may be '
+          'wedged or the control plane unreachable.',
+        );
+      }
       // Close any client from a prior up() before replacing it so repeated
       // up() calls don't leak the previous instance.
       _http?.close();
@@ -516,8 +531,11 @@ class Tailscale implements TailscaleClient {
         stable.complete();
       }
 
+      final remaining = timeout - elapsed.elapsed;
       try {
-        await stable.future.timeout(timeout);
+        await stable.future.timeout(
+          remaining > Duration.zero ? remaining : Duration.zero,
+        );
       } on TimeoutException {
         final last = await status();
         throw TailscaleUpException(

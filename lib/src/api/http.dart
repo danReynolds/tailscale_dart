@@ -452,10 +452,19 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
     required this.identity,
     required PosixFdTransport requestTransport,
     required PosixFdTransport responseTransport,
-  }) : headersAll = Map.unmodifiable(headersAll),
+  }) : // Lowercase header names to match dart:io's case-insensitive convention
+       // (and shelf's lowercase headers). The wire keys arrive canonical-cased
+       // from Go's http.Header, so `request.headers['content-type']` would
+       // otherwise miss. Go canonicalizes each header to one form, so
+       // lowercasing can't collide two distinct keys.
+       headersAll = Map.unmodifiable({
+         for (final entry in headersAll.entries)
+           entry.key.toLowerCase(): entry.value,
+       }),
        headers = Map.unmodifiable({
          for (final entry in headersAll.entries)
-           if (entry.value.isNotEmpty) entry.key: entry.value.join(', '),
+           if (entry.value.isNotEmpty)
+             entry.key.toLowerCase(): entry.value.join(', '),
        }),
        uri = Uri.parse(requestUri.isEmpty ? '/' : requestUri),
        _requestTransport = requestTransport {

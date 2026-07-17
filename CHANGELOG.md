@@ -1,3 +1,28 @@
+## Unreleased
+
+Follow-up correctness/robustness fixes from the audit backlog.
+
+**Bug fixes:**
+
+- Inbound `http.bind` request headers are now exposed with lowercase names
+  (dart:io / shelf convention), so `request.headers['content-type']` works
+  instead of missing the canonical-cased key.
+- Outbound HTTP responses now carry a real `Content-Length: 0` (was dropped to
+  null) and a bare reason phrase (`OK`, not `200 OK`).
+- Outbound UDP datagram addresses are parsed as IP literals only, so a hostname
+  can no longer trigger a blocking DNS lookup that stalls the datagram pump.
+- `up(timeout:)` now bounds the native start step too, not just the wait for a
+  stable state, so it can't block past its budget on a slow/wedged bring-up.
+- Concurrent `serve.forward`/`serve.clear` calls no longer lose updates (the
+  ServeConfig get-modify-set is serialized); concurrent same-port
+  `funnel.forward` calls fold together instead of one failing with "address in
+  use".
+- `exitNode.onCurrentChange` no longer emits a duplicate first value or a stale
+  value under rapid changes.
+- Hardened teardown races: a TCP accept that loses to `close()` no longer leaks
+  an uncaught error; a socketpair-wrap failure no longer double-closes an fd;
+  and a reactor wake can no longer write into a just-closed poller fd.
+
 ## 0.5.1
 
 A correctness and reliability release addressing a performance/correctness

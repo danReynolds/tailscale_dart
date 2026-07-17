@@ -97,6 +97,45 @@ void main() {
       await sub.cancel();
       await nodes.close();
     });
+
+    test('an emit resuming after the source closed does not crash', () async {
+      // Smoke test for the source-close shutdown path: an emit that resumes
+      // after the stream's controller closed must not surface an unhandled
+      // error. (The specific add-after-close crash the `closed` guard prevents
+      // is latent today — the source controllers are never actually closed — so
+      // this exercises the path rather than strictly failing without the fix.)
+      // A completer-gated currentFn makes the ordering exact: the emit blocks
+      // until we close the source, then resumes post-close.
+      final errors = <Object>[];
+      await runZonedGuarded(() async {
+        final nodes = StreamController<List<TailscaleNode>>.broadcast();
+        final gate = Completer<TailscaleNode?>();
+        final exitNode = createExitNode(
+          currentFn: () => gate.future,
+          suggestFn: () async => null,
+          useByIdFn: (_) async {},
+          useAutoFn: () async {},
+          clearFn: () async {},
+          nodeChanges: nodes.stream,
+        );
+
+        final sub = exitNode.onCurrentChange.listen((_) {});
+        // Let the initial emit start and park on `gate.future`.
+        await Future<void>.delayed(Duration.zero);
+        // Close the source → the stream's controller closes.
+        await nodes.close();
+        // Now let the parked emit resume; it must observe `closed` and not
+        // call add on the closed controller.
+        gate.complete(_node('n1'));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await sub.cancel();
+      }, (error, _) => errors.add(error));
+      expect(
+        errors,
+        isEmpty,
+        reason: 'a post-close emit must not crash the emission chain',
+      );
+    });
   });
 }
 

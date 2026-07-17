@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"sync"
@@ -280,11 +281,16 @@ func decodeUdpEnvelope(envelope []byte) (*net.UDPAddr, []byte, error) {
 		return nil, nil, fmt.Errorf("invalid UDP envelope port %d", port)
 	}
 	address := string(envelope[udpEnvelopeHeaderBytes:payloadOffset])
-	addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(address, strconv.Itoa(port)))
+	// Parse as an IP literal only. An inbound envelope's address is always a
+	// tailnet peer IP, so net.ResolveUDPAddr's hostname path is never needed —
+	// and would let a hostname trigger a blocking DNS lookup that stalls the
+	// single outbound pump goroutine (head-of-line blocking for every datagram
+	// on the binding). netip.ParseAddr never touches the network.
+	ip, err := netip.ParseAddr(address)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("invalid UDP envelope address %q: %w", address, err)
 	}
-	return addr, envelope[payloadOffset:], nil
+	return net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, uint16(port))), envelope[payloadOffset:], nil
 }
 
 func writeDatagramFd(fd int, payload []byte) error {

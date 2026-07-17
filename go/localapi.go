@@ -439,6 +439,15 @@ type servePublication struct {
 var (
 	servePublicationMu sync.Mutex
 	servePublications  = map[servePublicationKey]struct{}{}
+
+	// serveConfigMu serializes the get-modify-set on tailscaled's shared
+	// ServeConfig. GetServeConfig/mutate/SetServeConfig is not atomic, so two
+	// concurrent ServeForward/ServeClear calls would each start from the same
+	// base config and the second SetServeConfig would clobber the first's mount
+	// — a lost update that diverges the in-memory publication registry from
+	// tailscaled. The Funnel path has its own funnelMu; this covers the Serve
+	// path.
+	serveConfigMu sync.Mutex
 )
 
 type servePublicationKey struct {
@@ -480,6 +489,8 @@ func ServeForward(payloadJSON string) string {
 	if err != nil {
 		return jsonError(err)
 	}
+	serveConfigMu.Lock()
+	defer serveConfigMu.Unlock()
 	ctx := context.Background()
 	st, err := lc.StatusWithoutPeers(ctx)
 	if err != nil {
@@ -536,6 +547,8 @@ func ServeClear(payloadJSON string) string {
 		}
 		return `{"ok":true}`
 	}
+	serveConfigMu.Lock()
+	defer serveConfigMu.Unlock()
 	ctx := context.Background()
 	sc, err := lc.GetServeConfig(ctx)
 	if err != nil {
@@ -605,6 +618,8 @@ func closeAllServePublications(lc *local.Client) {
 	if lc == nil || len(keys) == 0 {
 		return
 	}
+	serveConfigMu.Lock()
+	defer serveConfigMu.Unlock()
 	ctx := context.Background()
 	sc, err := lc.GetServeConfig(ctx)
 	if err != nil || sc == nil {

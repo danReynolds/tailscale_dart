@@ -375,7 +375,12 @@ final class _FdTailscaleListener implements TailscaleListener {
         }
         _connections.add(connection);
       } catch (error, stackTrace) {
-        _connections.addError(error, stackTrace);
+        // Guard against a close() that raced this async adopt: addError on a
+        // closed controller throws inside this unawaited closure, surfacing as
+        // an uncaught async error. (The HTTP listener already guards this way.)
+        if (!_closed && !_connections.isClosed) {
+          _connections.addError(error, stackTrace);
+        }
       }
     }());
   }

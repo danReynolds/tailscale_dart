@@ -132,41 +132,53 @@ final class _ExitNode extends ExitNode {
   }
 
   @override
-  Stream<TailscaleNode?> get onCurrentChange =>
-      Stream<TailscaleNode?>.multi((controller) {
-        var canceled = false;
-        TailscaleNode? last;
-        var hasLast = false;
+  Stream<TailscaleNode?> get onCurrentChange => Stream<TailscaleNode?>.multi((
+    controller,
+  ) {
+    var canceled = false;
+    TailscaleNode? last;
+    var hasLast = false;
 
-        Future<void> emitIfChanged() async {
-          try {
-            final current = await _current();
-            if (canceled) return;
-            final same = hasLast && current?.stableNodeId == last?.stableNodeId;
-            if (same) return;
-            hasLast = true;
-            last = current;
-            controller.add(current);
-          } catch (error, stackTrace) {
-            if (!canceled) controller.addError(error, stackTrace);
-          }
-        }
+    Future<void> emitIfChanged() async {
+      try {
+        final current = await _current();
+        if (canceled) return;
+        final same = hasLast && current?.stableNodeId == last?.stableNodeId;
+        if (same) return;
+        hasLast = true;
+        last = current;
+        controller.add(current);
+      } catch (error, stackTrace) {
+        if (!canceled) controller.addError(error, stackTrace);
+      }
+    }
 
-        unawaited(emitIfChanged());
-        final nodeSub = _nodeChanges.listen(
-          (_) => unawaited(emitIfChanged()),
-          onError: controller.addError,
-          onDone: controller.close,
-        );
-        final localSub = _localChanges.stream.listen(
-          (_) => unawaited(emitIfChanged()),
-          onError: controller.addError,
-          onDone: controller.close,
-        );
-        controller.onCancel = () {
-          canceled = true;
-          unawaited(nodeSub.cancel());
-          unawaited(localSub.cancel());
-        };
-      }, isBroadcast: true);
+    // Serialize emissions. Each trigger does an async `_current()` fetch and
+    // then a read-modify-write of `last`/`hasLast`; running them
+    // concurrently lets two see `hasLast == false` (duplicate first emit) or
+    // finish out of order (a stale `current()` published after a newer one).
+    // A chain makes each emit atomic and ordered. `emitIfChanged` never
+    // throws (it addErrors internally), so the chain can't break.
+    var emitChain = Future<void>.value();
+    void scheduleEmit() {
+      emitChain = emitChain.then((_) => emitIfChanged());
+    }
+
+    scheduleEmit();
+    final nodeSub = _nodeChanges.listen(
+      (_) => scheduleEmit(),
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    final localSub = _localChanges.stream.listen(
+      (_) => scheduleEmit(),
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = () {
+      canceled = true;
+      unawaited(nodeSub.cancel());
+      unawaited(localSub.cancel());
+    };
+  }, isBroadcast: true);
 }

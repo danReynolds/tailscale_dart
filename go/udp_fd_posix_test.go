@@ -4,11 +4,27 @@ package tailscale
 
 import (
 	"bytes"
+	"encoding/binary"
 	"net"
 	"testing"
 
 	"golang.org/x/sys/unix"
 )
+
+// TestDecodeUdpEnvelope_RejectsHostname guards that the outbound datagram
+// address is parsed as an IP literal only — a hostname must be rejected, not
+// sent through a blocking DNS lookup that would stall the outbound pump.
+func TestDecodeUdpEnvelope_RejectsHostname(t *testing.T) {
+	host := []byte("example.com")
+	env := make([]byte, udpEnvelopeHeaderBytes+len(host))
+	env[0] = udpEnvelopeVersion
+	env[1] = byte(len(host))
+	binary.BigEndian.PutUint16(env[2:4], 53)
+	copy(env[udpEnvelopeHeaderBytes:], host)
+	if _, _, err := decodeUdpEnvelope(env); err == nil {
+		t.Fatal("decode accepted a hostname address; must require an IP literal")
+	}
+}
 
 func TestUdpEnvelope_RoundTrip(t *testing.T) {
 	addr := mustResolveUDPAddr(t, "100.64.0.2:7001")

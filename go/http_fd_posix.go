@@ -475,8 +475,37 @@ func writeDartHTTPResponse(w http.ResponseWriter, r io.Reader) error {
 		}
 	}
 	w.WriteHeader(statusCode)
-	_, err = io.Copy(w, r)
-	return err
+	return flushDartHTTPBody(w, r)
+}
+
+// flushDartHTTPBody streams the Dart handler's response body to the wire,
+// flushing after each chunk. net/http buffers small writes and won't emit them
+// until the buffer fills or the handler returns, which stalls streaming
+// handlers (SSE, long-poll) that emit small events over time. Flushing each
+// chunk delivers them promptly. Uses the shared 64 KiB buffer pool rather than
+// io.Copy's per-call 32 KiB allocation.
+func flushDartHTTPBody(w http.ResponseWriter, r io.Reader) error {
+	flusher, _ := w.(http.Flusher)
+	bufp := pipeBufferPool.Get().(*[]byte)
+	defer pipeBufferPool.Put(bufp)
+	buf := *bufp
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return nil
+			}
+			return readErr
+		}
+	}
 }
 
 func readHTTPResponseHead(r io.Reader) (httpResponseHead, error) {

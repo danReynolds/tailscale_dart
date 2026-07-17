@@ -534,33 +534,47 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
     Map<String, String>? headers,
     Object? body,
   }) async {
-    response.statusCode = statusCode;
-    if (headers != null) {
-      for (final entry in headers.entries) {
-        response.setHeader(entry.key, entry.value);
+    // Always close the response (which also closes the request-body transport
+    // via `onClose`), even if writing the body throws mid-way — otherwise a
+    // failed write would strand both fds and the Go handler goroutine until the
+    // finalizer runs. The original error still propagates out of the finally.
+    try {
+      response.statusCode = statusCode;
+      if (headers != null) {
+        for (final entry in headers.entries) {
+          response.setHeader(entry.key, entry.value);
+        }
       }
-    }
 
-    switch (body) {
-      case null:
-        break;
-      case String text:
-        final encoded = utf8.encode(text);
-        _putResponseHeaderIfAbsent(response, 'content-length', encoded.length);
-        await response.write(encoded);
-      case List<int> bytes:
-        _putResponseHeaderIfAbsent(response, 'content-length', bytes.length);
-        await response.write(bytes);
-      case Stream<List<int>> chunks:
-        await response.writeAll(chunks);
-      default:
-        final text = body.toString();
-        final encoded = utf8.encode(text);
-        _putResponseHeaderIfAbsent(response, 'content-length', encoded.length);
-        await response.write(encoded);
+      switch (body) {
+        case null:
+          break;
+        case String text:
+          final encoded = utf8.encode(text);
+          _putResponseHeaderIfAbsent(
+            response,
+            'content-length',
+            encoded.length,
+          );
+          await response.write(encoded);
+        case List<int> bytes:
+          _putResponseHeaderIfAbsent(response, 'content-length', bytes.length);
+          await response.write(bytes);
+        case Stream<List<int>> chunks:
+          await response.writeAll(chunks);
+        default:
+          final text = body.toString();
+          final encoded = utf8.encode(text);
+          _putResponseHeaderIfAbsent(
+            response,
+            'content-length',
+            encoded.length,
+          );
+          await response.write(encoded);
+      }
+    } finally {
+      await response.close();
     }
-
-    await response.close();
   }
 
   Future<void> close() async {
@@ -618,6 +632,12 @@ final class _TailscaleHttpResponse implements TailscaleHttpResponse {
   var _headSent = false;
   var _closed = false;
 
+  /// Serializes writes so unawaited sequential `write()` calls still reach the
+  /// wire in call order. Without it, the first write suspends on the head
+  /// frame's reactor ack while a later write's bytes enqueue ahead of it,
+  /// reordering the body.
+  Future<void> _writeChain = Future<void>.value();
+
   @override
   int get statusCode => _statusCode;
 
@@ -659,16 +679,29 @@ final class _TailscaleHttpResponse implements TailscaleHttpResponse {
   Future<void> get done => _done.future;
 
   @override
-  Future<void> write(List<int> bytes) async {
-    if (_closed) throw StateError('HTTP response is closed.');
-    if (bytes.isEmpty) {
-      await _sendHead();
-      return;
+  Future<void> write(List<int> bytes) {
+    if (_closed) {
+      return Future<void>.error(StateError('HTTP response is closed.'));
     }
+    return _enqueueWrite(() => _writeInternal(bytes));
+  }
+
+  Future<void> _writeInternal(List<int> bytes) async {
     await _sendHead();
+    if (bytes.isEmpty) return;
     await _transport.write(
       bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
     );
+  }
+
+  /// Runs [op] after all previously enqueued writes complete. The internal
+  /// chain swallows errors so one failed write doesn't block later
+  /// writes/close (which surface their own failure); the returned future still
+  /// carries [op]'s error to its caller.
+  Future<void> _enqueueWrite(Future<void> Function() op) {
+    final result = _writeChain.then((_) => op());
+    _writeChain = result.then((_) {}, onError: (_, _) {});
+    return result;
   }
 
   @override
@@ -690,6 +723,10 @@ final class _TailscaleHttpResponse implements TailscaleHttpResponse {
     Object? closeError;
     StackTrace? closeStackTrace;
     try {
+      // Let any queued (possibly unawaited) writes flush before the half-close,
+      // so the body isn't truncated. The chain swallows their errors; a real
+      // transport failure resurfaces on closeWrite below.
+      await _writeChain;
       await _sendHead();
       await _transport.closeWrite();
     } catch (error, stackTrace) {

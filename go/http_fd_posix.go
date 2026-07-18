@@ -376,6 +376,14 @@ func runHttpFdRequest(
 // lingering. Cross-host isolation is inherent to http.Transport (its pool is
 // keyed by host:port), so a peer-A connection is never handed to a peer-B
 // request.
+//
+// INVARIANT: the *tsnet.Server pointer is a proxy for identity. This is correct
+// only because every identity change produces a *distinct* server — Start
+// always allocates a fresh tsnet.Server (lib.go) and routes an existing node
+// through stopLocked (reset) first, so the identity and the pointer change
+// together. If a live server were ever re-authenticated in place (same pointer,
+// new identity, without Start), this key would fail open and keep serving the
+// old identity's connections; such a path must also reset() this cache.
 type httpTransportCache struct {
 	mu        sync.Mutex
 	owner     any

@@ -111,6 +111,10 @@ func stopLocked() {
 	closeAllHttpBindings()
 	closeAllFunnelForwarders()
 	closeAllUdpBindings()
+	// Drop the cached HTTP client transport so no pooled connection (dialed and
+	// authenticated as this node's identity) survives into a later node with a
+	// different identity.
+	resetTailnetHTTPTransport()
 
 	// Stop the state watcher and drop cached identities together. StopWatch
 	// cancels the watcher's ctx and invalidates the cache under watchMu, and

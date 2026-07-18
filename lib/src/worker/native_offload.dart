@@ -21,15 +21,105 @@ part of 'worker.dart';
 //
 // The helper isolate needs no worker-style init: the Go node is process-global
 // state shared across all cgo calls, and `@Native` bindings resolve in any
-// isolate. Go bounds each operation by the timeout passed in, so abandoning the
-// Dart side (e.g. on a caller timeout) never leaks Go work beyond that bound.
+// isolate.
+//
+// Concurrency is capped (see [_offloadGate]). Each in-flight offloaded call
+// pins an OS thread inside its synchronous cgo call for the call's whole
+// duration, and the Dart VM's thread pool does not shrink back after a helper
+// isolate exits — so peak concurrency permanently raises the process thread
+// floor (~1 MiB reserved stack each). Without a cap, a burst (e.g. a connection
+// pool firing many dials) could exhaust threads/memory on the mobile targets
+// this binding supports. The cap replaces the implicit "one at a time" backstop
+// the old single-worker path gave us, while still allowing real parallelism.
+//
+// Note on timeouts: Go bounds an operation only when a positive timeout is
+// passed. `dial`/`ping` default to `null` → an *unbounded* Go context
+// (`context.Background()`), so an abandoned call (e.g. a caller-side
+// `.timeout()`) keeps its helper isolate/thread and Go goroutine until the
+// underlying operation gives up on its own. The concurrency cap is what keeps
+// those from accumulating without bound; callers wanting a hard per-call bound
+// should pass an explicit timeout. (funnel/serve forward is always bounded by
+// funnelUpTimeout on the Go side.)
+//
+// Ordering: offloaded calls are NOT ordered w.r.t. the worker's FIFO calls.
+// `forward` in particular no longer happens-before `clear`/`down`/`logout`. The
+// awaited handle path is safe — a published service's `close()`→`clear` is built
+// only after `forward` completes, so it has a happens-before and Go serializes
+// the config mutation. But an *un-awaited* `forward` racing a concurrent
+// `down()`/`logout()` can install a funnel forwarder after teardown swept it;
+// that requires un-awaited concurrent lifecycle misuse and is a known,
+// documented limitation (hardening the Go teardown race is a follow-up).
 // ---------------------------------------------------------------------------
 
-/// Runs [nativeOp] on a fresh short-lived isolate and returns its result.
-/// [nativeOp] must be a top-level/static call capturing only sendable state,
-/// and must return sendable data; thrown exceptions propagate to the caller
-/// with their type and fields intact.
-Future<T> _offloadNativeCall<T>(T Function() nativeOp) => Isolate.run(nativeOp);
+/// Caps concurrent helper isolates. Generous enough for real parallelism (a
+/// busy connection pool), bounded enough to stay safe on mobile where thread
+/// and memory limits are tight; excess calls queue.
+const int _maxConcurrentOffloads = 32;
+final _offloadGate = _Semaphore(_maxConcurrentOffloads);
+
+/// Runs [nativeOp] on a fresh short-lived isolate and returns its result,
+/// subject to the concurrency cap. [nativeOp] must be a top-level/static call
+/// capturing only sendable state and returning sendable data; thrown exceptions
+/// propagate to the caller with their type and fields intact.
+Future<T> _offloadNativeCall<T>(T Function() nativeOp) async {
+  await _offloadGate.acquire();
+  try {
+    return await Isolate.run(nativeOp);
+  } finally {
+    _offloadGate.release();
+  }
+}
+
+/// Minimal FIFO counting semaphore. Permits are released in acquire order, so
+/// queued offloaded calls run oldest-first.
+final class _Semaphore {
+  _Semaphore(this._permits);
+
+  int _permits;
+  final _waiters = Queue<Completer<void>>();
+
+  Future<void> acquire() {
+    if (_permits > 0) {
+      _permits--;
+      return Future<void>.value();
+    }
+    final waiter = Completer<void>();
+    _waiters.add(waiter);
+    return waiter.future;
+  }
+
+  void release() {
+    if (_waiters.isNotEmpty) {
+      _waiters.removeFirst().complete();
+    } else {
+      _permits++;
+    }
+  }
+}
+
+/// Test seam: runs [tasks] short tasks through a fresh [_Semaphore] with the
+/// given [permits] and returns the peak observed concurrency. Guards that the
+/// offload gate actually caps concurrency (F1 regression).
+@visibleForTesting
+Future<int> debugMaxSemaphoreConcurrency({
+  required int permits,
+  required int tasks,
+}) async {
+  final semaphore = _Semaphore(permits);
+  var active = 0;
+  var peak = 0;
+  Future<void> task() async {
+    await semaphore.acquire();
+    active++;
+    if (active > peak) peak = active;
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    active--;
+    semaphore.release();
+  }
+
+  await Future.wait(<Future<void>>[for (var i = 0; i < tasks; i++) task()]);
+  return peak;
+}
 
 /// Offloaded `tcp.dial`. Mirrors the shape the API layer expects.
 Future<({int fd, TailscaleEndpoint local, TailscaleEndpoint remote})>

@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'dart:io' as io;
 
 import 'package:ffi/ffi.dart';
+import 'package:meta/meta.dart';
 
 import '../api/diag.dart';
 import '../api/connection.dart';

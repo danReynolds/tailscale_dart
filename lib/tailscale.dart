@@ -217,8 +217,11 @@ class Tailscale implements TailscaleClient {
   // ─── Transport namespaces ───────────────────────────────────────────
   @override
   late final Tcp tcp = createTcp(
+    // Offloaded to a helper isolate: dial is long (a tailnet round trip) and
+    // contended (callers dial/status concurrently), so it must not block the
+    // worker. See lib/src/worker/native_offload.dart.
     dialFn: (host, port, timeout) =>
-        _worker.tcpDialConnection(host: host, port: port, timeout: timeout),
+        offloadTcpDial(host: host, port: port, timeout: timeout),
     listenFn: (tailnetPort, tailnetHost) =>
         _worker.tcpListenFd(tailnetPort: tailnetPort, tailnetHost: tailnetHost),
     closeListenerFn: (listenerId) =>
@@ -240,7 +243,7 @@ class Tailscale implements TailscaleClient {
   );
   @override
   late final Funnel funnel = createFunnel(
-    forwardFn: _worker.serveForward,
+    forwardFn: offloadServeForward,
     clearFn: _worker.serveClear,
   );
   @override
@@ -256,7 +259,7 @@ class Tailscale implements TailscaleClient {
   final Taildrop taildrop = Taildrop.instance;
   @override
   late final Serve serve = createServe(
-    forwardFn: _worker.serveForward,
+    forwardFn: offloadServeForward,
     clearFn: _worker.serveClear,
   );
   @override
@@ -283,8 +286,9 @@ class Tailscale implements TailscaleClient {
   // ─── Diagnostics ────────────────────────────────────────────────────
   @override
   late final Diag diag = createDiag(
+    // Offloaded to a helper isolate (long + contended, like dial).
     pingFn: (ip, timeout, type) =>
-        _worker.diagPing(ip: ip, timeout: timeout, pingType: type.name),
+        offloadDiagPing(ip: ip, timeout: timeout, pingType: type.name),
     metricsFn: _worker.diagMetrics,
     derpMapFn: _worker.diagDERPMap,
     checkUpdateFn: _worker.diagCheckUpdate,

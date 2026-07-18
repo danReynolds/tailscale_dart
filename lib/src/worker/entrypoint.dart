@@ -161,39 +161,6 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.httpCloseBinding),
             );
-          case _WorkerTcpDialFdCommand request:
-            final hostPtr = request.host.toNativeUtf8();
-            try {
-              final result =
-                  _callNativeJson(
-                        () => native.duneTcpDialFd(
-                          hostPtr,
-                          request.port,
-                          request.timeoutMillis,
-                        ),
-                        onError: TailscaleTcpException.new,
-                      )
-                      as Map<String, dynamic>;
-
-              final fd = result['fd'] as int?;
-              if (fd == null || fd < 0) {
-                throw const TailscaleTcpException(
-                  'Native runtime did not return a usable TCP fd.',
-                );
-              }
-
-              sendPort.send(
-                _WorkerTcpDialFdResponse(
-                  fd: fd,
-                  localAddress: result['localAddress'] as String? ?? '',
-                  localPort: result['localPort'] as int? ?? 0,
-                  remoteAddress: result['remoteAddress'] as String? ?? '',
-                  remotePort: result['remotePort'] as int? ?? 0,
-                ),
-              );
-            } finally {
-              calloc.free(hostPtr);
-            }
           case _WorkerTcpListenFdCommand request:
             final hostPtr = request.tailnetHost.toNativeUtf8();
             try {
@@ -322,27 +289,6 @@ void _workerEntrypoint(SendPort sendPort) {
                 ) ??
                 const [];
             sendPort.send(_WorkerTlsDomainsResponse(domains: domains));
-          case _WorkerDiagPingCommand request:
-            final ipPtr = request.ip.toNativeUtf8();
-            final pingTypePtr = request.pingType.toNativeUtf8();
-            try {
-              final result =
-                  _callNativeJson(
-                        () => native.duneDiagPing(
-                          ipPtr,
-                          request.timeoutMillis,
-                          pingTypePtr,
-                        ),
-                        onError: TailscaleDiagException.new,
-                      )
-                      as Map<String, dynamic>;
-              sendPort.send(
-                _WorkerDiagPingResponse(result: _parsePingResult(result)),
-              );
-            } finally {
-              calloc.free(ipPtr);
-              calloc.free(pingTypePtr);
-            }
           case _WorkerDiagMetricsCommand():
             final result =
                 _callNativeJson(
@@ -437,34 +383,6 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.exitNodeUseAuto),
             );
-          case _WorkerServeForwardCommand request:
-            final payloadPtr = request.payloadJson.toNativeUtf8();
-            try {
-              final result =
-                  _callNativeJson(
-                        () => native.duneServeForward(payloadPtr),
-                        onError:
-                            request.operation == _WorkerOperation.funnelForward
-                            ? TailscaleFunnelException.new
-                            : TailscaleServeException.new,
-                      )
-                      as Map<String, dynamic>;
-
-              sendPort.send(
-                _WorkerServePublicationResponse(
-                  operation: request.operation,
-                  url: Uri.parse(result['url'] as String? ?? ''),
-                  port: result['port'] as int? ?? 0,
-                  localAddress: result['localAddress'] as String? ?? '',
-                  localPort: result['localPort'] as int? ?? 0,
-                  path: result['path'] as String? ?? '/',
-                  https: result['https'] as bool? ?? true,
-                  funnel: result['funnel'] as bool? ?? false,
-                ),
-              );
-            } finally {
-              calloc.free(payloadPtr);
-            }
           case _WorkerServeClearCommand request:
             final payloadPtr = request.payloadJson.toNativeUtf8();
             try {

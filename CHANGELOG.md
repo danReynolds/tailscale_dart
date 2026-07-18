@@ -23,6 +23,16 @@ Follow-up correctness/robustness fixes from the audit backlog.
   an uncaught error; a socketpair-wrap failure no longer double-closes an fd;
   and a reactor wake can no longer write into a just-closed poller fd.
 
+**Performance:**
+
+- `tcp.dial`, `diag.ping`, and `serve`/`funnel.forward` no longer block the
+  shared worker isolate for their (potentially multi-second) duration. They run
+  on a short-lived helper isolate, so a slow dial or a funnel waiting on the
+  node to reach Running no longer stalls concurrent `status()`/`nodes()` calls
+  or delays state/peer events. (Measured: a concurrent `status()` during an 8 s
+  dial went from ~7.75 s to ~0 ms.) Fast local calls and awaited lifecycle
+  steps (`up`/`down`/`logout`) stay on the worker.
+
 ## 0.5.1
 
 A correctness and reliability release addressing a performance/correctness

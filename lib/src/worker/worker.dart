@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'dart:io' as io;
 
 import 'package:ffi/ffi.dart';
+import 'package:meta/meta.dart';
 
 import '../api/diag.dart';
 import '../api/connection.dart';
@@ -17,6 +18,7 @@ import '../status.dart';
 
 part 'messages.dart';
 part 'entrypoint.dart';
+part 'native_offload.dart';
 
 Future<String> _loadHostNetworkSnapshot() async {
   if (!io.Platform.isAndroid) {
@@ -242,32 +244,6 @@ final class Worker {
     );
   }
 
-  Future<({int fd, TailscaleEndpoint local, TailscaleEndpoint remote})>
-  tcpDialConnection({
-    required String host,
-    required int port,
-    Duration? timeout,
-  }) async {
-    final response = await _request<_WorkerTcpDialFdResponse>(
-      _WorkerTcpDialFdCommand(
-        host: host,
-        port: port,
-        timeoutMillis: timeout?.inMilliseconds ?? 0,
-      ),
-    );
-    return (
-      fd: response.fd,
-      local: TailscaleEndpoint(
-        address: response.localAddress,
-        port: response.localPort,
-      ),
-      remote: TailscaleEndpoint(
-        address: response.remoteAddress,
-        port: response.remotePort,
-      ),
-    );
-  }
-
   Future<({int listenerId, TailscaleEndpoint local})> tcpListenFd({
     required int tailnetPort,
     required String tailnetHost,
@@ -346,21 +322,6 @@ final class Worker {
     return response.domains;
   }
 
-  Future<PingResult> diagPing({
-    required String ip,
-    Duration? timeout,
-    required String pingType,
-  }) async {
-    final response = await _request<_WorkerDiagPingResponse>(
-      _WorkerDiagPingCommand(
-        ip: ip,
-        timeoutMillis: timeout?.inMilliseconds ?? 0,
-        pingType: pingType,
-      ),
-    );
-    return response.result;
-  }
-
   Future<String> diagMetrics() async {
     final response = await _request<_WorkerDiagMetricsResponse>(
       const _WorkerDiagMetricsCommand(),
@@ -419,47 +380,6 @@ final class Worker {
 
   Future<void> exitNodeUseAuto() async {
     await _request<_WorkerAckResponse>(const _WorkerExitNodeUseAutoCommand());
-  }
-
-  Future<
-    ({
-      Uri url,
-      int port,
-      String localAddress,
-      int localPort,
-      String path,
-      bool https,
-      bool funnel,
-    })
-  >
-  serveForward({
-    required int tailnetPort,
-    required int localPort,
-    required String localAddress,
-    required String path,
-    required bool https,
-    required bool funnel,
-  }) async {
-    final payload = jsonEncode({
-      'tailnetPort': tailnetPort,
-      'localPort': localPort,
-      'localAddress': localAddress,
-      'path': path,
-      'https': https,
-      'funnel': funnel,
-    });
-    final response = await _request<_WorkerServePublicationResponse>(
-      _WorkerServeForwardCommand(payloadJson: payload, funnel: funnel),
-    );
-    return (
-      url: response.url,
-      port: response.port,
-      localAddress: response.localAddress,
-      localPort: response.localPort,
-      path: response.path,
-      https: response.https,
-      funnel: response.funnel,
-    );
   }
 
   Future<void> serveClear({

@@ -4,7 +4,6 @@ enum _WorkerOperation {
   start,
   httpBind,
   httpCloseBinding,
-  tcpDialFd,
   tcpListenFd,
   tcpCloseFdListener,
   tlsListenFd,
@@ -12,7 +11,6 @@ enum _WorkerOperation {
   udpCloseFd,
   whois,
   tlsDomains,
-  diagPing,
   diagMetrics,
   diagDERPMap,
   diagCheckUpdate,
@@ -22,9 +20,7 @@ enum _WorkerOperation {
   prefsUpdate,
   exitNodeSuggest,
   exitNodeUseAuto,
-  serveForward,
   serveClear,
-  funnelForward,
   funnelClear,
   down,
   logout;
@@ -41,11 +37,6 @@ enum _WorkerOperation {
       statusCode: statusCode,
     ),
     httpCloseBinding => TailscaleHttpException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    tcpDialFd => TailscaleTcpException(
       message,
       code: code,
       statusCode: statusCode,
@@ -81,11 +72,6 @@ enum _WorkerOperation {
       statusCode: statusCode,
     ),
     tlsDomains => TailscaleTlsException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    diagPing => TailscaleDiagException(
       message,
       code: code,
       statusCode: statusCode,
@@ -135,17 +121,7 @@ enum _WorkerOperation {
       code: code,
       statusCode: statusCode,
     ),
-    serveForward => TailscaleServeException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
     serveClear => TailscaleServeException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    funnelForward => TailscaleFunnelException(
       message,
       code: code,
       statusCode: statusCode,
@@ -207,18 +183,6 @@ final class _WorkerHttpCloseBindingCommand extends _WorkerCommand {
   final int bindingId;
 }
 
-final class _WorkerTcpDialFdCommand extends _WorkerCommand {
-  const _WorkerTcpDialFdCommand({
-    required this.host,
-    required this.port,
-    required this.timeoutMillis,
-  }) : super(_WorkerOperation.tcpDialFd);
-
-  final String host;
-  final int port;
-  final int timeoutMillis;
-}
-
 final class _WorkerTcpListenFdCommand extends _WorkerCommand {
   const _WorkerTcpListenFdCommand({
     required this.tailnetPort,
@@ -271,18 +235,6 @@ final class _WorkerTlsDomainsCommand extends _WorkerCommand {
   const _WorkerTlsDomainsCommand() : super(_WorkerOperation.tlsDomains);
 }
 
-final class _WorkerDiagPingCommand extends _WorkerCommand {
-  const _WorkerDiagPingCommand({
-    required this.ip,
-    required this.timeoutMillis,
-    required this.pingType,
-  }) : super(_WorkerOperation.diagPing);
-
-  final String ip;
-  final int timeoutMillis;
-  final String pingType;
-}
-
 final class _WorkerDiagMetricsCommand extends _WorkerCommand {
   const _WorkerDiagMetricsCommand() : super(_WorkerOperation.diagMetrics);
 }
@@ -326,19 +278,6 @@ final class _WorkerExitNodeSuggestCommand extends _WorkerCommand {
 final class _WorkerExitNodeUseAutoCommand extends _WorkerCommand {
   const _WorkerExitNodeUseAutoCommand()
     : super(_WorkerOperation.exitNodeUseAuto);
-}
-
-final class _WorkerServeForwardCommand extends _WorkerCommand {
-  const _WorkerServeForwardCommand({
-    required this.payloadJson,
-    required bool funnel,
-  }) : super(
-         funnel
-             ? _WorkerOperation.funnelForward
-             : _WorkerOperation.serveForward,
-       );
-
-  final String payloadJson;
 }
 
 final class _WorkerServeClearCommand extends _WorkerCommand {
@@ -423,22 +362,6 @@ final class _WorkerHttpBindResponse extends _WorkerResponse {
   final int tailnetPort;
 }
 
-final class _WorkerTcpDialFdResponse extends _WorkerResponse {
-  const _WorkerTcpDialFdResponse({
-    required this.fd,
-    required this.localAddress,
-    required this.localPort,
-    required this.remoteAddress,
-    required this.remotePort,
-  }) : super(_WorkerOperation.tcpDialFd);
-
-  final int fd;
-  final String localAddress;
-  final int localPort;
-  final String remoteAddress;
-  final int remotePort;
-}
-
 final class _WorkerTcpListenFdResponse extends _WorkerResponse {
   const _WorkerTcpListenFdResponse({
     required this.listenerId,
@@ -518,34 +441,6 @@ final class _WorkerTlsDomainsResponse extends _WorkerResponse {
     : super(_WorkerOperation.tlsDomains);
 
   final List<String> domains;
-}
-
-final class _WorkerServePublicationResponse extends _WorkerResponse {
-  const _WorkerServePublicationResponse({
-    required _WorkerOperation operation,
-    required this.url,
-    required this.port,
-    required this.localAddress,
-    required this.localPort,
-    required this.path,
-    required this.https,
-    required this.funnel,
-  }) : super(operation);
-
-  final Uri url;
-  final int port;
-  final String localAddress;
-  final int localPort;
-  final String path;
-  final bool https;
-  final bool funnel;
-}
-
-final class _WorkerDiagPingResponse extends _WorkerResponse {
-  const _WorkerDiagPingResponse({required this.result})
-    : super(_WorkerOperation.diagPing);
-
-  final PingResult result;
 }
 
 final class _WorkerDiagMetricsResponse extends _WorkerResponse {

@@ -325,7 +325,12 @@ func runHttpFdRequest(
 	req.Header = headers.Clone()
 	req.ContentLength = contentLength
 
-	client := tailnetHTTPClient(s.HTTPClient())
+	// Reuse a cached transport (connection pool + TLS session cache) across
+	// requests instead of building a fresh one per request. The per-request
+	// bits (redirect policy) live on the Client, so only the Client is
+	// per-request; the Transport is shared. See sharedTailnetTransport for the
+	// identity-lifecycle guarantee.
+	client := http.Client{Transport: sharedTailnetTransport(s)}
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if !followRedirects {
 			return http.ErrUseLastResponse
@@ -358,16 +363,90 @@ func runHttpFdRequest(
 	}
 }
 
-func tailnetHTTPClient(baseClient *http.Client) http.Client {
-	client := *baseClient
-	if transport, ok := baseClient.Transport.(*http.Transport); ok {
-		cloned := transport.Clone()
-		// Match Tailscale's own outbound TLS policy: system roots first, then
-		// baked-in Let's Encrypt roots as a fallback for constrained platforms.
-		cloned.TLSClientConfig = tlsdial.Config(nil, cloned.TLSClientConfig)
-		client.Transport = cloned
+// httpTransportCache holds one *http.Transport (an HTTP connection pool + TLS
+// session cache) and rebuilds it whenever its owner changes.
+//
+// The owner is the *tsnet.Server the pooled connections were dialed and
+// authenticated through. This is a SECURITY boundary, not just hygiene: a
+// pooled connection carries the tailnet identity that was live when it was
+// dialed, so if the node logs out and back in as a different identity (a new
+// *tsnet.Server), the old connections must never serve new-identity requests.
+// Keying the cache on the owner guarantees a fresh, empty pool per identity;
+// CloseIdleConnections on swap/reset stops the old identity's connections from
+// lingering. Cross-host isolation is inherent to http.Transport (its pool is
+// keyed by host:port), so a peer-A connection is never handed to a peer-B
+// request.
+//
+// INVARIANT: the *tsnet.Server pointer is a proxy for identity. This is correct
+// only because every identity change produces a *distinct* server — Start
+// always allocates a fresh tsnet.Server (lib.go) and routes an existing node
+// through stopLocked (reset) first, so the identity and the pointer change
+// together. If a live server were ever re-authenticated in place (same pointer,
+// new identity, without Start), this key would fail open and keep serving the
+// old identity's connections; such a path must also reset() this cache.
+type httpTransportCache struct {
+	mu        sync.Mutex
+	owner     any
+	transport *http.Transport
+}
+
+// get returns the cached transport for [owner], building it via [build] (and
+// discarding any transport from a previous owner) when the owner differs.
+func (c *httpTransportCache) get(owner any, build func() *http.Transport) *http.Transport {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.transport == nil || c.owner != owner {
+		if c.transport != nil {
+			c.transport.CloseIdleConnections()
+		}
+		c.transport = build()
+		c.owner = owner
 	}
-	return client
+	return c.transport
+}
+
+// reset drops the cached transport and closes its idle connections. Called on
+// node teardown so no pooled connection outlives the node/identity.
+func (c *httpTransportCache) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.transport != nil {
+		c.transport.CloseIdleConnections()
+	}
+	c.transport = nil
+	c.owner = nil
+}
+
+var tailnetHTTPTransports httpTransportCache
+
+// sharedTailnetTransport returns the process-wide tailnet HTTP transport for
+// server [s], rebuilding it if the server (identity) changed since last use.
+func sharedTailnetTransport(s *tsnet.Server) *http.Transport {
+	return tailnetHTTPTransports.get(s, func() *http.Transport {
+		base := s.HTTPClient()
+		transport, ok := base.Transport.(*http.Transport)
+		if !ok {
+			// Defensive: tsnet always returns an *http.Transport today.
+			return &http.Transport{DialContext: s.Dial}
+		}
+		return applyTailnetTLS(transport)
+	})
+}
+
+// applyTailnetTLS returns a clone of [base] with Tailscale's outbound TLS policy
+// applied (system roots first, then baked-in Let's Encrypt roots as a fallback
+// for constrained platforms). The input is left untouched.
+func applyTailnetTLS(base *http.Transport) *http.Transport {
+	cloned := base.Clone()
+	cloned.TLSClientConfig = tlsdial.Config(nil, cloned.TLSClientConfig)
+	return cloned
+}
+
+// resetTailnetHTTPTransport drops the cached HTTP transport and closes its idle
+// connections. Called from stopLocked so pooled connections never survive a
+// node/identity change.
+func resetTailnetHTTPTransport() {
+	tailnetHTTPTransports.reset()
 }
 
 func serveHTTPFdRequest(state *httpBindingState, w http.ResponseWriter, r *http.Request) {

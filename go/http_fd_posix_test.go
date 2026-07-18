@@ -71,23 +71,19 @@ func TestFlushDartHTTPBody_FlushesEachChunk(t *testing.T) {
 func TestTailnetHTTPClientUsesTailscaleTLSVerifier(t *testing.T) {
 	baseTLS := &tls.Config{ServerName: "example.test"}
 	baseTransport := &http.Transport{TLSClientConfig: baseTLS}
-	client := tailnetHTTPClient(&http.Client{Transport: baseTransport})
+	transport := applyTailnetTLS(baseTransport)
 
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("transport type = %T, want *http.Transport", client.Transport)
-	}
 	if transport == baseTransport {
-		t.Fatal("tailnetHTTPClient reused the caller's transport")
+		t.Fatal("applyTailnetTLS reused the caller's transport")
 	}
 	if baseTransport.TLSClientConfig != baseTLS {
-		t.Fatal("tailnetHTTPClient replaced the caller's TLS config")
+		t.Fatal("applyTailnetTLS replaced the caller's TLS config")
 	}
 	if transport.TLSClientConfig == nil {
 		t.Fatal("TLSClientConfig was not configured")
 	}
 	if transport.TLSClientConfig == baseTLS {
-		t.Fatal("tailnetHTTPClient reused the caller's TLS config")
+		t.Fatal("applyTailnetTLS reused the caller's TLS config")
 	}
 	if transport.TLSClientConfig.ServerName != baseTLS.ServerName {
 		t.Fatalf(

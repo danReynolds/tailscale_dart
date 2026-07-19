@@ -1,6 +1,11 @@
-## Unreleased
+## 0.5.2
 
-Follow-up correctness/robustness fixes from the audit backlog.
+Continues the performance/correctness audit: the shared worker no longer stalls
+on long calls, the HTTP client reuses connections, plus further correctness and
+teardown-safety fixes.
+
+Behavior changes to note: inbound request header names are now lowercased, and
+outbound HTTP requests now reuse pooled connections.
 
 **Bug fixes:**
 
@@ -22,6 +27,10 @@ Follow-up correctness/robustness fixes from the audit backlog.
 - Hardened teardown races: a TCP accept that loses to `close()` no longer leaks
   an uncaught error; a socketpair-wrap failure no longer double-closes an fd;
   and a reactor wake can no longer write into a just-closed poller fd.
+- A `funnel.forward` racing a concurrent `down()`/`logout()` can no longer
+  strand a funnel forwarder whose listener has died. Forwarders are reaped when
+  their listener closes, so a later same-port `funnel.forward` can't attach to a
+  dead listener and silently fail to serve.
 
 **Performance:**
 
@@ -31,7 +40,13 @@ Follow-up correctness/robustness fixes from the audit backlog.
   node to reach Running no longer stalls concurrent `status()`/`nodes()` calls
   or delays state/peer events. (Measured: a concurrent `status()` during an 8 s
   dial went from ~7.75 s to ~0 ms.) Fast local calls and awaited lifecycle
-  steps (`up`/`down`/`logout`) stay on the worker.
+  steps (`up`/`down`/`logout`) stay on the worker. Concurrent offloaded calls
+  are capped so a burst can't spawn unbounded helper isolates.
+- The HTTP client (`http.client`) now reuses one connection pool across requests
+  to the same peer instead of building a fresh transport — a new connection plus
+  a full TLS handshake — on every request. The cached transport is keyed on the
+  node's identity and dropped on teardown, so a pooled connection never outlives
+  a logout/login as a different identity.
 
 ## 0.5.1
 

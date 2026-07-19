@@ -1,36 +1,64 @@
-## 0.5.2
+## 0.6.0
 
-Continues the performance/correctness audit: the shared worker no longer stalls
-on long calls, the HTTP client reuses connections, plus further correctness and
-teardown-safety fixes.
+The performance/correctness audit release. Crash-safety and leak fixes across
+the UDP/TCP/HTTP data planes, HTTP client/server correctness, funnel/serve
+robustness, a responsive control API (long native calls no longer stall it),
+HTTP connection reuse, and internal reactor fixes. Supersedes the
+never-published 0.5.1, so this carries every change since 0.5.0.
 
-Behavior changes to note: inbound request header names are now lowercased, and
-outbound HTTP requests now reuse pooled connections.
+Behavior changes to note: inbound `http.bind` request header names and
+`http.client` response header names are now lowercased (dart:io / shelf
+convention); outbound HTTP requests now reuse pooled connections.
 
 **Bug fixes:**
 
-- Inbound `http.bind` request headers are now exposed with lowercase names
-  (dart:io / shelf convention), so `request.headers['content-type']` works
-  instead of missing the canonical-cased key.
-- Outbound HTTP responses now carry a real `Content-Length: 0` (was dropped to
-  null) and a bare reason phrase (`OK`, not `200 OK`).
+- UDP datagrams larger than ~2 KiB no longer fail and tear down the binding on
+  macOS/iOS. The datagram socketpair now sizes its buffers like the TCP path, so
+  the advertised 60 KiB payload works on every platform.
+- Closing a UDP binding now reclaims the tailnet port, bridge goroutines, and OS
+  threads instead of leaking them; rebinding the same port immediately after
+  close works.
 - Outbound UDP datagram addresses are parsed as IP literals only, so a hostname
   can no longer trigger a blocking DNS lookup that stalls the datagram pump.
-- `up(timeout:)` now bounds the native start step too, not just the wait for a
-  stable state, so it can't block past its budget on a slow/wedged bring-up.
+- A remote peer resetting a TCP/HTTP connection can no longer crash a
+  root-zone Dart process via an unobserved transport error.
+- `http.client` responses now expose lowercase header names, so `response.body`
+  decodes UTF-8 (and other charsets) correctly instead of defaulting to latin1,
+  and case-insensitive header lookups work.
+- Inbound `http.bind` request headers are likewise exposed with lowercase names,
+  so `request.headers['content-type']` works instead of missing the
+  canonical-cased key.
+- Inbound `http.bind` streaming responses (SSE, long-poll) now flush each chunk
+  to the wire instead of stalling in the server's buffer until it fills.
+- Outbound HTTP responses now carry a real `Content-Length: 0` (was dropped to
+  null) and a bare reason phrase (`OK`, not `200 OK`).
+- `TailscaleHttpRequest.respond()` now closes the request/response transports
+  even if writing the body fails, instead of leaking the fds and Go handler
+  goroutine.
+- Unawaited sequential `TailscaleHttpResponse.write()` calls now reach the wire
+  in call order rather than racing and reordering the body.
+- Hardened the `http.bind` accept loop (crash-safe worker, dead-isolate
+  detection, and fd cleanup for accepts that race `close()`), matching the TCP
+  listener; a TCP accept that loses to `close()` no longer leaks an uncaught
+  error.
+- `funnel.forward` can no longer wedge the whole native API surface (including
+  `stop()`) when the node changes state mid-call.
 - Concurrent `serve.forward`/`serve.clear` calls no longer lose updates (the
   ServeConfig get-modify-set is serialized); concurrent same-port
   `funnel.forward` calls fold together instead of one failing with "address in
   use".
-- `exitNode.onCurrentChange` no longer emits a duplicate first value or a stale
-  value under rapid changes.
-- Hardened teardown races: a TCP accept that loses to `close()` no longer leaks
-  an uncaught error; a socketpair-wrap failure no longer double-closes an fd;
-  and a reactor wake can no longer write into a just-closed poller fd.
 - A `funnel.forward` racing a concurrent `down()`/`logout()` can no longer
-  strand a funnel forwarder whose listener has died. Forwarders are reaped when
+  strand a funnel forwarder whose listener has died; forwarders are reaped when
   their listener closes, so a later same-port `funnel.forward` can't attach to a
   dead listener and silently fail to serve.
+- The inbound-connection/request identity is dropped if the state watcher dies,
+  so a reassigned tailnet address is never misattributed to the previous node.
+- `up(timeout:)` now bounds the native start step too, not just the wait for a
+  stable state, so it can't block past its budget on a slow/wedged bring-up.
+- `exitNode.onCurrentChange` no longer emits a duplicate first value or a stale
+  value under rapid changes.
+- A socketpair-wrap failure no longer double-closes an fd, and a reactor wake
+  can no longer write into a just-closed poller fd.
 
 **Performance:**
 
@@ -47,39 +75,6 @@ outbound HTTP requests now reuse pooled connections.
   a full TLS handshake — on every request. The cached transport is keyed on the
   node's identity and dropped on teardown, so a pooled connection never outlives
   a logout/login as a different identity.
-
-## 0.5.1
-
-A correctness and reliability release addressing a performance/correctness
-audit.
-
-**Bug fixes:**
-
-- UDP datagrams larger than ~2 KiB no longer fail and tear down the binding on
-  macOS/iOS. The datagram socketpair now sizes its buffers like the TCP path, so
-  the advertised 60 KiB payload works on every platform.
-- Closing a UDP binding now reclaims the tailnet port, bridge goroutines, and OS
-  threads instead of leaking them; rebinding the same port immediately after
-  close works.
-- A remote peer resetting a TCP/HTTP connection can no longer crash a
-  root-zone Dart process via an unobserved transport error.
-- `http.client` responses now expose lowercase header names, so `response.body`
-  decodes UTF-8 (and other charsets) correctly instead of defaulting to latin1,
-  and case-insensitive header lookups work.
-- Inbound `http.bind` streaming responses (SSE, long-poll) now flush each chunk
-  to the wire instead of stalling in the server's buffer until it fills.
-- `TailscaleHttpRequest.respond()` now closes the request/response transports
-  even if writing the body fails, instead of leaking the fds and Go handler
-  goroutine.
-- Unawaited sequential `TailscaleHttpResponse.write()` calls now reach the wire
-  in call order rather than racing and reordering the body.
-- `funnel.forward` can no longer wedge the whole native API surface (including
-  `stop()`) when the node changes state mid-call.
-- The inbound-connection/request identity is dropped if the state watcher dies,
-  so a reassigned tailnet address is never misattributed to the previous node.
-- Hardened the `http.bind` accept loop (crash-safe worker, dead-isolate
-  detection, and fd cleanup for accepts that race `close()`), matching the TCP
-  listener.
 
 **Internal:**
 

@@ -421,6 +421,13 @@ var tailnetHTTPTransports httpTransportCache
 
 // sharedTailnetTransport returns the process-wide tailnet HTTP transport for
 // server [s], rebuilding it if the server (identity) changed since last use.
+//
+// The cache keys on the *tsnet.Server pointer as a proxy for identity. That is
+// sound only because Start always allocates a fresh *tsnet.Server per node (see
+// lib.go), and every identity change routes through Stop (which resets the
+// cache) or a Start that swaps srv (owner mismatch → rebuild). If a future path
+// ever re-authenticated a *live* server in place (same pointer, new identity),
+// this keying would fail open — reset the cache there too.
 func sharedTailnetTransport(s *tsnet.Server) *http.Transport {
 	return tailnetHTTPTransports.get(s, func() *http.Transport {
 		base := s.HTTPClient()

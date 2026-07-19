@@ -149,6 +149,20 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 		return servePublication{}, err
 	}
 
+	// The node may have been torn down (Stop/logout, e.g. from a concurrent
+	// down() — forward now runs on its own isolate and is no longer ordered
+	// against lifecycle calls) while ListenFunnel ran. If srv is no longer the
+	// server we listened on, our listener is already being closed by srv.Close;
+	// don't install a forwarder that would linger with a dead listener. The
+	// Serve self-heal below covers the residual check-to-install window.
+	mu.Lock()
+	stale := srv != s
+	mu.Unlock()
+	if stale {
+		_ = rawLn.Close()
+		return servePublication{}, errors.New("funnel forward raced node teardown")
+	}
+
 	funnelMu.Lock()
 	defer funnelMu.Unlock()
 	if existing := funnelForwarders[port]; existing != nil {
@@ -177,8 +191,38 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	funnelForwarders[port] = ff
 	go func() {
 		_ = ff.server.Serve(ln)
+		// Serve returned: the listener closed — normal teardown, or this
+		// forwarder raced a Stop and srv.Close killed its listener out from
+		// under it. Self-heal so a dead forwarder can't linger in the registry
+		// and have a later same-port forward attach a mount to a closed
+		// listener (which would silently fail to serve). Mirrors the HTTP
+		// binding's Serve goroutine.
+		reapFunnelForwarder(port, ff)
 	}()
 	return attachFunnelTargetLocked(ff, mount, target, domain, port), nil
+}
+
+// reapFunnelForwarder removes [ff] from the registry and untracks its
+// publications once its listener has closed. Idempotent and safe if a different
+// forwarder has since taken the port (it only reaps [ff] itself), so it
+// composes with closeAllFunnelForwarders.
+func reapFunnelForwarder(port uint16, ff *funnelForwarder) {
+	funnelMu.Lock()
+	if funnelForwarders[port] != ff {
+		funnelMu.Unlock()
+		return // already reaped, or the port was reclaimed by a newer forwarder
+	}
+	delete(funnelForwarders, port)
+	keys := make([]servePublicationKey, 0)
+	ff.mu.RLock()
+	for mount := range ff.targets {
+		keys = append(keys, servePublicationKey{host: ff.domain, port: port, path: mount})
+	}
+	ff.mu.RUnlock()
+	funnelMu.Unlock()
+
+	_ = ff.server.Close()
+	untrackFunnelPublications(keys)
 }
 
 // attachFunnelTargetLocked registers a mount on an existing forwarder and

@@ -32,14 +32,17 @@ part of 'worker.dart';
 // this binding supports. The cap replaces the implicit "one at a time" backstop
 // the old single-worker path gave us, while still allowing real parallelism.
 //
-// Note on timeouts: Go bounds an operation only when a positive timeout is
-// passed. `dial`/`ping` default to `null` → an *unbounded* Go context
-// (`context.Background()`), so an abandoned call (e.g. a caller-side
-// `.timeout()`) keeps its helper isolate/thread and Go goroutine until the
-// underlying operation gives up on its own. The concurrency cap is what keeps
-// those from accumulating without bound; callers wanting a hard per-call bound
-// should pass an explicit timeout. (funnel/serve forward is always bounded by
-// funnelUpTimeout on the Go side.)
+// Note on timeouts: none of these calls is guaranteed-bounded on the Go side.
+// `dial`/`ping` default to `null` → an *unbounded* `context.Background()`.
+// `funnel.forward`'s outer `s.Up` is bounded by funnelUpTimeout, but
+// `ListenFunnel` then calls `s.Up(context.Background())` internally, so a node
+// regressing to NeedsLogin can pin it until Stop; `serve.forward`'s LocalAPI
+// calls are likewise unbounded. So an abandoned call (a caller-side `.timeout()`
+// doesn't cancel it) keeps its helper isolate/thread and Go goroutine until the
+// underlying op gives up. The concurrency cap keeps those from accumulating
+// without bound (though a burst of stuck calls in one class can starve the
+// others through the shared gate); callers wanting a hard per-call bound should
+// pass an explicit timeout.
 //
 // Ordering: offloaded calls are NOT ordered w.r.t. the worker's FIFO calls.
 // `forward` in particular no longer happens-before `clear`/`down`/`logout`. The

@@ -54,8 +54,18 @@ func (b *udpBridge) close() { b.closeOnce.Do(b.closeFn) }
 
 func registerUdpBridge(dartFd int, bridge *udpBridge) {
 	udpFdBindingMu.Lock()
+	// The registry is keyed on the Dart-side fd, an OS number the kernel can
+	// reuse. If a prior binding at this fd was dropped without UdpCloseFd (e.g.
+	// the Dart finalizer closed the fd directly), a new socketpair can reuse the
+	// number. fd reuse proves the old Dart side is gone, so tear its bridge down
+	// rather than orphan it (both UdpCloseFd and closeAllUdpBindings key on fd,
+	// so an overwritten entry would leak two goroutines + the tailnet port).
+	displaced := udpFdBindingRegistry[dartFd]
 	udpFdBindingRegistry[dartFd] = bridge
 	udpFdBindingMu.Unlock()
+	if displaced != nil {
+		displaced.close()
+	}
 }
 
 func deregisterUdpBridge(dartFd int, bridge *udpBridge) {

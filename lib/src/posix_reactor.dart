@@ -193,7 +193,10 @@ final class _SharedFdReactorProxy {
 
   static bool isRegistrationRetryable(StateError error) =>
       error.message == 'fd reactor wake failed' ||
-      error.message == 'fd reactor register timed out';
+      error.message == 'fd reactor register timed out' ||
+      // Another transport's failed send can mark the shard closed between this
+      // transport's liveness check and its own send; retry onto a fresh shard.
+      error.message == 'fd reactor is stopped';
 }
 
 /// The native operations the reactor loop performs on its poller and fds.

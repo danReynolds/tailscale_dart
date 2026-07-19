@@ -234,6 +234,12 @@ func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err 
 		lc.OmitAuth = true
 	}
 
+	// Clear the serve-teardown guard so this fresh node can publish serve mounts
+	// again. (stopLocked already reset the HTTP transport cache; a late in-flight
+	// request can't repopulate it with the dead server — sharedTailnetTransport
+	// only caches for the currently-published srv.)
+	clearServeStopping()
+
 	// Commit to package state only after every allocation succeeded.
 	srv = newSrv
 	store = newStore

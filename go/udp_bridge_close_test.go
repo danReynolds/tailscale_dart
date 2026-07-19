@@ -5,11 +5,41 @@ package tailscale
 import (
 	"net"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+// TestRegisterUdpBridgeReapsDisplaced covers F5: the UDP registry is keyed on a
+// reusable OS fd number, so a new binding at a number a prior (finalizer-closed)
+// binding left behind must reap the orphan instead of silently overwriting it.
+func TestRegisterUdpBridgeReapsDisplaced(t *testing.T) {
+	const fd = 987654 // not a real fd; the registry is just a map keyed by int
+	var firstClosed atomic.Bool
+	first := &udpBridge{}
+	first.closeFn = func() {
+		firstClosed.Store(true)
+		deregisterUdpBridge(fd, first)
+	}
+	registerUdpBridge(fd, first)
+
+	second := &udpBridge{}
+	second.closeFn = func() { deregisterUdpBridge(fd, second) }
+	registerUdpBridge(fd, second) // fd reuse must reap `first`
+
+	if !firstClosed.Load() {
+		t.Fatal("registerUdpBridge must close a bridge displaced at the same fd")
+	}
+	udpFdBindingMu.Lock()
+	owned := udpFdBindingRegistry[fd] == second
+	udpFdBindingMu.Unlock()
+	if !owned {
+		t.Fatal("the new bridge must own the registry slot after displacing the old")
+	}
+	UdpCloseFd(fd)
+}
 
 // TestDgramRawReadBlocksAfterPeerClose documents why the UDP bridge needs an
 // explicit close: a raw blocking read on the Go end of a datagram socketpair is

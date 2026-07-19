@@ -422,15 +422,30 @@ var tailnetHTTPTransports httpTransportCache
 // sharedTailnetTransport returns the process-wide tailnet HTTP transport for
 // server [s], rebuilding it if the server (identity) changed since last use.
 func sharedTailnetTransport(s *tsnet.Server) *http.Transport {
+	// Only cache the transport for the currently-published server. A request
+	// whose captured `s` was already stopped/replaced (Stop reset the cache,
+	// then this late goroutine arrives) gets a one-off transport instead, so it
+	// can't repopulate the cache with a dead server that would then be retained
+	// (with its whole netstack/wireguard graph) until the next HTTP request.
+	mu.Lock()
+	live := srv == s
+	mu.Unlock()
+	if !live {
+		return buildTailnetTransport(s)
+	}
 	return tailnetHTTPTransports.get(s, func() *http.Transport {
-		base := s.HTTPClient()
-		transport, ok := base.Transport.(*http.Transport)
-		if !ok {
-			// Defensive: tsnet always returns an *http.Transport today.
-			return &http.Transport{DialContext: s.Dial}
-		}
-		return applyTailnetTLS(transport)
+		return buildTailnetTransport(s)
 	})
+}
+
+func buildTailnetTransport(s *tsnet.Server) *http.Transport {
+	base := s.HTTPClient()
+	transport, ok := base.Transport.(*http.Transport)
+	if !ok {
+		// Defensive: tsnet always returns an *http.Transport today.
+		return &http.Transport{DialContext: s.Dial}
+	}
+	return applyTailnetTLS(transport)
 }
 
 // applyTailnetTLS returns a clone of [base] with Tailscale's outbound TLS policy

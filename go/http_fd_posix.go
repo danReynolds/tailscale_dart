@@ -422,20 +422,31 @@ var tailnetHTTPTransports httpTransportCache
 // sharedTailnetTransport returns the process-wide tailnet HTTP transport for
 // server [s], rebuilding it if the server (identity) changed since last use.
 func sharedTailnetTransport(s *tsnet.Server) *http.Transport {
-	// Only cache the transport for the currently-published server. A request
-	// whose captured `s` was already stopped/replaced (Stop reset the cache,
-	// then this late goroutine arrives) gets a one-off transport instead, so it
-	// can't repopulate the cache with a dead server that would then be retained
-	// (with its whole netstack/wireguard graph) until the next HTTP request.
+	return cachedTransportForLiveServer(&tailnetHTTPTransports, s, buildTailnetTransport)
+}
+
+// cachedTransportForLiveServer returns [cache]'s transport for server [s] when s
+// is still the live srv, or a one-off (uncached) transport built by [build] when
+// it is not.
+//
+// The whole check-and-cache runs under mu so the liveness test is ATOMIC with
+// populating the cache. Sampling `srv == s` and then releasing mu before the
+// populate would leave a window: Stop() could run in it — resetTailnetHTTPTransport
+// empties the cache and srv goes nil — and the following populate would re-cache
+// the now-dead server, pinning its whole netstack/wireguard graph until the next
+// up()+request evicted it. Holding mu closes the window: Stop() (stopLocked) also
+// takes mu, so it cannot interleave, and srv cannot change while we hold mu. mu is
+// the outermost lock and the caller (runHttpFdRequest) holds none, so taking mu
+// here and cache.mu inside get() is the same mu -> cache.mu order stopLocked uses
+// (reset() under mu) — no inversion. mu is released the instant the transport is
+// chosen; it is never held across the request itself.
+func cachedTransportForLiveServer(cache *httpTransportCache, s *tsnet.Server, build func(*tsnet.Server) *http.Transport) *http.Transport {
 	mu.Lock()
-	live := srv == s
-	mu.Unlock()
-	if !live {
-		return buildTailnetTransport(s)
+	defer mu.Unlock()
+	if srv != s {
+		return build(s)
 	}
-	return tailnetHTTPTransports.get(s, func() *http.Transport {
-		return buildTailnetTransport(s)
-	})
+	return cache.get(s, func() *http.Transport { return build(s) })
 }
 
 func buildTailnetTransport(s *tsnet.Server) *http.Transport {

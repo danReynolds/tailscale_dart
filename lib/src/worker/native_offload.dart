@@ -32,17 +32,17 @@ part of 'worker.dart';
 // this binding supports. The cap replaces the implicit "one at a time" backstop
 // the old single-worker path gave us, while still allowing real parallelism.
 //
-// Note on timeouts: none of these calls is guaranteed-bounded on the Go side.
-// `dial`/`ping` default to `null` → an *unbounded* `context.Background()`.
+// Note on timeouts: every offloaded call is bounded on the Go side. A caller
+// timeout is honored as given; with none, Go applies defaultNativeCallTimeout
+// (30s) — `dial`/`ping` contexts and `serve.forward`'s LocalAPI round trips
+// are never unbounded. The one residual exception is inside tsnet itself:
 // `funnel.forward`'s outer `s.Up` is bounded by funnelUpTimeout, but
 // `ListenFunnel` then calls `s.Up(context.Background())` internally, so a node
-// regressing to NeedsLogin can pin it until Stop; `serve.forward`'s LocalAPI
-// calls are likewise unbounded. So an abandoned call (a caller-side `.timeout()`
-// doesn't cancel it) keeps its helper isolate/thread and Go goroutine until the
-// underlying op gives up. The concurrency cap keeps those from accumulating
-// without bound (though a burst of stuck calls in one class can starve the
-// others through the shared gate); callers wanting a hard per-call bound should
-// pass an explicit timeout.
+// regressing to NeedsLogin mid-call can pin that one step until Stop. An
+// abandoned call (a caller-side `.timeout()` doesn't cancel native work) still
+// holds its helper isolate/thread, gate permit, and Go goroutine — but now
+// only until the deadline fires, so stuck calls drain instead of accumulating
+// for the life of the process and the shared gate cannot wedge permanently.
 //
 // Ordering: offloaded calls are NOT ordered w.r.t. the worker's FIFO calls.
 // `forward` in particular no longer happens-before `clear`/`down`/`logout`. The

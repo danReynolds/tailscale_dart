@@ -3,7 +3,6 @@
 package tailscale
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -60,12 +59,9 @@ func TcpDialFd(host string, port int, timeout time.Duration) (*TcpFdConn, error)
 		return nil, errors.New("TcpDialFd called before Start")
 	}
 
-	ctx := context.Background()
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
+	// Bounded even with no caller timeout — see defaultNativeCallTimeout.
+	ctx, cancel := boundedCallCtx(timeout)
+	defer cancel()
 
 	tailConn, err := s.Dial(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {

@@ -28,6 +28,26 @@ var (
 	store *SQLiteStore // package-owned; tsnet.Server doesn't close its Store, so we do in stopLocked
 )
 
+// defaultNativeCallTimeout bounds native calls whose caller supplied no
+// timeout. NO native call runs on an unbounded context: each in-flight call
+// pins a helper isolate, an OS thread, an offload-gate permit, and a Go
+// goroutine (see lib/src/worker/native_offload.dart), and a Dart-side
+// `.timeout()` abandons the future without cancelling the native work — so an
+// unbounded call stuck on an unreachable peer would hold all of that until
+// process exit. 30s is generous for a worst-case DERP-relayed path while still
+// guaranteeing stuck calls drain. (ListenFunnel's internal Up remains
+// unbounded inside tsnet; its outer Up is bounded by funnelUpTimeout.)
+const defaultNativeCallTimeout = 30 * time.Second
+
+// boundedCallCtx returns a context bounded by [timeout] when positive, else by
+// defaultNativeCallTimeout. Callers must defer cancel.
+func boundedCallCtx(timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		timeout = defaultNativeCallTimeout
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
 // HasState checks if the state directory contains a valid machine key.
 func HasState(stateDir string) bool {
 	statePath := stateDir + "/state.db"

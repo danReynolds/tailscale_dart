@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/tsnet"
 )
 
 // TestRegisterUdpBridgeReapsDisplaced covers F5: the UDP registry is keyed on a
 // reusable OS fd number, so a new binding at a number a prior (finalizer-closed)
 // binding left behind must reap the orphan instead of silently overwriting it.
 func TestRegisterUdpBridgeReapsDisplaced(t *testing.T) {
+	withLiveServer(t, &tsnet.Server{})
 	const fd = 987654 // not a real fd; the registry is just a map keyed by int
 	var firstClosed atomic.Bool
 	first := &udpBridge{}
@@ -23,11 +25,15 @@ func TestRegisterUdpBridgeReapsDisplaced(t *testing.T) {
 		firstClosed.Store(true)
 		deregisterUdpBridge(fd, first)
 	}
-	registerUdpBridge(fd, first)
+	if !registerUdpBridge(liveGate(t), fd, first) {
+		t.Fatal("live registration must be accepted")
+	}
 
 	second := &udpBridge{}
 	second.closeFn = func() { deregisterUdpBridge(fd, second) }
-	registerUdpBridge(fd, second) // fd reuse must reap `first`
+	if !registerUdpBridge(liveGate(t), fd, second) { // fd reuse must reap `first`
+		t.Fatal("live registration must be accepted")
+	}
 
 	if !firstClosed.Load() {
 		t.Fatal("registerUdpBridge must close a bridge displaced at the same fd")
@@ -39,6 +45,27 @@ func TestRegisterUdpBridgeReapsDisplaced(t *testing.T) {
 		t.Fatal("the new bridge must own the registry slot after displacing the old")
 	}
 	UdpCloseFd(fd)
+}
+
+// TestRegisterUdpBridgeRefusesStaleGate: a registration whose lifecycle ended
+// must be refused without touching the registry or the displaced entry.
+func TestRegisterUdpBridgeRefusesStaleGate(t *testing.T) {
+	withLiveServer(t, &tsnet.Server{})
+	const fd = 987655
+	stale := liveGate(t)
+	nodeEpoch.Add(1)
+
+	bridge := &udpBridge{}
+	bridge.closeFn = func() { deregisterUdpBridge(fd, bridge) }
+	if registerUdpBridge(stale, fd, bridge) {
+		t.Fatal("a stale gate must be refused at the commit point")
+	}
+	udpFdBindingMu.Lock()
+	_, present := udpFdBindingRegistry[fd]
+	udpFdBindingMu.Unlock()
+	if present {
+		t.Fatal("a refused registration must not land in the registry")
+	}
 }
 
 // TestDgramRawReadBlocksAfterPeerClose documents why the UDP bridge needs an
@@ -109,8 +136,11 @@ func TestUdpBridgeCloseReleasesResources(t *testing.T) {
 	}
 	defer unix.Close(dartFd)
 
+	withLiveServer(t, &tsnet.Server{})
 	base := runtime.NumGoroutine()
-	runUdpFdBridge(dartFd, goConn, pc)
+	if err := runUdpFdBridge(liveGate(t), dartFd, goConn, pc); err != nil {
+		t.Fatalf("live bridge registration: %v", err)
+	}
 
 	udpFdBindingMu.Lock()
 	_, registered := udpFdBindingRegistry[dartFd]
@@ -138,6 +168,7 @@ func TestUdpBridgeCloseReleasesResources(t *testing.T) {
 
 // TestCloseAllUdpBindingsTearsDownEveryBridge covers the Stop() path.
 func TestCloseAllUdpBindingsTearsDownEveryBridge(t *testing.T) {
+	withLiveServer(t, &tsnet.Server{})
 	const n = 3
 	fds := make([]int, 0, n)
 	for i := 0; i < n; i++ {
@@ -150,7 +181,9 @@ func TestCloseAllUdpBindingsTearsDownEveryBridge(t *testing.T) {
 			t.Fatalf("socketpair conn: %v", err)
 		}
 		fds = append(fds, dartFd)
-		runUdpFdBridge(dartFd, goConn, pc)
+		if err := runUdpFdBridge(liveGate(t), dartFd, goConn, pc); err != nil {
+			t.Fatalf("live bridge registration: %v", err)
+		}
 	}
 	defer func() {
 		for _, fd := range fds {

@@ -91,14 +91,12 @@ func HttpBind(tailnetPort int) (*HttpBinding, error) {
 		return nil, fmt.Errorf("invalid tailnet port %d", tailnetPort)
 	}
 
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
+	gate, ok := acquireNodeGate()
+	if !ok {
 		return nil, fmt.Errorf("HttpBind called before Start")
 	}
 
-	ln, err := s.Listen("tcp", fmt.Sprintf(":%d", tailnetPort))
+	ln, err := gate.s.Listen("tcp", fmt.Sprintf(":%d", tailnetPort))
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on tsnet:%d: %v", tailnetPort, err)
 	}
@@ -122,15 +120,17 @@ func HttpBind(tailnetPort int) (*HttpBinding, error) {
 	}
 	state.server = newHTTPBindingServer(state)
 
-	mu.Lock()
-	if srv != s {
-		mu.Unlock()
+	httpBindingMu.Lock()
+	// Commit-point epoch check (see nodeGate), replacing the old pre-lock
+	// `srv != s` recheck that left a check-to-register window a concurrent
+	// Stop could slip through (the Serve-goroutine reap below self-healed it;
+	// now the registration is airtight and the reap covers only mid-lifecycle
+	// listener death).
+	if !gate.stillCurrent() {
+		httpBindingMu.Unlock()
 		ln.Close()
 		return nil, fmt.Errorf("HttpBind raced with Stop or server replacement")
 	}
-	mu.Unlock()
-
-	httpBindingMu.Lock()
 	httpBindingRegistry[id] = state
 	httpBindingMu.Unlock()
 
@@ -248,10 +248,8 @@ func HttpStart(
 		return nil, errors.New("HTTP URL is required")
 	}
 
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
+	gate, ok := acquireNodeGate()
+	if !ok {
 		return nil, errors.New("HttpStart called before Start")
 	}
 
@@ -279,7 +277,7 @@ func HttpStart(
 	}
 
 	go runHttpFdRequest(
-		s,
+		gate,
 		method,
 		rawURL,
 		headers,
@@ -297,7 +295,7 @@ func HttpStart(
 }
 
 func runHttpFdRequest(
-	s *tsnet.Server,
+	gate nodeGate,
 	method string,
 	rawURL string,
 	headers http.Header,
@@ -330,7 +328,7 @@ func runHttpFdRequest(
 	// bits (redirect policy) live on the Client, so only the Client is
 	// per-request; the Transport is shared. See sharedTailnetTransport for the
 	// identity-lifecycle guarantee.
-	client := http.Client{Transport: sharedTailnetTransport(s)}
+	client := http.Client{Transport: sharedTailnetTransport(gate)}
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if !followRedirects {
 			return http.ErrUseLastResponse
@@ -405,6 +403,30 @@ func (c *httpTransportCache) get(owner any, build func() *http.Transport) *http.
 	return c.transport
 }
 
+// getCurrent is get with a commit-point epoch check (see nodeGate): when the
+// gated lifecycle is no longer live, it returns a one-off transport WITHOUT
+// touching the cache, so a request racing Stop can't repopulate the cache with
+// a dead server behind resetTailnetHTTPTransport's sweep. The check runs under
+// c.mu — the same lock the reset sweeps under — so there is no check-to-cache
+// window; and because it is a lock-free atomic load it needs no global mu,
+// keeping mu off the per-request hot path entirely.
+func (c *httpTransportCache) getCurrent(gate nodeGate, build func() *http.Transport) *http.Transport {
+	c.mu.Lock()
+	if !gate.stillCurrent() {
+		c.mu.Unlock()
+		return build()
+	}
+	defer c.mu.Unlock()
+	if c.transport == nil || c.owner != any(gate.s) {
+		if c.transport != nil {
+			c.transport.CloseIdleConnections()
+		}
+		c.transport = build()
+		c.owner = gate.s
+	}
+	return c.transport
+}
+
 // reset drops the cached transport and closes its idle connections. Called on
 // node teardown so no pooled connection outlives the node/identity.
 func (c *httpTransportCache) reset() {
@@ -420,33 +442,16 @@ func (c *httpTransportCache) reset() {
 var tailnetHTTPTransports httpTransportCache
 
 // sharedTailnetTransport returns the process-wide tailnet HTTP transport for
-// server [s], rebuilding it if the server (identity) changed since last use.
-func sharedTailnetTransport(s *tsnet.Server) *http.Transport {
-	return cachedTransportForLiveServer(&tailnetHTTPTransports, s, buildTailnetTransport)
-}
-
-// cachedTransportForLiveServer returns [cache]'s transport for server [s] when s
-// is still the live srv, or a one-off (uncached) transport built by [build] when
-// it is not.
-//
-// The whole check-and-cache runs under mu so the liveness test is ATOMIC with
-// populating the cache. Sampling `srv == s` and then releasing mu before the
-// populate would leave a window: Stop() could run in it — resetTailnetHTTPTransport
-// empties the cache and srv goes nil — and the following populate would re-cache
-// the now-dead server, pinning its whole netstack/wireguard graph until the next
-// up()+request evicted it. Holding mu closes the window: Stop() (stopLocked) also
-// takes mu, so it cannot interleave, and srv cannot change while we hold mu. mu is
-// the outermost lock and the caller (runHttpFdRequest) holds none, so taking mu
-// here and cache.mu inside get() is the same mu -> cache.mu order stopLocked uses
-// (reset() under mu) — no inversion. mu is released the instant the transport is
-// chosen; it is never held across the request itself.
-func cachedTransportForLiveServer(cache *httpTransportCache, s *tsnet.Server, build func(*tsnet.Server) *http.Transport) *http.Transport {
-	mu.Lock()
-	defer mu.Unlock()
-	if srv != s {
-		return build(s)
-	}
-	return cache.get(s, func() *http.Transport { return build(s) })
+// the gated server, rebuilding it if the server (identity) changed since last
+// use. A request whose lifecycle already ended (Stop raced the request) gets a
+// one-off transport instead — see getCurrent, which makes the liveness check
+// atomic with the cache populate so a dead server can never be re-cached (and
+// retained, with its whole netstack/wireguard graph) behind
+// resetTailnetHTTPTransport's teardown sweep.
+func sharedTailnetTransport(gate nodeGate) *http.Transport {
+	return tailnetHTTPTransports.getCurrent(gate, func() *http.Transport {
+		return buildTailnetTransport(gate.s)
+	})
 }
 
 func buildTailnetTransport(s *tsnet.Server) *http.Transport {

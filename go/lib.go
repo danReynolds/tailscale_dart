@@ -102,6 +102,11 @@ func Stop() {
 
 // stopLocked tears down the server and all listeners. Caller must hold mu.
 func stopLocked() {
+	// Enter a new lifecycle BEFORE any registry sweep. Every in-flight op
+	// gated on the old epoch (see nodeGate) is refused at its commit point
+	// from here on, so nothing can repopulate a registry behind its sweep.
+	nodeEpoch.Add(1)
+
 	var lc *local.Client
 	if srv != nil {
 		lc, _ = srv.LocalClient()
@@ -234,13 +239,10 @@ func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err 
 		lc.OmitAuth = true
 	}
 
-	// Clear the serve-teardown guard so this fresh node can publish serve mounts
-	// again. (stopLocked already reset the HTTP transport cache; a late in-flight
-	// request can't repopulate it with the dead server — sharedTailnetTransport
-	// only caches for the currently-published srv.)
-	clearServeStopping()
-
-	// Commit to package state only after every allocation succeeded.
+	// Commit to package state only after every allocation succeeded. No
+	// per-subsystem re-arming is needed: ops gate on the node epoch (bumped by
+	// stopLocked), and a gate acquired after this point is current by
+	// construction.
 	srv = newSrv
 	store = newStore
 	return nil

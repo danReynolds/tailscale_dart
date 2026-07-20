@@ -78,12 +78,11 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 		return servePublication{}, err
 	}
 
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
+	gate, ok := acquireNodeGate()
+	if !ok {
 		return servePublication{}, errors.New("FunnelForward called before Start")
 	}
+	s := gate.s
 
 	upCtx, cancel := context.WithTimeout(context.Background(), funnelUpTimeout)
 	st, err := s.Up(upCtx)
@@ -110,8 +109,14 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	}
 
 	// Fast path: an existing forwarder for this port just gains a mount. No
-	// ListenFunnel here, so holding funnelMu is safe.
+	// ListenFunnel here, so holding funnelMu is safe. The epoch check keeps a
+	// stale op (its node already torn down) from attaching an old-lifecycle
+	// mount to a NEW node's forwarder at the same port.
 	funnelMu.Lock()
+	if !gate.stillCurrent() {
+		funnelMu.Unlock()
+		return servePublication{}, errors.New("funnel forward raced node teardown")
+	}
 	if ff := funnelForwarders[port]; ff != nil {
 		if ff.domain != domain {
 			funnelMu.Unlock()
@@ -134,8 +139,13 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 		// A concurrent call for this same port may have already bound the funnel
 		// listener, so ours fails with "address in use". If a forwarder now
 		// exists, fold into it rather than surfacing a spurious error to the
-		// caller (a plain retry would hit the fast path anyway).
+		// caller (a plain retry would hit the fast path anyway). Same epoch
+		// check as the fast path: never fold into a later lifecycle's forwarder.
 		funnelMu.Lock()
+		if !gate.stillCurrent() {
+			funnelMu.Unlock()
+			return servePublication{}, errors.New("funnel forward raced node teardown")
+		}
 		existing := funnelForwarders[port]
 		if existing != nil && existing.domain == domain {
 			pub := attachFunnelTargetLocked(existing, mount, target, domain, port)
@@ -149,22 +159,21 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 		return servePublication{}, err
 	}
 
+	funnelMu.Lock()
+	defer funnelMu.Unlock()
 	// The node may have been torn down (Stop/logout, e.g. from a concurrent
-	// down() — forward now runs on its own isolate and is no longer ordered
-	// against lifecycle calls) while ListenFunnel ran. If srv is no longer the
-	// server we listened on, our listener is already being closed by srv.Close;
-	// don't install a forwarder that would linger with a dead listener. The
-	// Serve self-heal below covers the residual check-to-install window.
-	mu.Lock()
-	stale := srv != s
-	mu.Unlock()
-	if stale {
+	// down() — forward runs on its own isolate and is not ordered against
+	// lifecycle calls) while ListenFunnel ran; our listener is then already
+	// being closed by srv.Close. Refuse to install a forwarder that would
+	// linger with a dead listener. Checked INSIDE funnelMu — the same lock
+	// closeAllFunnelForwarders sweeps under — so the install either commits
+	// before the sweep (and is swept) or observes the bumped epoch here;
+	// there is no check-to-install window. (The Serve-goroutine reap below
+	// remains as the self-heal for mid-lifecycle listener death.)
+	if !gate.stillCurrent() {
 		_ = rawLn.Close()
 		return servePublication{}, errors.New("funnel forward raced node teardown")
 	}
-
-	funnelMu.Lock()
-	defer funnelMu.Unlock()
 	if existing := funnelForwarders[port]; existing != nil {
 		// Lost the create race; drop our listener and fold into the winner.
 		_ = rawLn.Close()

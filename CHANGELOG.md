@@ -51,6 +51,9 @@ convention); outbound HTTP requests now reuse pooled connections.
   strand a funnel forwarder whose listener has died; forwarders are reaped when
   their listener closes, so a later same-port `funnel.forward` can't attach to a
   dead listener and silently fail to serve.
+- A `serve.forward` racing a concurrent `down()`/`logout()` can no longer persist
+  a serve mount that survives the stop and silently re-exposes the service on the
+  next `up()`; a forward that arrives once teardown has begun is now refused.
 - The inbound-connection/request identity is dropped if the state watcher dies,
   so a reassigned tailnet address is never misattributed to the previous node.
 - `up(timeout:)` now bounds the native start step too, not just the wait for a

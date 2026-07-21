@@ -48,10 +48,11 @@ part of 'worker.dart';
 // `forward` in particular no longer happens-before `clear`/`down`/`logout`. The
 // awaited handle path is safe — a published service's `close()`→`clear` is built
 // only after `forward` completes, so it has a happens-before and Go serializes
-// the config mutation. But an *un-awaited* `forward` racing a concurrent
-// `down()`/`logout()` can install a funnel forwarder after teardown swept it;
-// that requires un-awaited concurrent lifecycle misuse and is a known,
-// documented limitation (hardening the Go teardown race is a follow-up).
+// the config mutation. An *un-awaited* `forward` racing a concurrent
+// `down()`/`logout()` is refused by the Go layer's node-epoch commit gate
+// (see doc/concurrency.md): the forward fails with a "raced node teardown"
+// error instead of installing state behind the teardown sweep. So concurrent
+// lifecycle misuse degrades to a clean error, never a stale mount.
 // ---------------------------------------------------------------------------
 
 /// Caps concurrent helper isolates. Generous enough for real parallelism (a

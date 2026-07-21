@@ -159,17 +159,26 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 		return servePublication{}, err
 	}
 
+	return installFunnelForwarder(gate, port, domain, rawLn, mount, target)
+}
+
+// installFunnelForwarder is startFunnelForward's commit point: it installs a
+// forwarder for [rawLn] in the registry (or folds into a concurrently-created
+// one) and attaches the first mount. Extracted so the teardown-race harness
+// can drive it with a plain net.Listener.
+//
+// The node may have been torn down (Stop/logout, e.g. from a concurrent
+// down() — forward runs on its own isolate and is not ordered against
+// lifecycle calls) while ListenFunnel ran; our listener is then already being
+// closed by srv.Close. Refuse to install a forwarder that would linger with a
+// dead listener. Checked INSIDE funnelMu — the same lock
+// closeAllFunnelForwarders sweeps under — so the install either commits
+// before the sweep (and is swept) or observes the bumped epoch here; there is
+// no check-to-install window. (The Serve-goroutine reap remains as the
+// self-heal for mid-lifecycle listener death.)
+func installFunnelForwarder(gate nodeGate, port uint16, domain string, rawLn net.Listener, mount string, target funnelTarget) (servePublication, error) {
 	funnelMu.Lock()
 	defer funnelMu.Unlock()
-	// The node may have been torn down (Stop/logout, e.g. from a concurrent
-	// down() — forward runs on its own isolate and is not ordered against
-	// lifecycle calls) while ListenFunnel ran; our listener is then already
-	// being closed by srv.Close. Refuse to install a forwarder that would
-	// linger with a dead listener. Checked INSIDE funnelMu — the same lock
-	// closeAllFunnelForwarders sweeps under — so the install either commits
-	// before the sweep (and is swept) or observes the bumped epoch here;
-	// there is no check-to-install window. (The Serve-goroutine reap below
-	// remains as the self-heal for mid-lifecycle listener death.)
 	if !gate.stillCurrent() {
 		_ = rawLn.Close()
 		return servePublication{}, errors.New("funnel forward raced node teardown")

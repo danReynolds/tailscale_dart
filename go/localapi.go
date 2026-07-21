@@ -493,6 +493,15 @@ func ServeForward(payloadJSON string) string {
 	if err != nil {
 		return jsonError(err)
 	}
+	return serveForwardLocked(gate, lc, payload)
+}
+
+// serveForwardLocked is the Serve path's commit section: the ServeConfig
+// get-modify-set plus publication tracking, serialized under serveConfigMu.
+// Extracted so the teardown-race harness can drive the epoch refusal directly
+// (the gate check precedes every LocalAPI use, so a stale gate never touches
+// [lc]).
+func serveForwardLocked(gate nodeGate, lc *local.Client, payload serveForwardPayload) string {
 	serveConfigMu.Lock()
 	defer serveConfigMu.Unlock()
 	if !gate.stillCurrent() {

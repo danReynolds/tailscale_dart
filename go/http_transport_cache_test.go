@@ -165,10 +165,13 @@ func TestGetCurrent_CachesForLiveGate(t *testing.T) {
 	build := func() *http.Transport { builds++; return &http.Transport{} }
 
 	gate := liveGate(t)
-	first := cache.getCurrent(gate, build)
-	second := cache.getCurrent(gate, build)
+	first, oneOff1 := cache.getCurrent(gate, build)
+	second, oneOff2 := cache.getCurrent(gate, build)
 	if first == nil || first != second {
 		t.Fatalf("live gate must cache and reuse one transport (builds=%d)", builds)
+	}
+	if oneOff1 || oneOff2 {
+		t.Fatal("live-gate transports must not be reported one-off")
 	}
 	if builds != 1 {
 		t.Fatalf("expected exactly one build for repeated live requests, got %d", builds)
@@ -193,8 +196,12 @@ func TestGetCurrent_OneOffForStaleGate(t *testing.T) {
 	cache.reset()    // stopLocked's sweep
 
 	// Stale request against the empty cache: one-off, cache stays empty.
-	if tr := cache.getCurrent(staleGate, func() *http.Transport { return &http.Transport{} }); tr == nil {
+	tr, oneOff := cache.getCurrent(staleGate, func() *http.Transport { return &http.Transport{} })
+	if tr == nil {
 		t.Fatal("stale gate must still get a one-off transport")
+	}
+	if !oneOff {
+		t.Fatal("a stale-gate transport must be reported one-off so the caller closes its idle conns")
 	}
 	if owner := cacheOwner(&cache); owner != nil {
 		t.Fatalf("stale gate must not repopulate the cache; owner=%v", owner)
@@ -204,8 +211,8 @@ func TestGetCurrent_OneOffForStaleGate(t *testing.T) {
 	serverB := &tsnet.Server{}
 	withLiveServer(t, serverB)
 	fresh := liveGate(t)
-	cached := cache.getCurrent(fresh, func() *http.Transport { return &http.Transport{} })
-	if tr := cache.getCurrent(staleGate, func() *http.Transport { return &http.Transport{} }); tr == cached {
+	cached, _ := cache.getCurrent(fresh, func() *http.Transport { return &http.Transport{} })
+	if tr, _ := cache.getCurrent(staleGate, func() *http.Transport { return &http.Transport{} }); tr == cached {
 		t.Fatal("stale gate must not be served the new lifecycle's cached transport")
 	}
 	if owner := cacheOwner(&cache); owner != any(serverB) {

@@ -82,10 +82,14 @@ Rules that keep it acyclic:
   lock. (`nodeEpoch` reads exist so commit-point checks never need to.)
 - Registry locks never nest with each other; `stopLocked` takes them one at a
   time.
-- Blocking tsnet calls (`ListenFunnel`, `Up`, dials) run with **no** package
-  lock held; results are committed afterward under the registry lock with a
-  gate check. Never hold `mu` or a registry lock across a tsnet call that can
-  block on the network or the IPN bus.
+- Calls that can block on the tailnet or the IPN bus (`ListenFunnel`, `Up`,
+  dials) run with **no** package lock held; results are committed afterward
+  under the registry lock with a gate check. One deliberate exception:
+  `serveConfigMu` is held across *loopback LocalAPI* round trips
+  (`GetServeConfig`/`SetServeConfig`/`StatusWithoutPeers`) — serializing that
+  get-modify-set is the lock's entire purpose, and those are local-socket
+  calls, not tailnet waits. Never extend that exception to `mu` or to calls
+  that wait on the network.
 - `registerUdpBridge` closes a displaced bridge only after releasing
   `udpFdBindingMu` (its close callback re-enters the registry to deregister —
   Go mutexes are not reentrant).
@@ -93,5 +97,7 @@ Rules that keep it acyclic:
 ## Diagnostics
 
 `debugNodeState()` (`go/node_gate.go`) reports the epoch and live counts for
-every registry — the first thing to check when hunting a leak across up/down
-cycles.
+every registry. Today it is test-facing only (not exported over FFI); when
+hunting a leak across up/down cycles, call it from a Go test or a temporary
+probe. Wiring it into a user-reachable diagnostics surface is planned 0.7
+tail work.

@@ -5,10 +5,13 @@ package tailscale
 import (
 	"net"
 	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/client/local"
 	"tailscale.com/tsnet"
 )
 
@@ -151,7 +154,7 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 		{
 			name: "http-transport-cache",
 			register: func(t *testing.T, gate nodeGate) bool {
-				tr := tailnetHTTPTransports.getCurrent(gate, newFakeTransport)
+				tr, oneOff := tailnetHTTPTransports.getCurrent(gate, newFakeTransport)
 				if tr == nil {
 					t.Fatal("getCurrent must always return a transport")
 				}
@@ -161,6 +164,9 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 				tailnetHTTPTransports.mu.Lock()
 				accepted := tailnetHTTPTransports.owner == any(gate.s)
 				tailnetHTTPTransports.mu.Unlock()
+				if accepted && oneOff {
+					t.Fatal("an accepted registration must not be reported one-off")
+				}
 				return accepted
 			},
 			count: func() int {
@@ -172,6 +178,40 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 				return 0
 			},
 			sweep: func() { tailnetHTTPTransports.reset() },
+		},
+		{
+			name: "funnel-forwarder",
+			register: func(t *testing.T, gate nodeGate) bool {
+				ln, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatalf("listen: %v", err)
+				}
+				_, err = installFunnelForwarder(gate, 8443, "harness.ts.net", ln, "/", funnelTarget{})
+				// installFunnelForwarder closed ln on refusal.
+				return err == nil
+			},
+			count: func() int {
+				funnelMu.Lock()
+				defer funnelMu.Unlock()
+				return len(funnelForwarders)
+			},
+			sweep: closeAllFunnelForwarders,
+		},
+		{
+			name: "http-binding",
+			register: func(t *testing.T, gate nodeGate) bool {
+				state := &httpBindingState{
+					requests: make(chan *HttpIncomingRequest, 1),
+					done:     make(chan struct{}),
+				}
+				return registerHttpBinding(gate, atomic.AddInt64(&httpBindingID, 1), state)
+			},
+			count: func() int {
+				httpBindingMu.Lock()
+				defer httpBindingMu.Unlock()
+				return len(httpBindingRegistry)
+			},
+			sweep: closeAllHttpBindings,
 		},
 	}
 
@@ -211,11 +251,12 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 	}
 }
 
-// TestCommitGates_RaceWithTeardown stresses register-vs-teardown under -race
-// with TWO distinct lifecycles' servers, so a commit that wrongly survives a
-// sweep is observable (a single-identity stress can't tell a leaked entry from
-// a correctly-cached one). Invariant: after the final sweep with no
-// registrations in flight, every registry is empty.
+// TestCommitGates_RaceWithTeardown stresses register-vs-teardown under -race.
+// The invariant is checked IN the teardown loop, at the only moment it is
+// decidable: right after bump+sweep while srv is still nil, any cache entry is
+// a stale-gate commit that landed behind the sweep (no fresh gate can exist).
+// Two distinct lifecycles' servers alternate so pointer confusion would also
+// be observable.
 func TestCommitGates_RaceWithTeardown(t *testing.T) {
 	serverA := &tsnet.Server{}
 	serverB := &tsnet.Server{}
@@ -223,10 +264,10 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
+	var leaks atomic.Int64
 
-	// Registrars: acquire a gate and try to commit a transport-cache entry
-	// (the cheapest real commit path — no sockets needed).
-	for i := 0; i < 4; i++ {
+	// Fresh-gate registrars: acquire a gate per commit, the well-behaved path.
+	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -237,36 +278,85 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 				default:
 				}
 				if gate, ok := acquireNodeGate(); ok {
-					_ = tailnetHTTPTransports.getCurrent(gate, newFakeTransport)
+					_, _ = tailnetHTTPTransports.getCurrent(gate, newFakeTransport)
+				}
+			}
+		}()
+	}
+	// Gate-holder registrars: reuse one gate across a burst of commits, so
+	// every teardown strands them mid-burst with a stale gate — the actual
+	// adversary the epoch refuses. (Fresh-gate registrars alone are stale only
+	// in the instruction-scale window between acquire and commit, which a
+	// broken guard survives for the whole run.)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				gate, ok := acquireNodeGate()
+				if !ok {
+					continue
+				}
+				for j := 0; j < 512; j++ {
+					_, _ = tailnetHTTPTransports.getCurrent(gate, newFakeTransport)
 				}
 			}
 		}()
 	}
 
-	// Teardown/Start loop: bump, sweep, alternate the live server.
+	// Teardown/Start loop: bump, CHECK owners, sweep, CHECK empty, alternate
+	// the live server. Two discriminating assertions (an end-state check after
+	// all writers stop is vacuous — reset() trivially empties an uncontended
+	// cache):
+	//
+	//  1. Pre-sweep, the cache may only be owned by the lifecycle being
+	//     retired: a stale gate from an EARLIER lifecycle that committed during
+	//     this one leaves the other server as owner, observable for the whole
+	//     lifecycle, not just a race window.
+	//  2. Post-sweep, while srv is still nil, no registrar can acquire a fresh
+	//     gate, so ANY entry is a stale-gate commit that landed behind the
+	//     sweep — the exact race the epoch closes.
+	//
+	// With stillCurrent disabled the gate-holder registrars trip these within
+	// a few iterations; with it working, never.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		current := serverA
 		next := serverB
 		for i := 0; i < 400; i++ {
 			mu.Lock()
 			nodeEpoch.Add(1)
 			srv = nil
 			mu.Unlock()
+			tailnetHTTPTransports.mu.Lock()
+			if o := tailnetHTTPTransports.owner; o != nil && o != any(current) {
+				leaks.Add(1) // cross-lifecycle commit (check 1)
+			}
+			tailnetHTTPTransports.mu.Unlock()
 			tailnetHTTPTransports.reset()
+			tailnetHTTPTransports.mu.Lock()
+			if tailnetHTTPTransports.transport != nil {
+				leaks.Add(1) // landed behind the sweep (check 2)
+			}
+			tailnetHTTPTransports.mu.Unlock()
 			mu.Lock()
 			srv = next
 			mu.Unlock()
-			if next == serverA {
-				next = serverB
-			} else {
-				next = serverA
-			}
+			current, next = next, current
 		}
 		close(stop)
 	}()
 
 	wg.Wait()
+	if got := leaks.Load(); got != 0 {
+		t.Fatalf("%d stale-gate commits landed behind a teardown sweep", got)
+	}
 
 	// Final teardown: after this, nothing may remain cached.
 	mu.Lock()
@@ -281,6 +371,34 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 	tailnetHTTPTransports.mu.Unlock()
 	if leaked {
 		t.Fatalf("transport cache must be empty after the final sweep; owner=%v", owner)
+	}
+}
+
+// TestServeForwardLocked_RefusesStaleGate covers the Serve row of the commit-
+// gate matrix (the F2 re-exposure class): serveForwardLocked's gate check
+// precedes every LocalAPI call, so a stale gate must refuse before touching
+// the client — driven here with a client aimed at a nonexistent socket, which
+// fails loudly (a different error) if the gate is broken and the LocalAPI path
+// is reached — and must leave the publication registry empty.
+func TestServeForwardLocked_RefusesStaleGate(t *testing.T) {
+	withLiveServer(t, &tsnet.Server{})
+	gate := liveGate(t)
+	bumpEpoch()
+
+	lc := &local.Client{Socket: "/nonexistent/tailscaled.sock", UseSocketOnly: true}
+	out := serveForwardLocked(gate, lc, serveForwardPayload{
+		TailnetPort: 443,
+		LocalPort:   8080,
+		Path:        "/",
+	})
+	if !strings.Contains(out, "raced node teardown") {
+		t.Fatalf("stale gate must refuse at the commit gate, got %s", out)
+	}
+	servePublicationMu.Lock()
+	tracked := len(servePublications)
+	servePublicationMu.Unlock()
+	if tracked != 0 {
+		t.Fatalf("refused forward must not track a publication, %d present", tracked)
 	}
 }
 

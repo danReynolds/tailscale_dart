@@ -96,15 +96,7 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	}
 	domain := st.CertDomains[0]
 
-	targetURL := &url.URL{
-		Scheme: "http",
-		Host:   net.JoinHostPort(localAddress, strconv.Itoa(int(localPort))),
-	}
-	target := funnelTarget{
-		localAddress: localAddress,
-		localPort:    localPort,
-		proxy:        funnelMountHandler(mount, newFunnelReverseProxy(targetURL)),
-	}
+	target := newFunnelTarget(mount, localAddress, localPort)
 
 	// Fast path: an existing forwarder for this port just gains a mount. No
 	// ListenFunnel here, so holding funnelMu is safe. The epoch check keeps a
@@ -304,6 +296,21 @@ func (ff *funnelForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target.proxy.ServeHTTP(w, r)
+}
+
+// newFunnelTarget builds the proxy target for a funnel mount, wiring in the
+// mount-prefix strip (funnelMountHandler) so a non-root mount forwards paths
+// relative to its mount rather than the public-facing prefix.
+func newFunnelTarget(mount, localAddress string, localPort uint16) funnelTarget {
+	targetURL := &url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(localAddress, strconv.Itoa(int(localPort))),
+	}
+	return funnelTarget{
+		localAddress: localAddress,
+		localPort:    localPort,
+		proxy:        funnelMountHandler(mount, newFunnelReverseProxy(targetURL)),
+	}
 }
 
 // funnelMountHandler strips the mount prefix before proxying, matching

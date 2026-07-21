@@ -609,3 +609,32 @@ func TestIsTransientNoSuggestion(t *testing.T) {
 		}
 	}
 }
+
+// TestExitNodeSuggestResult pins the suggest() integration (not just the
+// matcher): a transient "not ready" error maps to an empty (null) suggestion,
+// a real error propagates, and a real suggestion returns its node id.
+func TestExitNodeSuggestResult(t *testing.T) {
+	transient := exitNodeSuggestResult(
+		apitype.ExitNodeSuggestionResponse{},
+		errors.New(`Post "http://x/localapi": no preferred DERP, try again later`),
+	)
+	if transient != `{"nodeId":""}` {
+		t.Errorf("transient error: got %q, want empty-nodeId JSON", transient)
+	}
+
+	realErr := exitNodeSuggestResult(
+		apitype.ExitNodeSuggestionResponse{},
+		errors.New("access denied"),
+	)
+	if realErr == `{"nodeId":""}` || !strings.Contains(realErr, "access denied") {
+		t.Errorf("real error: got %q, want a propagated error JSON", realErr)
+	}
+
+	ok := exitNodeSuggestResult(
+		apitype.ExitNodeSuggestionResponse{ID: "nABC123"},
+		nil,
+	)
+	if !strings.Contains(ok, "nABC123") {
+		t.Errorf("success: got %q, want nodeId nABC123", ok)
+	}
+}

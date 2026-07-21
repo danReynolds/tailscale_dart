@@ -399,25 +399,24 @@ func ExitNodeSuggest() string {
 	ctx, cancel := boundedCallCtx(0)
 	defer cancel()
 	suggestion, err := lc.SuggestExitNode(ctx)
+	return exitNodeSuggestResult(suggestion, err)
+}
+
+// exitNodeSuggestResult maps a SuggestExitNode result to the JSON the Dart side
+// parses. Before the first netcheck completes (common right after up()),
+// upstream returns a transient "try again later" error rather than an empty
+// suggestion; that is mapped to the documented "no suggestion" result (empty
+// nodeId -> null on the Dart side) so a polling caller sees null, not a thrown
+// exception. Other errors still propagate.
+func exitNodeSuggestResult(suggestion apitype.ExitNodeSuggestionResponse, err error) string {
 	if err != nil {
-		// Before the first netcheck completes (common right after up()),
-		// upstream returns a transient "try again later" error rather than an
-		// empty suggestion. Map that to the documented "no suggestion" result
-		// (empty nodeId -> null on the Dart side) so a polling caller sees
-		// null, not a thrown exception. Other errors still propagate.
 		if isTransientNoSuggestion(err) {
 			b, _ := json.Marshal(map[string]any{"nodeId": ""})
 			return string(b)
 		}
 		return localAPIError(err)
 	}
-	out := map[string]any{
-		"nodeId": string(suggestion.ID),
-	}
-	b, err := json.Marshal(out)
-	if err != nil {
-		return jsonError(err)
-	}
+	b, _ := json.Marshal(map[string]any{"nodeId": string(suggestion.ID)})
 	return string(b)
 }
 

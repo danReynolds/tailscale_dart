@@ -368,7 +368,12 @@ List<String> _parseIPs(dynamic value) {
 
 DateTime? _parseTime(dynamic value) {
   if (value is String && value.isNotEmpty) {
-    return DateTime.tryParse(value);
+    final parsed = DateTime.tryParse(value);
+    // Go marshals a zero time.Time (e.g. an online peer's unset LastSeen) as
+    // "0001-01-01T00:00:00Z". Treat that sentinel as null — the documented
+    // "not tracked" value — rather than surfacing a year-1 date as real data.
+    if (parsed == null || parsed.year <= 1) return null;
+    return parsed;
   }
   return null;
 }

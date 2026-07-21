@@ -280,7 +280,9 @@ func DuneStatus() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	status, err := lc.StatusWithoutPeers(context.Background())
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	status, err := lc.StatusWithoutPeers(ctx)
 	if err != nil {
 		return jsonError(err)
 	}
@@ -303,7 +305,9 @@ func DunePeers() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	status, err := lc.Status(context.Background())
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	status, err := lc.Status(ctx)
 	if err != nil {
 		return jsonError(err)
 	}

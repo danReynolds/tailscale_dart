@@ -41,7 +41,7 @@ var (
 type funnelTarget struct {
 	localAddress string
 	localPort    uint16
-	proxy        *httputil.ReverseProxy
+	proxy        http.Handler
 }
 
 type funnelForwarder struct {
@@ -96,15 +96,7 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	}
 	domain := st.CertDomains[0]
 
-	targetURL := &url.URL{
-		Scheme: "http",
-		Host:   net.JoinHostPort(localAddress, strconv.Itoa(int(localPort))),
-	}
-	target := funnelTarget{
-		localAddress: localAddress,
-		localPort:    localPort,
-		proxy:        newFunnelReverseProxy(targetURL),
-	}
+	target := newFunnelTarget(mount, localAddress, localPort)
 
 	// Fast path: an existing forwarder for this port just gains a mount. No
 	// ListenFunnel here, so holding funnelMu is safe. The epoch check keeps a
@@ -304,6 +296,33 @@ func (ff *funnelForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target.proxy.ServeHTTP(w, r)
+}
+
+// newFunnelTarget builds the proxy target for a funnel mount, wiring in the
+// mount-prefix strip (funnelMountHandler) so a non-root mount forwards paths
+// relative to its mount rather than the public-facing prefix.
+func newFunnelTarget(mount, localAddress string, localPort uint16) funnelTarget {
+	targetURL := &url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(localAddress, strconv.Itoa(int(localPort))),
+	}
+	return funnelTarget{
+		localAddress: localAddress,
+		localPort:    localPort,
+		proxy:        funnelMountHandler(mount, newFunnelReverseProxy(targetURL)),
+	}
+}
+
+// funnelMountHandler strips the mount prefix before proxying, matching
+// tailscaled's Serve behavior (ipn/ipnlocal/serve.go uses http.StripPrefix) so
+// a backend mounted at a non-root path receives paths relative to its mount
+// rather than the public-facing prefix. A root mount ("/") strips nothing.
+func funnelMountHandler(mount string, proxy http.Handler) http.Handler {
+	prefix := strings.TrimSuffix(mount, "/")
+	if prefix == "" {
+		return proxy
+	}
+	return http.StripPrefix(prefix, proxy)
 }
 
 func newFunnelReverseProxy(targetURL *url.URL) *httputil.ReverseProxy {

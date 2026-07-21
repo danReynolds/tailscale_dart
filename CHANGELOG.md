@@ -1,3 +1,29 @@
+## 0.7.1
+
+Correctness fixes from a follow-up review of the public API, worker lifecycle,
+and non-transport runtime surfaces.
+
+**Bug fixes:**
+
+- A slow or wedged tailscaled could freeze the entire binding: the serve/funnel
+  teardown, and the status/peers reads, made unbounded LocalAPI calls (some
+  while holding the internal lock). Every LocalAPI call is now bounded (default
+  30s), completing the "no unbounded native call" guarantee begun in 0.7.0.
+- Funnel forwarding to a non-root mount (e.g. `funnel.forward(path: '/api')`)
+  now strips the mount prefix before proxying, so the backend receives paths
+  relative to its mount — matching `Serve`.
+- An HTTP client request whose body failed to finalize no longer leaks the
+  request file descriptor or pins a native goroutine.
+- `TailscaleNode.lastSeen` now returns `null` for online / never-tracked peers
+  instead of a placeholder year-1 date.
+- `nodes()`, `whois()`, and `exitNode.useById()` now report argument/state
+  errors through the returned `Future` (so `.catchError`/`await` handle them)
+  instead of throwing synchronously.
+- `exitNode.suggest()` now returns `null` (not an exception) during the brief
+  startup window before the first network check completes.
+- Corrected the `funnel.clear()` doc: Funnel publications are independent of
+  `Serve` and clearing one does not touch the other.
+
 ## 0.7.0
 
 The robustness release. Teardown/lifecycle unification across the native

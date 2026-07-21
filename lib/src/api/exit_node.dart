@@ -108,7 +108,9 @@ final class _ExitNode extends ExitNode {
   Future<TailscaleNode?> suggest() => _suggest();
 
   @override
-  Future<void> useById(String stableNodeId) {
+  Future<void> useById(String stableNodeId) async {
+    // async so the empty-id guard rejects the returned Future rather than
+    // throwing synchronously, consistent with the other exit-node methods.
     final id = stableNodeId.trim();
     if (id.isEmpty) {
       throw ArgumentError.value(

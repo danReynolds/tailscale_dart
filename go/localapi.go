@@ -61,7 +61,9 @@ func WhoIs(ip string) string {
 		return jsonError(err)
 	}
 
-	resp, err := lc.WhoIs(context.Background(), addr.String())
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	resp, err := lc.WhoIs(ctx, addr.String())
 	if err != nil {
 		// 404 on an unknown IP is expected; translate to not-found.
 		if isNotFound(err) {
@@ -212,6 +214,18 @@ func isNotFound(err error) bool {
 		strings.Contains(lower, "not found")
 }
 
+// isTransientNoSuggestion reports whether err is one of upstream's transient
+// "node not ready yet" exit-node-suggestion errors (ErrNoPreferredDERP /
+// ErrNoNetMap), which surface before the first netcheck completes. These cross
+// the LocalAPI boundary as a reconstructed error, so — like isNotFound — we
+// match the message text rather than errors.Is against the server-side
+// sentinel (which the client never holds).
+func isTransientNoSuggestion(err error) bool {
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "no preferred derp") ||
+		strings.Contains(lower, "no network map")
+}
+
 // classifyLocalAPIError maps a LocalAPI error to the
 // TailscaleErrorCode the Dart side will throw. Returns the empty
 // string when the error doesn't fit any known category — the Dart
@@ -297,7 +311,9 @@ func TlsDomains() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	status, err := lc.Status(context.Background())
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	status, err := lc.Status(ctx)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -330,7 +346,9 @@ func PrefsGet() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	prefs, err := lc.GetPrefs(context.Background())
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	prefs, err := lc.GetPrefs(ctx)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -362,7 +380,9 @@ func PrefsUpdate(updateJSON string) string {
 	if err != nil {
 		return jsonError(err)
 	}
-	prefs, err := lc.EditPrefs(context.Background(), masked)
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	prefs, err := lc.EditPrefs(ctx, masked)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -376,17 +396,27 @@ func ExitNodeSuggest() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	suggestion, err := lc.SuggestExitNode(context.Background())
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	suggestion, err := lc.SuggestExitNode(ctx)
+	return exitNodeSuggestResult(suggestion, err)
+}
+
+// exitNodeSuggestResult maps a SuggestExitNode result to the JSON the Dart side
+// parses. Before the first netcheck completes (common right after up()),
+// upstream returns a transient "try again later" error rather than an empty
+// suggestion; that is mapped to the documented "no suggestion" result (empty
+// nodeId -> null on the Dart side) so a polling caller sees null, not a thrown
+// exception. Other errors still propagate.
+func exitNodeSuggestResult(suggestion apitype.ExitNodeSuggestionResponse, err error) string {
 	if err != nil {
+		if isTransientNoSuggestion(err) {
+			b, _ := json.Marshal(map[string]any{"nodeId": ""})
+			return string(b)
+		}
 		return localAPIError(err)
 	}
-	out := map[string]any{
-		"nodeId": string(suggestion.ID),
-	}
-	b, err := json.Marshal(out)
-	if err != nil {
-		return jsonError(err)
-	}
+	b, _ := json.Marshal(map[string]any{"nodeId": string(suggestion.ID)})
 	return string(b)
 }
 
@@ -404,7 +434,9 @@ func ExitNodeUseAuto() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	prefs, err := lc.EditPrefs(context.Background(), &masked)
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	prefs, err := lc.EditPrefs(ctx, &masked)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -653,7 +685,11 @@ func closeAllServePublications(lc *local.Client) {
 	if lc == nil || len(keys) == 0 {
 		return
 	}
-	ctx := context.Background()
+	// Bounded: this runs from stopLocked while the package-global mu is held,
+	// so an unbounded LocalAPI round trip to a wedged tailscaled would freeze
+	// Stop/Start/Logout and every other mu-guarded entry point.
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
 	sc, err := lc.GetServeConfig(ctx)
 	if err != nil || sc == nil {
 		return
@@ -1117,7 +1153,9 @@ func DiagMetrics() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	body, err := lc.UserMetrics(context.Background())
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	body, err := lc.UserMetrics(ctx)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -1131,7 +1169,9 @@ func DiagDERPMap() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	m, err := lc.CurrentDERPMap(context.Background())
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	m, err := lc.CurrentDERPMap(ctx)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -1193,7 +1233,9 @@ func DiagCheckUpdate() string {
 	if err != nil {
 		return jsonError(err)
 	}
-	cv, err := lc.CheckUpdate(context.Background())
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
+	cv, err := lc.CheckUpdate(ctx)
 	if err != nil {
 		return localAPIError(err)
 	}

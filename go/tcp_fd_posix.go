@@ -96,20 +96,18 @@ func TcpListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 		return nil, fmt.Errorf("invalid port %d", tailnetPort)
 	}
 
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
+	gate, ok := acquireNodeGate()
+	if !ok {
 		return nil, errors.New("TcpListenFd called before Start")
 	}
 
 	addr := net.JoinHostPort(tailnetHost, strconv.Itoa(tailnetPort))
-	ln, err := s.Listen("tcp", addr)
+	ln, err := gate.s.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("tsnet listen %s: %w", addr, err)
 	}
 
-	return registerTcpFdListener(ln, tailnetHost)
+	return registerTcpFdListener(gate, ln, tailnetHost)
 }
 
 func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
@@ -117,23 +115,21 @@ func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 		return nil, fmt.Errorf("invalid port %d", tailnetPort)
 	}
 
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
+	gate, ok := acquireNodeGate()
+	if !ok {
 		return nil, errors.New("TlsListenFd called before Start")
 	}
 
 	addr := net.JoinHostPort(tailnetHost, strconv.Itoa(tailnetPort))
-	ln, err := s.ListenTLS("tcp", addr)
+	ln, err := gate.s.ListenTLS("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("tsnet listen tls %s: %w", addr, err)
 	}
 
-	return registerTcpFdListener(ln, tailnetHost)
+	return registerTcpFdListener(gate, ln, tailnetHost)
 }
 
-func registerTcpFdListener(ln net.Listener, fallbackAddress string) (*TcpFdListener, error) {
+func registerTcpFdListener(gate nodeGate, ln net.Listener, fallbackAddress string) (*TcpFdListener, error) {
 	localAddress, localPort := endpointFromAddr(ln.Addr())
 	if localPort == 0 {
 		ln.Close()
@@ -145,6 +141,14 @@ func registerTcpFdListener(ln net.Listener, fallbackAddress string) (*TcpFdListe
 
 	id := atomic.AddInt64(&tcpFdListenerID, 1)
 	tcpFdListenerMu.Lock()
+	// Commit-point epoch check (see nodeGate): a listen that raced teardown
+	// must not land in the registry behind closeAllTcpFdListeners' sweep,
+	// where it would hold its tailnet port with no owner until process exit.
+	if !gate.stillCurrent() {
+		tcpFdListenerMu.Unlock()
+		ln.Close()
+		return nil, errors.New("tcp listen raced node teardown")
+	}
 	tcpFdListenerRegistry[id] = ln
 	tcpFdListenerMu.Unlock()
 

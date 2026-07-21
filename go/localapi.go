@@ -448,18 +448,6 @@ var (
 	// tailscaled. The Funnel path has its own funnelMu; this covers the Serve
 	// path.
 	serveConfigMu sync.Mutex
-
-	// serveStopping guards against an offloaded ServeForward racing teardown:
-	// ServeForward runs on a helper isolate (concurrent with Stop on the worker)
-	// and persists its mount via SetServeConfig, so a mount added after
-	// closeAllServePublications snapshots — or in the window before srv.Close —
-	// would survive the stop and re-activate on the next Start (tailscaled
-	// reloads the persisted ServeConfig), silently re-exposing a service. Set
-	// under serveConfigMu while stopping, checked by ServeForward under the same
-	// lock, and cleared by Start; because track/take/check all serialize on
-	// serveConfigMu, no add can slip past the sweep. (The Funnel path is
-	// hardened separately by its listener reaper.)
-	serveStopping bool
 )
 
 type servePublicationKey struct {
@@ -497,16 +485,35 @@ func ServeForward(payloadJSON string) string {
 		}
 		return string(b)
 	}
-	lc, err := lcOr("ServeForward")
+	gate, ok := acquireNodeGate()
+	if !ok {
+		return jsonError(errors.New("ServeForward called before Start"))
+	}
+	lc, err := gate.s.LocalClient()
 	if err != nil {
 		return jsonError(err)
 	}
+	return serveForwardLocked(gate, lc, payload)
+}
+
+// serveForwardLocked is the Serve path's commit section: the ServeConfig
+// get-modify-set plus publication tracking, serialized under serveConfigMu.
+// Extracted so the teardown-race harness can drive the epoch refusal directly
+// (the gate check precedes every LocalAPI use, so a stale gate never touches
+// [lc]).
+func serveForwardLocked(gate nodeGate, lc *local.Client, payload serveForwardPayload) string {
 	serveConfigMu.Lock()
 	defer serveConfigMu.Unlock()
-	if serveStopping {
-		// The node is tearing down; refuse to persist a new mount that would
-		// otherwise survive the stop and re-activate on the next Start.
-		return jsonError(errors.New("ServeForward called during node teardown"))
+	if !gate.stillCurrent() {
+		// The node this forward was issued against is tearing (or torn) down;
+		// refuse to persist a mount that would survive the stop and re-activate
+		// on the next Start (tailscaled reloads the persisted ServeConfig),
+		// silently re-exposing a service. Checked under serveConfigMu — the
+		// same lock closeAllServePublications sweeps under — so a forward
+		// either commits before the sweep (and is swept) or observes the
+		// bumped epoch here and refuses. ServeForward runs on a helper
+		// isolate, concurrent with Stop on the worker, so this race is real.
+		return jsonError(errors.New("ServeForward raced node teardown"))
 	}
 	ctx := context.Background()
 	st, err := lc.StatusWithoutPeers(ctx)
@@ -608,14 +615,6 @@ func trackServePublication(key servePublicationKey) {
 	servePublicationMu.Unlock()
 }
 
-// clearServeStopping re-arms ServeForward after a teardown. Called by Start once
-// a fresh node is being brought up so serve mounts can be published again.
-func clearServeStopping() {
-	serveConfigMu.Lock()
-	serveStopping = false
-	serveConfigMu.Unlock()
-}
-
 func untrackServePublicationFromStatus(st *ipnstate.Status, payload serveClearPayload) {
 	dnsName, _, err := serveHostFromStatus(st)
 	if err != nil {
@@ -641,11 +640,10 @@ func untrackServePublication(key servePublicationKey) {
 func closeAllServePublications(lc *local.Client) {
 	serveConfigMu.Lock()
 	defer serveConfigMu.Unlock()
-	// Mark stopping and snapshot the keys under the same lock ServeForward holds,
-	// so a concurrent forward either committed before us (its key is in the
-	// snapshot and gets removed) or observes serveStopping and refuses. Cleared
-	// by the next Start.
-	serveStopping = true
+	// Snapshot the keys under the same lock ServeForward's commit holds, so a
+	// concurrent forward either committed before us (its key is in the
+	// snapshot and gets removed) or observes the bumped node epoch (stopLocked
+	// bumps it before calling here) and refuses.
 	keys := takeServePublications()
 	if lc == nil || len(keys) == 0 {
 		return

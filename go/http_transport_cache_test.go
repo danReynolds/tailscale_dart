@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -155,125 +154,68 @@ func cacheOwner(c *httpTransportCache) any {
 	return c.owner
 }
 
-// withLiveServer publishes [s] as the process-global live server for the test and
-// restores the prior value afterward. Unit tests run with srv == nil.
-func withLiveServer(t *testing.T, s *tsnet.Server) {
-	t.Helper()
-	mu.Lock()
-	prev := srv
-	srv = s
-	mu.Unlock()
-	t.Cleanup(func() {
-		mu.Lock()
-		srv = prev
-		mu.Unlock()
-	})
-}
-
-// TestCachedTransportForLiveServer_HoldsMuAcrossPopulate is the F3 TOCTOU
-// regression. The fix makes the srv liveness check atomic with populating the
-// cache by holding mu across both. We assert that directly from inside the build
-// callback: when the cache populates, mu must already be held (TryLock fails).
-// Without the fix — which released mu before the populate — TryLock here would
-// succeed, which is exactly the window a concurrent Stop() slipped through to
-// leave a dead server cached.
-func TestCachedTransportForLiveServer_HoldsMuAcrossPopulate(t *testing.T) {
+// TestGetCurrent_CachesForLiveGate: a request under the live lifecycle
+// populates the cache keyed to the gated server, and a second request reuses it
+// (no rebuild).
+func TestGetCurrent_CachesForLiveGate(t *testing.T) {
 	liveServer := &tsnet.Server{}
-	var cache httpTransportCache
-	muHeldDuringPopulate := false
-	build := func(_ *tsnet.Server) *http.Transport {
-		if mu.TryLock() {
-			mu.Unlock() // mu was free: the check and the populate are NOT atomic.
-		} else {
-			muHeldDuringPopulate = true
-		}
-		return &http.Transport{}
-	}
-
 	withLiveServer(t, liveServer)
-
-	_ = cachedTransportForLiveServer(&cache, liveServer, build)
-	if !muHeldDuringPopulate {
-		t.Fatal("mu must be held across the cache populate so the liveness check is atomic with it")
-	}
-}
-
-// TestCachedTransportForLiveServer_SkipsCacheForDeadServer locks in the liveness
-// gate: a request whose server is no longer the live srv gets a one-off transport
-// and must NOT populate the shared cache (which would pin the dead server's whole
-// netstack graph until the next up()+request).
-func TestCachedTransportForLiveServer_SkipsCacheForDeadServer(t *testing.T) {
-	liveServer := &tsnet.Server{}
 	var cache httpTransportCache
-	var dials atomic.Int64
-	build := func(_ *tsnet.Server) *http.Transport { return countingTransport(&dials) }
+	builds := 0
+	build := func() *http.Transport { builds++; return &http.Transport{} }
 
-	withLiveServer(t, liveServer)
-
-	// Live server populates the cache.
-	if got := cachedTransportForLiveServer(&cache, liveServer, build); got == nil {
-		t.Fatal("live server must return a transport")
+	gate := liveGate(t)
+	first, oneOff1 := cache.getCurrent(gate, build)
+	second, oneOff2 := cache.getCurrent(gate, build)
+	if first == nil || first != second {
+		t.Fatalf("live gate must cache and reuse one transport (builds=%d)", builds)
+	}
+	if oneOff1 || oneOff2 {
+		t.Fatal("live-gate transports must not be reported one-off")
+	}
+	if builds != 1 {
+		t.Fatalf("expected exactly one build for repeated live requests, got %d", builds)
 	}
 	if owner := cacheOwner(&cache); owner != any(liveServer) {
-		t.Fatalf("live server must populate the cache; owner=%v", owner)
-	}
-
-	// Node stops: cache reset and srv moves off liveServer, as stopLocked does.
-	cache.reset()
-	mu.Lock()
-	srv = nil
-	mu.Unlock()
-
-	// A late request for the now-dead server must return a one-off and leave the
-	// cache empty.
-	if got := cachedTransportForLiveServer(&cache, liveServer, build); got == nil {
-		t.Fatal("dead server must still return a one-off transport")
-	}
-	if owner := cacheOwner(&cache); owner != nil {
-		t.Fatalf("dead server must not repopulate the cache (the TOCTOU leak): owner=%v", owner)
+		t.Fatalf("cache must be keyed to the gated server; owner=%v", owner)
 	}
 }
 
-// TestCachedTransportForLiveServer_RaceWithStop stresses the liveness gate
-// against concurrent Stop()/Start()-style cache resets and srv flips. All srv
-// access is under mu, as in production, so -race proves the check-and-cache path
-// is synchronized with teardown, and the cache never ends up owning a server that
-// isn't the live one.
-func TestCachedTransportForLiveServer_RaceWithStop(t *testing.T) {
-	liveServer := &tsnet.Server{}
+// TestGetCurrent_OneOffForStaleGate is the teardown-race lock-in: once the
+// lifecycle ends (epoch bumped), a late request gets a one-off transport and
+// must NOT touch the cache — neither populating an empty cache (re-caching a
+// dead server pins its whole netstack graph behind the teardown sweep) nor
+// evicting a newer lifecycle's entry.
+func TestGetCurrent_OneOffForStaleGate(t *testing.T) {
+	serverA := &tsnet.Server{}
+	withLiveServer(t, serverA)
 	var cache httpTransportCache
-	var dials atomic.Int64
-	build := func(_ *tsnet.Server) *http.Transport { return countingTransport(&dials) }
 
-	withLiveServer(t, liveServer)
+	staleGate := liveGate(t)
+	nodeEpoch.Add(1) // teardown begins
+	cache.reset()    // stopLocked's sweep
 
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 300; j++ {
-				_ = cachedTransportForLiveServer(&cache, liveServer, build)
-			}
-		}()
+	// Stale request against the empty cache: one-off, cache stays empty.
+	tr, oneOff := cache.getCurrent(staleGate, func() *http.Transport { return &http.Transport{} })
+	if tr == nil {
+		t.Fatal("stale gate must still get a one-off transport")
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for j := 0; j < 300; j++ {
-			mu.Lock()
-			srv = nil
-			mu.Unlock()
-			cache.reset()
-			mu.Lock()
-			srv = liveServer
-			mu.Unlock()
-		}
-	}()
-	wg.Wait()
+	if !oneOff {
+		t.Fatal("a stale-gate transport must be reported one-off so the caller closes its idle conns")
+	}
+	if owner := cacheOwner(&cache); owner != nil {
+		t.Fatalf("stale gate must not repopulate the cache; owner=%v", owner)
+	}
 
-	// The cache must own nil or the live server, never a stale third value.
-	if owner := cacheOwner(&cache); owner != nil && owner != any(liveServer) {
-		t.Fatalf("cache owner must be nil or the live server, got %v", owner)
+	// New lifecycle populates; a leftover stale request must not evict it.
+	serverB := &tsnet.Server{}
+	withLiveServer(t, serverB)
+	fresh := liveGate(t)
+	cached, _ := cache.getCurrent(fresh, func() *http.Transport { return &http.Transport{} })
+	if tr, _ := cache.getCurrent(staleGate, func() *http.Transport { return &http.Transport{} }); tr == cached {
+		t.Fatal("stale gate must not be served the new lifecycle's cached transport")
+	}
+	if owner := cacheOwner(&cache); owner != any(serverB) {
+		t.Fatalf("stale gate must not disturb the new lifecycle's entry; owner=%v", owner)
 	}
 }

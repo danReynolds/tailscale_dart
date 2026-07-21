@@ -3,48 +3,53 @@
 package tailscale
 
 import (
-	"sync"
 	"testing"
 )
 
-// TestServeStoppingGuard covers the F2 release-blocker: an offloaded
-// ServeForward racing Stop could persist a serve mount that survives down() and
-// re-activates (re-exposing a service) on the next up(). The guard makes any
-// ServeForward that arrives once teardown began refuse instead of persisting.
-func TestServeStoppingGuard(t *testing.T) {
-	clearServeStopping()
+// The serve teardown race (an offloaded ServeForward persisting a mount behind
+// closeAllServePublications' sweep, re-exposing the service on the next Start)
+// is guarded by the node epoch: ServeForward re-checks its nodeGate under
+// serveConfigMu — the same lock the sweep holds — at its commit point. The gate
+// mechanism itself is covered in node_gate_test.go; these tests cover the
+// serve-specific sweep bookkeeping that pairs with it.
 
-	// Teardown arms the guard even with no live client and no publications, so a
-	// ServeForward racing the stop is refused rather than persisting a mount.
+// TestServePublicationSweepTakesAllKeys: the teardown sweep must atomically
+// drain the publication registry (take-inside-lock), so a forward that
+// committed before the sweep is always included in it.
+func TestServePublicationSweepTakesAllKeys(t *testing.T) {
+	k1 := servePublicationKey{host: "a.ts.net", port: 443, path: "/x"}
+	k2 := servePublicationKey{host: "a.ts.net", port: 8443, path: "/y"}
+	trackServePublication(k1)
+	trackServePublication(k2)
+
+	// nil client: the sweep still drains the registry even when there is no
+	// LocalAPI to push the removal to (the node is gone with its config).
 	closeAllServePublications(nil)
-	serveConfigMu.Lock()
-	armed := serveStopping
-	serveConfigMu.Unlock()
-	if !armed {
-		t.Fatal("closeAllServePublications must set serveStopping so a racing ServeForward is refused")
-	}
 
-	// A fresh Start re-arms serve publishing.
-	clearServeStopping()
-	serveConfigMu.Lock()
-	cleared := !serveStopping
-	serveConfigMu.Unlock()
-	if !cleared {
-		t.Fatal("clearServeStopping must clear the guard")
+	servePublicationMu.Lock()
+	remaining := len(servePublications)
+	servePublicationMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("sweep must drain every tracked publication, %d left", remaining)
 	}
 }
 
-// TestServeStoppingGuardConcurrent runs the set (teardown) and clear (start)
-// paths concurrently; -race verifies serveStopping is always accessed under
-// serveConfigMu, the same lock ServeForward's check-and-track holds.
-func TestServeStoppingGuardConcurrent(t *testing.T) {
-	clearServeStopping()
-	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(2)
-		go func() { defer wg.Done(); closeAllServePublications(nil) }()
-		go func() { defer wg.Done(); clearServeStopping() }()
+// TestTakeServePublicationsEmptiesRegistry locks in take semantics: the taken
+// snapshot owns the keys and the registry restarts empty.
+func TestTakeServePublicationsEmptiesRegistry(t *testing.T) {
+	key := servePublicationKey{host: "b.ts.net", port: 443, path: "/z"}
+	trackServePublication(key)
+	keys := takeServePublications()
+	found := false
+	for _, k := range keys {
+		if k == key {
+			found = true
+		}
 	}
-	wg.Wait()
-	clearServeStopping()
+	if !found {
+		t.Fatal("take must return the tracked key")
+	}
+	if again := takeServePublications(); len(again) != 0 {
+		t.Fatalf("second take must be empty, got %d keys", len(again))
+	}
 }

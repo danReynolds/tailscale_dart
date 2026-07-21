@@ -1,4 +1,41 @@
-## 0.6.0
+## 0.7.0
+
+The robustness release. Teardown/lifecycle unification across the native
+runtime, bounded native calls, and internal-registry hardening. Supersedes the
+never-published 0.6.0 below, so this is the first published release since
+0.5.0 and carries that section's changes too.
+
+Behavior change to note: `net.dial` and `diag.ping` without an explicit
+timeout now fail after ~30 seconds instead of waiting indefinitely. Pass a
+`timeout` to choose your own bound.
+
+**New:**
+
+- `diag.nodeState()` — a census of the native runtime's internal registries
+  (live listeners, bindings, forwarders, plus the teardown epoch). Intended
+  for leak diagnostics and bug reports: after closing everything, all counts
+  should be zero.
+
+**Bug fixes:**
+
+- A `udp.bind` that fails during Dart-side adoption (e.g. under file-
+  descriptor pressure) no longer leaks its native bridge and tailnet port.
+- Teardown races unified under a single node-epoch gate: a stop/start cycle
+  can no longer resurrect a just-closed listener, binding, or forwarder from
+  a stale asynchronous completion, in any registry.
+
+**Internal:**
+
+- UDP bridge registry keyed by an opaque monotonic id instead of the Dart fd,
+  making fd-reuse displacement structurally impossible.
+- The reactor's peer-reset (RST) delivery contract is now pinned by tests on
+  both platforms: epoll delivers errors unmaskably even with reads paused;
+  kqueue rides them on the read filter. kqueue events now stamp the socket
+  error (diagnostic) from the correct kevent field.
+- `unsafe.Pointer` eliminated from the kqueue poller; CI gates on a fully
+  clean `go vet`; the write-only funnel publication registry is gone.
+
+## 0.6.0 (not published; included in 0.7.0)
 
 The performance/correctness audit release. Crash-safety and leak fixes across
 the UDP/TCP/HTTP data planes, HTTP client/server correctness, funnel/serve

@@ -271,7 +271,7 @@ final class Worker {
 
   Future<void> udpCloseBinding({required int bindingId}) async {
     await _request<_WorkerAckResponse>(
-      _WorkerUdpCloseFdCommand(bindingId: bindingId),
+      _WorkerUdpCloseBindingCommand(bindingId: bindingId),
     );
   }
 

@@ -170,12 +170,24 @@ final class _Udp implements Udp {
     }
     try {
       final (:fd, :bindingId, :local) = await _bind(resolvedAddress, port);
-      return createFdTailscaleDatagramBinding(
-        fd: fd,
-        bindingId: bindingId,
-        local: local,
-        closeFn: _close,
-      );
+      try {
+        return await createFdTailscaleDatagramBinding(
+          fd: fd,
+          bindingId: bindingId,
+          local: local,
+          closeFn: _close,
+        );
+      } catch (e) {
+        // Adoption failed (e.g. reactor registration) AFTER Go committed a
+        // live bridge; the adopt path already closed the raw fd, but the Go
+        // side (two pump goroutines + the bound tailnet port) has no other
+        // reclaim path and would leak until the node stops. Best-effort close
+        // by id, then surface the original failure.
+        try {
+          await _close(bindingId);
+        } catch (_) {}
+        rethrow;
+      }
     } catch (e) {
       if (e is TailscaleUdpException) rethrow;
       throw TailscaleUdpException(

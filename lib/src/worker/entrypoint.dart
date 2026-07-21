@@ -197,10 +197,10 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.tcpCloseFdListener),
             );
-          case _WorkerUdpCloseFdCommand request:
+          case _WorkerUdpCloseBindingCommand request:
             native.duneUdpCloseBinding(request.bindingId);
             sendPort.send(
-              const _WorkerAckResponse(_WorkerOperation.udpCloseFd),
+              const _WorkerAckResponse(_WorkerOperation.udpCloseBinding),
             );
           case _WorkerTlsListenFdCommand request:
             final hostPtr = request.tailnetHost.toNativeUtf8();
@@ -246,7 +246,11 @@ void _workerEntrypoint(SendPort sendPort) {
               final fd = result['fd'] as int?;
               final bindingId = result['bindingId'] as int?;
               final localPort = result['localPort'] as int?;
-              if (fd == null || fd < 0 || bindingId == null || localPort == null) {
+              if (fd == null ||
+                  fd < 0 ||
+                  bindingId == null ||
+                  bindingId <= 0 ||
+                  localPort == null) {
                 throw const TailscaleUdpException(
                   'Native runtime did not return a usable UDP binding.',
                 );

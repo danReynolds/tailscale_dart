@@ -3,6 +3,7 @@
 package tailscale
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
@@ -411,5 +412,22 @@ func TestDebugNodeState(t *testing.T) {
 	snap := debugNodeState()
 	if snap.Epoch != nodeEpoch.Load() {
 		t.Fatalf("census epoch %d != live epoch %d", snap.Epoch, nodeEpoch.Load())
+	}
+}
+
+// TestDebugNodeStateJSONContract pins the wire shape consumed by Dart's
+// Diag.nodeState(): flat object, these exact keys.
+func TestDebugNodeStateJSONContract(t *testing.T) {
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(DebugNodeState()), &decoded); err != nil {
+		t.Fatalf("DebugNodeState is not valid JSON: %v", err)
+	}
+	for _, key := range []string{
+		"epoch", "servePublications", "funnelForwarders",
+		"httpBindings", "tcpListeners", "udpBridges", "transportCached",
+	} {
+		if _, ok := decoded[key]; !ok {
+			t.Errorf("DebugNodeState missing key %q", key)
+		}
 	}
 }

@@ -250,6 +250,9 @@ external ffi.Pointer<Utf8> duneDiagPing(
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneDiagMetrics')
 external ffi.Pointer<Utf8> duneDiagMetrics();
 
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneDebugNodeState')
+external ffi.Pointer<Utf8> duneDebugNodeState();
+
 /// Current DERP relay map. Returns JSON
 /// `{"regions": {...}, "omitDefaultRegions": bool}` on success,
 /// `{"error": "..."}` on failure.

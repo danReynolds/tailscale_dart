@@ -14,6 +14,7 @@ enum _WorkerOperation {
   diagMetrics,
   diagDERPMap,
   diagCheckUpdate,
+  debugNodeState,
   status,
   peers,
   prefsGet,
@@ -87,6 +88,11 @@ enum _WorkerOperation {
       statusCode: statusCode,
     ),
     diagCheckUpdate => TailscaleDiagException(
+      message,
+      code: code,
+      statusCode: statusCode,
+    ),
+    debugNodeState => TailscaleDiagException(
       message,
       code: code,
       statusCode: statusCode,
@@ -246,6 +252,11 @@ final class _WorkerDiagDERPMapCommand extends _WorkerCommand {
 final class _WorkerDiagCheckUpdateCommand extends _WorkerCommand {
   const _WorkerDiagCheckUpdateCommand()
     : super(_WorkerOperation.diagCheckUpdate);
+}
+
+final class _WorkerDebugNodeStateCommand extends _WorkerCommand {
+  const _WorkerDebugNodeStateCommand()
+    : super(_WorkerOperation.debugNodeState);
 }
 
 final class _WorkerStatusCommand extends _WorkerCommand {
@@ -457,6 +468,13 @@ final class _WorkerDiagDERPMapResponse extends _WorkerResponse {
     : super(_WorkerOperation.diagDERPMap);
 
   final DERPMap map;
+}
+
+final class _WorkerDebugNodeStateResponse extends _WorkerResponse {
+  const _WorkerDebugNodeStateResponse({required this.snapshot})
+    : super(_WorkerOperation.debugNodeState);
+
+  final NodeStateSnapshot snapshot;
 }
 
 final class _WorkerDiagCheckUpdateResponse extends _WorkerResponse {

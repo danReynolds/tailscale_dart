@@ -292,6 +292,7 @@ class Tailscale implements TailscaleClient {
     metricsFn: _worker.diagMetrics,
     derpMapFn: _worker.diagDERPMap,
     checkUpdateFn: _worker.diagCheckUpdate,
+    nodeStateFn: _worker.debugNodeState,
   );
 
   // ─── Streams ────────────────────────────────────────────────────────

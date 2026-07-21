@@ -327,6 +327,11 @@ func DuneDiagMetrics() *C.char {
 	return C.CString(tailscale.DiagMetrics())
 }
 
+//export DuneDebugNodeState
+func DuneDebugNodeState() *C.char {
+	return C.CString(tailscale.DebugNodeState())
+}
+
 //export DuneDiagDERPMap
 func DuneDiagDERPMap() *C.char {
 	return C.CString(tailscale.DiagDERPMap())

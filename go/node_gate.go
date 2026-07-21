@@ -1,6 +1,7 @@
 package tailscale
 
 import (
+	"encoding/json"
 	"sync/atomic"
 
 	"tailscale.com/tsnet"
@@ -78,15 +79,27 @@ func (g nodeGate) stillCurrent() bool {
 }
 
 // nodeStateSnapshot is a point-in-time census of every process-global registry,
-// for tests and leak diagnostics.
+// for tests and leak diagnostics. The JSON tags are the FFI contract with
+// `Diag.nodeState()` on the Dart side.
 type nodeStateSnapshot struct {
-	Epoch             uint64
-	ServePublications int
-	FunnelForwarders  int
-	HttpBindings      int
-	TcpListeners      int
-	UdpBridges        int
-	TransportCached   bool
+	Epoch             uint64 `json:"epoch"`
+	ServePublications int    `json:"servePublications"`
+	FunnelForwarders  int    `json:"funnelForwarders"`
+	HttpBindings      int    `json:"httpBindings"`
+	TcpListeners      int    `json:"tcpListeners"`
+	UdpBridges        int    `json:"udpBridges"`
+	TransportCached   bool   `json:"transportCached"`
+}
+
+// DebugNodeState returns the registry census as JSON, for the Dart-side
+// diagnostics surface. Always succeeds; see debugNodeState for atomicity
+// caveats.
+func DebugNodeState() string {
+	data, err := json.Marshal(debugNodeState())
+	if err != nil {
+		return "{}" // unreachable: fixed struct of scalars
+	}
+	return string(data)
 }
 
 // debugNodeState reports the current epoch and per-registry live counts. Each

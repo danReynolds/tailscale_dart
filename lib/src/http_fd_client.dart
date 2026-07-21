@@ -68,6 +68,13 @@ Future<http.StreamedResponse> parseHttpFdResponseForTesting({
   ).response;
 }
 
+/// Test seam over [_writeRequestBody]: streams [body] to [fd] chunk-by-chunk.
+/// Exposed so a regression test can prove the request body is transmitted
+/// incrementally rather than buffered in full before the first write.
+@visibleForTesting
+Future<void> writeRequestBodyForTesting(Stream<List<int>> body, int fd) =>
+    _writeRequestBody(body, fd);
+
 ({int requestBodyFd, int responseBodyFd}) _startNativeRequest(
   http.BaseRequest request,
 ) {

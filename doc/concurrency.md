@@ -90,9 +90,9 @@ Rules that keep it acyclic:
   get-modify-set is the lock's entire purpose, and those are local-socket
   calls, not tailnet waits. Never extend that exception to `mu` or to calls
   that wait on the network.
-- `registerUdpBridge` closes a displaced bridge only after releasing
-  `udpFdBindingMu` (its close callback re-enters the registry to deregister —
-  Go mutexes are not reentrant).
+- `UdpCloseBinding`/`closeAllUdpBindings` invoke a bridge's close callback
+  only after releasing `udpFdBindingMu` (the callback re-enters the registry
+  to deregister — Go mutexes are not reentrant).
 
 ## Diagnostics
 

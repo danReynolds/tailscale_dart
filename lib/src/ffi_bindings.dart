@@ -147,18 +147,18 @@ external void duneTcpCloseFdListener(int listenerId);
 /// Starts a POSIX fd-backed UDP datagram binding.
 ///
 /// Returns JSON:
-///   {"fd": N, "localAddress": "...", "localPort": N} on success.
-///   {"error": "..."} on failure.
+///   {"fd": N, "bindingId": N, "localAddress": "...", "localPort": N} on
+///   success. {"error": "..."} on failure.
 @ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32)>(
   symbol: 'DuneUdpBindFd',
 )
 external ffi.Pointer<Utf8> duneUdpBindFd(ffi.Pointer<Utf8> host, int port);
 
-/// Tears down the UDP bridge for the Dart-side [fd] (closes the tsnet
-/// PacketConn, wakes and exits both bridge goroutines). Keyed by the fd Dart
-/// was handed; must be called before Dart releases that fd.
-@ffi.Native<ffi.Void Function(ffi.Int32)>(symbol: 'DuneUdpCloseFd')
-external void duneUdpCloseFd(int fd);
+/// Tears down the UDP bridge for [bindingId] (closes the tsnet PacketConn,
+/// wakes and exits both bridge goroutines). Keyed by the opaque monotonic id
+/// from the bind response — never the fd, whose OS number the kernel reuses.
+@ffi.Native<ffi.Void Function(ffi.Int64)>(symbol: 'DuneUdpCloseBinding')
+external void duneUdpCloseBinding(int bindingId);
 
 /// Creates one native fd reactor poller and returns an opaque handle, or -1 on
 /// failure.

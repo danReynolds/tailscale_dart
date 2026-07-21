@@ -218,15 +218,16 @@ func DuneUdpBindFd(host *C.char, port C.int) *C.char {
 	}
 	result, _ := json.Marshal(map[string]any{
 		"fd":           binding.FD,
+		"bindingId":    binding.BindingID,
 		"localAddress": binding.LocalAddress,
 		"localPort":    binding.LocalPort,
 	})
 	return C.CString(string(result))
 }
 
-//export DuneUdpCloseFd
-func DuneUdpCloseFd(fd C.int) {
-	tailscale.UdpCloseFd(int(fd))
+//export DuneUdpCloseBinding
+func DuneUdpCloseBinding(bindingID C.longlong) {
+	tailscale.UdpCloseBinding(int64(bindingID))
 }
 
 //export DuneReactorCreate

@@ -82,6 +82,7 @@ void main() {
         final (:leftFd, :rightFd) = _socketPair();
         final binding = await createFdTailscaleDatagramBinding(
           fd: leftFd,
+          bindingId: 1,
           local: const TailscaleEndpoint(address: '100.64.0.1', port: 7001),
         );
         addTearDown(() async {
@@ -110,30 +111,33 @@ void main() {
         expect(error, isA<TailscaleUdpException>());
       });
 
-      test('close signals the Go-side bridge with the binding fd', () async {
+      test('close signals the Go-side bridge with the binding id', () async {
         // Regression for the UDP leak: closing a binding must tell Go to tear
-        // down its bridge (a datagram peer-close won't wake the Go reader), and
-        // it must do so keyed by the fd, before the fd is released.
+        // down its bridge (a datagram peer-close won't wake the Go reader),
+        // keyed by the opaque binding id — never the fd, whose OS number the
+        // kernel reuses.
         final (:leftFd, :rightFd) = _socketPair();
-        final closedFds = <int>[];
+        const bindingId = 41;
+        final closedIds = <int>[];
         final binding = await createFdTailscaleDatagramBinding(
           fd: leftFd,
+          bindingId: bindingId,
           local: const TailscaleEndpoint(address: '100.64.0.1', port: 7001),
-          closeFn: (fd) async => closedFds.add(fd),
+          closeFn: (id) async => closedIds.add(id),
         );
         addTearDown(() => TestPosixBindings.instance.close(rightFd));
 
         await binding.close();
 
         expect(
-          closedFds,
-          <int>[leftFd],
-          reason: 'Go-side close must run once, keyed by the binding fd',
+          closedIds,
+          <int>[bindingId],
+          reason: 'Go-side close must run once, keyed by the binding id',
         );
 
         // Idempotent: a second close does not re-signal Go.
         await binding.close();
-        expect(closedFds, <int>[leftFd]);
+        expect(closedIds, <int>[bindingId]);
       });
     },
   );
@@ -176,11 +180,13 @@ _bindingPair() async {
   final (:leftFd, :rightFd) = _socketPair();
   final left = await createFdTailscaleDatagramBinding(
     fd: leftFd,
+    bindingId: 11,
     local: const TailscaleEndpoint(address: '100.64.0.1', port: 7001),
   );
   try {
     final right = await createFdTailscaleDatagramBinding(
       fd: rightFd,
+      bindingId: 12,
       local: const TailscaleEndpoint(address: '100.64.0.2', port: 7001),
     );
     return (left: left, right: right);

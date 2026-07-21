@@ -135,13 +135,17 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 					pc.Close()
 					t.Fatalf("socketpair conn: %v", err)
 				}
-				if err := runUdpFdBridge(gate, dartFd, goConn, pc); err != nil {
+				id := atomic.AddInt64(&udpBindingID, 1)
+				if err := runUdpFdBridge(gate, id, goConn, pc); err != nil {
 					// The bridge closed pc and goConn on refusal; the Dart-side
 					// fd is ours to close (mirrors UdpBindFd's refusal path).
 					_ = unix.Close(dartFd)
 					return false
 				}
-				t.Cleanup(func() { UdpCloseFd(dartFd) })
+				t.Cleanup(func() {
+					UdpCloseBinding(id)
+					_ = unix.Close(dartFd)
+				})
 				return true
 			},
 			count: func() int {

@@ -79,13 +79,13 @@ void main() {
     });
   });
 
-  group('duneUdpCloseFd', () {
-    test('resolves and is a no-op for an unknown fd', () {
-      // Verifies the DuneUdpCloseFd export resolves end-to-end; an fd with no
-      // registered bridge is a safe no-op.
-      expect(native.duneUdpCloseFd, isNotNull);
-      native.duneUdpCloseFd(-1);
-      native.duneUdpCloseFd(999999);
+  group('duneUdpCloseBinding', () {
+    test('resolves and is a no-op for an unknown binding id', () {
+      // Verifies the DuneUdpCloseBinding export resolves end-to-end; an id
+      // with no registered bridge is a safe no-op.
+      expect(native.duneUdpCloseBinding, isNotNull);
+      native.duneUdpCloseBinding(-1);
+      native.duneUdpCloseBinding(999999);
     });
   });
 

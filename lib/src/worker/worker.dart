@@ -269,8 +269,10 @@ final class Worker {
     );
   }
 
-  Future<void> udpCloseFd({required int fd}) async {
-    await _request<_WorkerAckResponse>(_WorkerUdpCloseFdCommand(fd: fd));
+  Future<void> udpCloseBinding({required int bindingId}) async {
+    await _request<_WorkerAckResponse>(
+      _WorkerUdpCloseBindingCommand(bindingId: bindingId),
+    );
   }
 
   Future<({int listenerId, TailscaleEndpoint local})> tlsListenFd({
@@ -292,7 +294,7 @@ final class Worker {
     );
   }
 
-  Future<({int fd, TailscaleEndpoint local})> udpBindFd({
+  Future<({int fd, int bindingId, TailscaleEndpoint local})> udpBindFd({
     required String host,
     required int port,
   }) async {
@@ -301,6 +303,7 @@ final class Worker {
     );
     return (
       fd: response.fd,
+      bindingId: response.bindingId,
       local: TailscaleEndpoint(
         address: response.localAddress,
         port: response.localPort,

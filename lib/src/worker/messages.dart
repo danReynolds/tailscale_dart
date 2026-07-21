@@ -8,7 +8,7 @@ enum _WorkerOperation {
   tcpCloseFdListener,
   tlsListenFd,
   udpBindFd,
-  udpCloseFd,
+  udpCloseBinding,
   whois,
   tlsDomains,
   diagMetrics,
@@ -61,7 +61,7 @@ enum _WorkerOperation {
       code: code,
       statusCode: statusCode,
     ),
-    udpCloseFd => TailscaleUdpException(
+    udpCloseBinding => TailscaleUdpException(
       message,
       code: code,
       statusCode: statusCode,
@@ -218,11 +218,11 @@ final class _WorkerUdpBindFdCommand extends _WorkerCommand {
   final int port;
 }
 
-final class _WorkerUdpCloseFdCommand extends _WorkerCommand {
-  const _WorkerUdpCloseFdCommand({required this.fd})
-    : super(_WorkerOperation.udpCloseFd);
+final class _WorkerUdpCloseBindingCommand extends _WorkerCommand {
+  const _WorkerUdpCloseBindingCommand({required this.bindingId})
+    : super(_WorkerOperation.udpCloseBinding);
 
-  final int fd;
+  final int bindingId;
 }
 
 final class _WorkerWhoIsCommand extends _WorkerCommand {
@@ -389,11 +389,13 @@ final class _WorkerTlsListenFdResponse extends _WorkerResponse {
 final class _WorkerUdpBindFdResponse extends _WorkerResponse {
   const _WorkerUdpBindFdResponse({
     required this.fd,
+    required this.bindingId,
     required this.localAddress,
     required this.localPort,
   }) : super(_WorkerOperation.udpBindFd);
 
   final int fd;
+  final int bindingId;
   final String localAddress;
   final int localPort;
 }

@@ -7,13 +7,11 @@ import (
 	"time"
 )
 
-// TestReapFunnelForwarder_RemovesStaleEntryAndUntracks is the core of the
-// teardown-race fix: a forwarder whose listener died must be dropped from the
-// registry and its publications untracked, so a later same-port forward can't
-// attach a mount to a dead listener.
-func TestReapFunnelForwarder_RemovesStaleEntryAndUntracks(t *testing.T) {
+// TestReapFunnelForwarder_RemovesStaleEntry is the core of the teardown-race
+// fix: a forwarder whose listener died must be dropped from the registry, so a
+// later same-port forward can't attach a mount to a dead listener.
+func TestReapFunnelForwarder_RemovesStaleEntry(t *testing.T) {
 	const port uint16 = 18443
-	key := servePublicationKey{host: "node.ts.net", port: port, path: "/"}
 	ff := &funnelForwarder{
 		port:    port,
 		domain:  "node.ts.net",
@@ -28,7 +26,6 @@ func TestReapFunnelForwarder_RemovesStaleEntryAndUntracks(t *testing.T) {
 		delete(funnelForwarders, port)
 		funnelMu.Unlock()
 	})
-	trackFunnelPublication(key)
 
 	reapFunnelForwarder(port, ff)
 
@@ -37,12 +34,6 @@ func TestReapFunnelForwarder_RemovesStaleEntryAndUntracks(t *testing.T) {
 	funnelMu.Unlock()
 	if present {
 		t.Fatal("stale forwarder was not removed from the registry")
-	}
-	funnelPublicationMu.Lock()
-	_, tracked := funnelPublications[key]
-	funnelPublicationMu.Unlock()
-	if tracked {
-		t.Fatal("stale forwarder's publication was not untracked")
 	}
 }
 

@@ -515,7 +515,10 @@ func serveForwardLocked(gate nodeGate, lc *local.Client, payload serveForwardPay
 		// isolate, concurrent with Stop on the worker, so this race is real.
 		return jsonError(errors.New("ServeForward raced node teardown"))
 	}
-	ctx := context.Background()
+	// Bounded LocalAPI round trips — see defaultNativeCallTimeout. Held under
+	// serveConfigMu, so a wedged tailscaled must not pin the lock forever.
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
 	st, err := lc.StatusWithoutPeers(ctx)
 	if err != nil {
 		return localAPIError(err)
@@ -573,7 +576,9 @@ func ServeClear(payloadJSON string) string {
 	}
 	serveConfigMu.Lock()
 	defer serveConfigMu.Unlock()
-	ctx := context.Background()
+	// Bounded LocalAPI round trips — see defaultNativeCallTimeout.
+	ctx, cancel := boundedCallCtx(0)
+	defer cancel()
 	sc, err := lc.GetServeConfig(ctx)
 	if err != nil {
 		return localAPIError(err)
@@ -1017,12 +1022,9 @@ func DiagPing(ip string, timeoutMillis int, pingType string) string {
 		return jsonError(err)
 	}
 
-	ctx := context.Background()
-	if timeoutMillis > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMillis)*time.Millisecond)
-		defer cancel()
-	}
+	// Bounded even with no caller timeout — see defaultNativeCallTimeout.
+	ctx, cancel := boundedCallCtx(time.Duration(timeoutMillis) * time.Millisecond)
+	defer cancel()
 
 	addr, err := resolvePingAddr(ctx, lc, ip)
 	if err != nil {

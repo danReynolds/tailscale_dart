@@ -13,55 +13,70 @@ import (
 	"tailscale.com/tsnet"
 )
 
-// TestRegisterUdpBridgeReapsDisplaced covers F5: the UDP registry is keyed on a
-// reusable OS fd number, so a new binding at a number a prior (finalizer-closed)
-// binding left behind must reap the orphan instead of silently overwriting it.
-func TestRegisterUdpBridgeReapsDisplaced(t *testing.T) {
+// TestUdpBindingIDsNeverDisplace locks in why the registry is keyed by a
+// monotonic binding id and not the Dart-side fd: ids never collide, so two
+// live bridges — even ones whose socketpairs reused the same OS fd number —
+// coexist in the registry and close independently. (The fd-keyed design
+// required displacement-reaping logic for exactly this case; the id key makes
+// the whole class unrepresentable.)
+func TestUdpBindingIDsNeverDisplace(t *testing.T) {
 	withLiveServer(t, &tsnet.Server{})
-	const fd = 987654 // not a real fd; the registry is just a map keyed by int
 	var firstClosed atomic.Bool
+	id1 := atomic.AddInt64(&udpBindingID, 1)
 	first := &udpBridge{}
 	first.closeFn = func() {
 		firstClosed.Store(true)
-		deregisterUdpBridge(fd, first)
+		deregisterUdpBridge(id1, first)
 	}
-	if !registerUdpBridge(liveGate(t), fd, first) {
+	if !registerUdpBridge(liveGate(t), id1, first) {
 		t.Fatal("live registration must be accepted")
 	}
 
+	id2 := atomic.AddInt64(&udpBindingID, 1)
 	second := &udpBridge{}
-	second.closeFn = func() { deregisterUdpBridge(fd, second) }
-	if !registerUdpBridge(liveGate(t), fd, second) { // fd reuse must reap `first`
+	second.closeFn = func() { deregisterUdpBridge(id2, second) }
+	if !registerUdpBridge(liveGate(t), id2, second) {
 		t.Fatal("live registration must be accepted")
 	}
 
-	if !firstClosed.Load() {
-		t.Fatal("registerUdpBridge must close a bridge displaced at the same fd")
+	if firstClosed.Load() {
+		t.Fatal("a new binding must not disturb an existing one")
 	}
 	udpFdBindingMu.Lock()
-	owned := udpFdBindingRegistry[fd] == second
+	both := udpFdBindingRegistry[id1] == first && udpFdBindingRegistry[id2] == second
 	udpFdBindingMu.Unlock()
-	if !owned {
-		t.Fatal("the new bridge must own the registry slot after displacing the old")
+	if !both {
+		t.Fatal("both bindings must coexist in the registry")
 	}
-	UdpCloseFd(fd)
+
+	UdpCloseBinding(id1)
+	if !firstClosed.Load() {
+		t.Fatal("UdpCloseBinding must close the addressed bridge")
+	}
+	udpFdBindingMu.Lock()
+	remaining := udpFdBindingRegistry[id2] == second && udpFdBindingRegistry[id1] == nil
+	udpFdBindingMu.Unlock()
+	if !remaining {
+		t.Fatal("closing one binding must not affect the other")
+	}
+	UdpCloseBinding(id2)
 }
 
 // TestRegisterUdpBridgeRefusesStaleGate: a registration whose lifecycle ended
-// must be refused without touching the registry or the displaced entry.
+// must be refused without touching the registry.
 func TestRegisterUdpBridgeRefusesStaleGate(t *testing.T) {
 	withLiveServer(t, &tsnet.Server{})
-	const fd = 987655
 	stale := liveGate(t)
 	nodeEpoch.Add(1)
 
+	id := atomic.AddInt64(&udpBindingID, 1)
 	bridge := &udpBridge{}
-	bridge.closeFn = func() { deregisterUdpBridge(fd, bridge) }
-	if registerUdpBridge(stale, fd, bridge) {
+	bridge.closeFn = func() { deregisterUdpBridge(id, bridge) }
+	if registerUdpBridge(stale, id, bridge) {
 		t.Fatal("a stale gate must be refused at the commit point")
 	}
 	udpFdBindingMu.Lock()
-	_, present := udpFdBindingRegistry[fd]
+	_, present := udpFdBindingRegistry[id]
 	udpFdBindingMu.Unlock()
 	if present {
 		t.Fatal("a refused registration must not land in the registry")
@@ -71,7 +86,7 @@ func TestRegisterUdpBridgeRefusesStaleGate(t *testing.T) {
 // TestDgramRawReadBlocksAfterPeerClose documents why the UDP bridge needs an
 // explicit close: a raw blocking read on the Go end of a datagram socketpair is
 // NOT woken when the Dart end is shut down + closed (unlike a stream socket).
-// This is the leak the netpoller-wrapped conn + UdpCloseFd path fixes.
+// This is the leak the netpoller-wrapped conn + UdpCloseBinding path fixes.
 func TestDgramRawReadBlocksAfterPeerClose(t *testing.T) {
 	dartFd, goFd, err := newSocketPairCloexec(unix.SOCK_DGRAM)
 	if err != nil {
@@ -99,7 +114,7 @@ func TestDgramRawReadBlocksAfterPeerClose(t *testing.T) {
 }
 
 // TestDgramPollerCloseUnblocksRead is the mechanism the fix relies on: closing
-// a netpoller-integrated conn DOES unblock a parked read, so UdpCloseFd can
+// a netpoller-integrated conn DOES unblock a parked read, so UdpCloseBinding can
 // reclaim the outbound goroutine.
 func TestDgramPollerCloseUnblocksRead(t *testing.T) {
 	dartFd, goConn := newTestDgramConn(t)
@@ -122,7 +137,7 @@ func TestDgramPollerCloseUnblocksRead(t *testing.T) {
 	}
 }
 
-// TestUdpBridgeCloseReleasesResources is the M1 regression: UdpCloseFd must
+// TestUdpBridgeCloseReleasesResources is the M1 regression: UdpCloseBinding must
 // deregister the bridge, close the tsnet PacketConn (freeing the port), and let
 // both bridge goroutines exit — including the outbound one parked in Read.
 func TestUdpBridgeCloseReleasesResources(t *testing.T) {
@@ -138,25 +153,26 @@ func TestUdpBridgeCloseReleasesResources(t *testing.T) {
 
 	withLiveServer(t, &tsnet.Server{})
 	base := runtime.NumGoroutine()
-	if err := runUdpFdBridge(liveGate(t), dartFd, goConn, pc); err != nil {
+	id := atomic.AddInt64(&udpBindingID, 1)
+	if err := runUdpFdBridge(liveGate(t), id, goConn, pc); err != nil {
 		t.Fatalf("live bridge registration: %v", err)
 	}
 
 	udpFdBindingMu.Lock()
-	_, registered := udpFdBindingRegistry[dartFd]
+	_, registered := udpFdBindingRegistry[id]
 	udpFdBindingMu.Unlock()
 	if !registered {
 		t.Fatal("bridge was not registered")
 	}
 	waitGoroutineCount(t, base+2, time.Second, "bridge goroutines did not start")
 
-	UdpCloseFd(dartFd)
+	UdpCloseBinding(id)
 
 	udpFdBindingMu.Lock()
-	_, stillRegistered := udpFdBindingRegistry[dartFd]
+	_, stillRegistered := udpFdBindingRegistry[id]
 	udpFdBindingMu.Unlock()
 	if stillRegistered {
-		t.Error("bridge still registered after UdpCloseFd")
+		t.Error("bridge still registered after UdpCloseBinding")
 	}
 	if _, err := pc.WriteTo([]byte("x"), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9}); err == nil {
 		t.Error("PacketConn still usable after close (port not released)")
@@ -181,7 +197,7 @@ func TestCloseAllUdpBindingsTearsDownEveryBridge(t *testing.T) {
 			t.Fatalf("socketpair conn: %v", err)
 		}
 		fds = append(fds, dartFd)
-		if err := runUdpFdBridge(liveGate(t), dartFd, goConn, pc); err != nil {
+		if err := runUdpFdBridge(liveGate(t), atomic.AddInt64(&udpBindingID, 1), goConn, pc); err != nil {
 			t.Fatalf("live bridge registration: %v", err)
 		}
 	}

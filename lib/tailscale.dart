@@ -239,7 +239,7 @@ class Tailscale implements TailscaleClient {
   late final Udp udp = createUdp(
     bindFn: (host, port) => _worker.udpBindFd(host: host, port: port),
     defaultAddressFn: () async => (await status()).ipv4,
-    closeFn: (fd) => _worker.udpCloseFd(fd: fd),
+    closeFn: (bindingId) => _worker.udpCloseBinding(bindingId: bindingId),
   );
   @override
   late final Funnel funnel = createFunnel(

@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 )
@@ -25,20 +26,25 @@ const (
 
 type UdpFdBinding struct {
 	FD           int
+	BindingID    int64
 	LocalAddress string
 	LocalPort    int
 }
 
 // udpFdBindingRegistry tracks live UDP bridges so they can be torn down
-// explicitly. Keyed by the Dart-side fd (which Dart already holds and passes
-// back to UdpCloseFd), so no separate binding id needs threading through the
-// bind response. A datagram socketpair peer-close does NOT wake a goroutine
-// parked in read on the other end (unlike a stream socket), so without an
-// explicit close the bridge goroutines, the tailnet PacketConn (and its port),
-// and two OS threads would leak until process exit.
+// explicitly. Keyed by a monotonically-assigned binding id (returned in the
+// bind response and passed back to UdpCloseBinding) rather than the Dart-side
+// fd: an fd is an OS number the kernel reuses, so an fd-keyed registry had a
+// whole displacement class — a binding dropped without close could be silently
+// overwritten by a later binding whose socketpair reused the number — that
+// monotonic ids make unrepresentable. A datagram socketpair peer-close does
+// NOT wake a goroutine parked in read on the other end (unlike a stream
+// socket), so without an explicit close the bridge goroutines, the tailnet
+// PacketConn (and its port), and two OS threads would leak until process exit.
 var (
 	udpFdBindingMu       sync.Mutex
-	udpFdBindingRegistry = map[int]*udpBridge{}
+	udpFdBindingRegistry = map[int64]*udpBridge{}
+	udpBindingID         int64 // atomic
 )
 
 type udpBridge struct {
@@ -52,10 +58,11 @@ type udpBridge struct {
 
 func (b *udpBridge) close() { b.closeOnce.Do(b.closeFn) }
 
-// registerUdpBridge installs [bridge] in the registry, reporting whether the
-// gated lifecycle is still live. On false the bridge was NOT installed and the
-// caller owns cleanup.
-func registerUdpBridge(gate nodeGate, dartFd int, bridge *udpBridge) bool {
+// registerUdpBridge installs [bridge] under [id], reporting whether the gated
+// lifecycle is still live. On false the bridge was NOT installed and the
+// caller owns cleanup. Ids are monotonic and never reused, so an insert can
+// never displace an existing entry.
+func registerUdpBridge(gate nodeGate, id int64, bridge *udpBridge) bool {
 	udpFdBindingMu.Lock()
 	// Commit-point epoch check (see nodeGate): a bind that raced teardown must
 	// not land behind closeAllUdpBindings' sweep, where it would hold its
@@ -64,36 +71,25 @@ func registerUdpBridge(gate nodeGate, dartFd int, bridge *udpBridge) bool {
 		udpFdBindingMu.Unlock()
 		return false
 	}
-	// The registry is keyed on the Dart-side fd, an OS number the kernel can
-	// reuse. If a prior binding at this fd was dropped without UdpCloseFd (e.g.
-	// the Dart finalizer closed the fd directly), a new socketpair can reuse the
-	// number. fd reuse proves the old Dart side is gone, so tear its bridge down
-	// rather than orphan it (both UdpCloseFd and closeAllUdpBindings key on fd,
-	// so an overwritten entry would leak two goroutines + the tailnet port).
-	displaced := udpFdBindingRegistry[dartFd]
-	udpFdBindingRegistry[dartFd] = bridge
+	udpFdBindingRegistry[id] = bridge
 	udpFdBindingMu.Unlock()
-	if displaced != nil {
-		displaced.close()
-	}
 	return true
 }
 
-func deregisterUdpBridge(dartFd int, bridge *udpBridge) {
+func deregisterUdpBridge(id int64, bridge *udpBridge) {
 	udpFdBindingMu.Lock()
-	if udpFdBindingRegistry[dartFd] == bridge {
-		delete(udpFdBindingRegistry, dartFd)
+	if udpFdBindingRegistry[id] == bridge {
+		delete(udpFdBindingRegistry, id)
 	}
 	udpFdBindingMu.Unlock()
 }
 
-// UdpCloseFd tears down the UDP bridge for the Dart-side [fd]. Idempotent and a
-// no-op for an unknown fd. Must be called before Dart releases the fd, so the
-// key can't collide with a reused descriptor.
-func UdpCloseFd(fd int) {
+// UdpCloseBinding tears down the UDP bridge for [id] (from the bind response).
+// Idempotent and a no-op for an unknown id.
+func UdpCloseBinding(id int64) {
 	udpFdBindingMu.Lock()
-	bridge := udpFdBindingRegistry[fd]
-	delete(udpFdBindingRegistry, fd)
+	bridge := udpFdBindingRegistry[id]
+	delete(udpFdBindingRegistry, id)
 	udpFdBindingMu.Unlock()
 	if bridge != nil {
 		bridge.close()
@@ -103,9 +99,9 @@ func UdpCloseFd(fd int) {
 func closeAllUdpBindings() {
 	udpFdBindingMu.Lock()
 	bridges := make([]*udpBridge, 0, len(udpFdBindingRegistry))
-	for fd, bridge := range udpFdBindingRegistry {
+	for id, bridge := range udpFdBindingRegistry {
 		bridges = append(bridges, bridge)
-		delete(udpFdBindingRegistry, fd)
+		delete(udpFdBindingRegistry, id)
 	}
 	udpFdBindingMu.Unlock()
 	for _, bridge := range bridges {
@@ -147,7 +143,8 @@ func UdpBindFd(host string, port int) (*UdpFdBinding, error) {
 	if localAddress == "" {
 		localAddress = host
 	}
-	if err := runUdpFdBridge(gate, dartFd, goConn, pc); err != nil {
+	id := atomic.AddInt64(&udpBindingID, 1)
+	if err := runUdpFdBridge(gate, id, goConn, pc); err != nil {
 		// The bridge closed pc and goConn; the Dart-side fd was never handed
 		// out, so close it here too.
 		_ = unix.Close(dartFd)
@@ -155,6 +152,7 @@ func UdpBindFd(host string, port int) (*UdpFdBinding, error) {
 	}
 	return &UdpFdBinding{
 		FD:           dartFd,
+		BindingID:    id,
 		LocalAddress: localAddress,
 		LocalPort:    localPort,
 	}, nil
@@ -203,16 +201,16 @@ func newDatagramSocketPairConn() (int, net.Conn, error) {
 	return dartFd, goConn, nil
 }
 
-func runUdpFdBridge(gate nodeGate, dartFd int, goConn net.Conn, pc net.PacketConn) error {
+func runUdpFdBridge(gate nodeGate, id int64, goConn net.Conn, pc net.PacketConn) error {
 	bridge := &udpBridge{}
 	bridge.closeFn = func() {
-		deregisterUdpBridge(dartFd, bridge)
+		deregisterUdpBridge(id, bridge)
 		_ = pc.Close()
 		_ = goConn.Close()
 	}
 	// Register before spawning the pump goroutines: a bind refused at the
 	// commit gate must leave nothing running.
-	if !registerUdpBridge(gate, dartFd, bridge) {
+	if !registerUdpBridge(gate, id, bridge) {
 		_ = pc.Close()
 		_ = goConn.Close()
 		return errors.New("udp bind raced node teardown")

@@ -219,10 +219,10 @@ final class _WorkerUdpBindFdCommand extends _WorkerCommand {
 }
 
 final class _WorkerUdpCloseFdCommand extends _WorkerCommand {
-  const _WorkerUdpCloseFdCommand({required this.fd})
+  const _WorkerUdpCloseFdCommand({required this.bindingId})
     : super(_WorkerOperation.udpCloseFd);
 
-  final int fd;
+  final int bindingId;
 }
 
 final class _WorkerWhoIsCommand extends _WorkerCommand {
@@ -389,11 +389,13 @@ final class _WorkerTlsListenFdResponse extends _WorkerResponse {
 final class _WorkerUdpBindFdResponse extends _WorkerResponse {
   const _WorkerUdpBindFdResponse({
     required this.fd,
+    required this.bindingId,
     required this.localAddress,
     required this.localPort,
   }) : super(_WorkerOperation.udpBindFd);
 
   final int fd;
+  final int bindingId;
   final String localAddress;
   final int localPort;
 }

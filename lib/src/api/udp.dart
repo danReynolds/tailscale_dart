@@ -28,13 +28,17 @@ const int _udpMaxEnvelopeBytes =
     tailscaleMaxDatagramPayloadBytes;
 
 typedef UdpBindFn =
-    Future<({int fd, TailscaleEndpoint local})> Function(String host, int port);
+    Future<({int fd, int bindingId, TailscaleEndpoint local})> Function(
+      String host,
+      int port,
+    );
 typedef UdpDefaultAddressFn = Future<String?> Function();
 
-/// Tears down the Go-side UDP bridge for the given Dart fd. A datagram
-/// socketpair peer-close does not wake the Go bridge's reader, so the binding
-/// must signal Go explicitly on close, or the port + goroutines + threads leak.
-typedef UdpCloseFn = Future<void> Function(int fd);
+/// Tears down the Go-side UDP bridge for the given opaque binding id (from the
+/// bind response). A datagram socketpair peer-close does not wake the Go
+/// bridge's reader, so the binding must signal Go explicitly on close, or the
+/// port + goroutines + threads leak.
+typedef UdpCloseFn = Future<void> Function(int bindingId);
 
 /// One UDP datagram received over the tailnet.
 final class TailscaleDatagram {
@@ -124,6 +128,7 @@ Udp createUdp({
 @internal
 Future<TailscaleDatagramBinding> createFdTailscaleDatagramBinding({
   required int fd,
+  required int bindingId,
   required TailscaleEndpoint local,
   UdpCloseFn? closeFn,
 }) async {
@@ -136,6 +141,7 @@ Future<TailscaleDatagramBinding> createFdTailscaleDatagramBinding({
   );
   return _FdTailscaleDatagramBinding(
     transport: transport,
+    bindingId: bindingId,
     local: local,
     closeFn: closeFn,
   );
@@ -163,9 +169,10 @@ final class _Udp implements Udp {
       );
     }
     try {
-      final (:fd, :local) = await _bind(resolvedAddress, port);
+      final (:fd, :bindingId, :local) = await _bind(resolvedAddress, port);
       return createFdTailscaleDatagramBinding(
         fd: fd,
+        bindingId: bindingId,
         local: local,
         closeFn: _close,
       );
@@ -182,9 +189,11 @@ final class _Udp implements Udp {
 final class _FdTailscaleDatagramBinding implements TailscaleDatagramBinding {
   _FdTailscaleDatagramBinding({
     required PosixFdTransport transport,
+    required int bindingId,
     required this.local,
     UdpCloseFn? closeFn,
   }) : _transport = transport,
+       _bindingId = bindingId,
        _closeFn = closeFn {
     _datagrams = StreamController<TailscaleDatagram>(onCancel: close);
     _subscription = _transport.input.listen(
@@ -208,6 +217,7 @@ final class _FdTailscaleDatagramBinding implements TailscaleDatagramBinding {
   }
 
   final PosixFdTransport _transport;
+  final int _bindingId;
   final UdpCloseFn? _closeFn;
   late final StreamController<TailscaleDatagram> _datagrams;
   late final StreamSubscription<Uint8List> _subscription;
@@ -245,12 +255,13 @@ final class _FdTailscaleDatagramBinding implements TailscaleDatagramBinding {
     // Tear down the Go-side bridge before releasing the fd. A datagram
     // socketpair peer-close won't wake the Go reader, so without this the
     // tailnet port, both bridge goroutines, and two OS threads leak. Keyed by
-    // the fd, so it must run while the fd still uniquely identifies this
-    // binding — i.e. before `_transport.close()` frees it for reuse.
+    // the opaque binding id, so fd reuse can never misdirect the close; the
+    // bridge-then-transport order stays so Go stops pumping before the fd
+    // disappears under it.
     final closeFn = _closeFn;
     if (closeFn != null) {
       try {
-        await closeFn(_transport.fd);
+        await closeFn(_bindingId);
       } catch (error, stackTrace) {
         closeError ??= error;
         closeStackTrace ??= stackTrace;

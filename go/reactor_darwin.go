@@ -164,16 +164,22 @@ func (p *kqueueReactorPoller) Wait(out []ReactorEvent, timeoutMillis int) (int, 
 		case unix.EVFILT_WRITE:
 			flags |= ReactorEventWrite
 		}
+		// On EV_EOF kevent carries the socket error in Fflags (Data is the
+		// residual readable byte count, not an errno). Errno is diagnostic
+		// only — the Dart dispatch derives errors from the failing syscall.
+		errno := int32(0)
 		if ev.Flags&unix.EV_EOF != 0 {
 			flags |= ReactorEventHup
+			errno = int32(ev.Fflags)
 		}
 		if ev.Flags&unix.EV_ERROR != 0 {
 			flags |= ReactorEventError
+			errno = int32(ev.Data)
 		}
 		out[count] = ReactorEvent{
 			ID:     id,
 			Events: flags,
-			Errno:  int32(ev.Data),
+			Errno:  errno,
 		}
 		count++
 	}

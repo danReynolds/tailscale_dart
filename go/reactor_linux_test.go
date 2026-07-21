@@ -135,3 +135,34 @@ func TestEpollHalfCloseDeliveredWhenReadEnabled(t *testing.T) {
 		t.Fatal("half-close not delivered with reads enabled — EOF would be lost")
 	}
 }
+
+// TestEpollErrorDeliveredOnResetWithReadsDisabled pins the contract the Dart
+// dispatch's terminal-read branch depends on: EPOLLERR/EPOLLHUP are unmaskable,
+// so a peer RST is delivered even when the transport has reads paused (zero
+// interest). Because epoll is level-triggered, that event repeats until the fd
+// is closed — which is exactly why the dispatch must respond by forcing a read
+// (surfacing the error and closing) rather than ignoring flags it didn't
+// subscribe to.
+func TestEpollErrorDeliveredOnResetWithReadsDisabled(t *testing.T) {
+	p, err := newReactorPoller()
+	if err != nil {
+		t.Fatalf("newReactorPoller: %v", err)
+	}
+	defer p.Close()
+
+	local, peer := rstTCPPair(t)
+	defer unix.Close(local)
+	if err := setReactorNonblock(local); err != nil {
+		t.Fatalf("nonblock: %v", err)
+	}
+	if err := p.Register(local, 7, 0); err != nil { // zero interest: reads paused
+		t.Fatalf("register: %v", err)
+	}
+
+	resetPeer(t, peer)
+
+	flags := waitForFlags(t, p, 7, ReactorEventError|ReactorEventHup)
+	if flags&(ReactorEventError|ReactorEventHup) == 0 {
+		t.Fatalf("RST with reads disabled delivered flags %#x, want ERR/HUP", flags)
+	}
+}

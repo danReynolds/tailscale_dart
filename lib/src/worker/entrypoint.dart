@@ -317,6 +317,26 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               _WorkerDiagDERPMapResponse(map: _parseDERPMap(result)),
             );
+          case _WorkerDebugNodeStateCommand():
+            final result =
+                _callNativeJson(
+                      native.duneDebugNodeState,
+                      onError: TailscaleDiagException.new,
+                    )
+                    as Map<String, dynamic>;
+            sendPort.send(
+              _WorkerDebugNodeStateResponse(
+                snapshot: NodeStateSnapshot(
+                  epoch: result['epoch'] as int? ?? 0,
+                  servePublications: result['servePublications'] as int? ?? 0,
+                  funnelForwarders: result['funnelForwarders'] as int? ?? 0,
+                  httpBindings: result['httpBindings'] as int? ?? 0,
+                  tcpListeners: result['tcpListeners'] as int? ?? 0,
+                  udpBridges: result['udpBridges'] as int? ?? 0,
+                  transportCached: result['transportCached'] as bool? ?? false,
+                ),
+              ),
+            );
           case _WorkerDiagCheckUpdateCommand():
             final result =
                 _callNativeJson(

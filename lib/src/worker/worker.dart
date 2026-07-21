@@ -346,6 +346,13 @@ final class Worker {
     return response.clientVersion;
   }
 
+  Future<NodeStateSnapshot> debugNodeState() async {
+    final response = await _request<_WorkerDebugNodeStateResponse>(
+      const _WorkerDebugNodeStateCommand(),
+    );
+    return response.snapshot;
+  }
+
   Future<TailscaleStatus> status({required String stateDir}) async {
     final response = await _request<_WorkerStatusResponse>(
       _WorkerStatusCommand(stateDir: stateDir),

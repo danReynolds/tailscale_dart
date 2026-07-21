@@ -31,6 +31,12 @@ const (
 // ReactorEvent is the dispatch record handed back to the Dart side per
 // readiness notification. Layout must match `_NativeReactorEvent` in
 // `lib/src/fd_transport.dart` and `DuneReactorEvent` in `cmd/dylib/main.go`.
+//
+// Errno is diagnostic only: the kqueue poller stamps it (socket error from
+// EV_EOF's Fflags / EV_ERROR's Data), the epoll poller leaves it zero (epoll
+// carries no errno; retrieving one would cost a getsockopt per event), and the
+// Dart dispatch never branches on it — errors are derived from the failing
+// read/write syscall itself, which is authoritative on both platforms.
 type ReactorEvent struct {
 	ID     int64
 	Events int32

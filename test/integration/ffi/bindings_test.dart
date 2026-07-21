@@ -79,6 +79,23 @@ void main() {
     });
   });
 
+  group('duneDebugNodeState', () {
+    test('returns a zeroed census when nothing is running', () {
+      final ptr = native.duneDebugNodeState();
+      final result = ptr.toDartString();
+      native.duneFree(ptr);
+
+      final census = jsonDecode(result) as Map<String, dynamic>;
+      expect(census['epoch'], isA<int>());
+      expect(census['servePublications'], 0);
+      expect(census['funnelForwarders'], 0);
+      expect(census['httpBindings'], 0);
+      expect(census['tcpListeners'], 0);
+      expect(census['udpBridges'], 0);
+      expect(census['transportCached'], false);
+    });
+  });
+
   group('duneUdpCloseBinding', () {
     test('resolves and is a no-op for an unknown binding id', () {
       // Verifies the DuneUdpCloseBinding export resolves end-to-end; an id

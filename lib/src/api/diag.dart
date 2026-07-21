@@ -280,11 +280,78 @@ class ClientVersion {
       'urgentSecurityUpdate: $urgentSecurityUpdate)';
 }
 
+/// Point-in-time census of the native runtime's internal registries.
+///
+/// For leak diagnostics and bug reports: after closing everything, all counts
+/// should be zero. Counts are each read under their own lock but the snapshot
+/// is not atomic across registries. Field set is diagnostic, not API-stable.
+final class NodeStateSnapshot {
+  const NodeStateSnapshot({
+    required this.epoch,
+    required this.servePublications,
+    required this.funnelForwarders,
+    required this.httpBindings,
+    required this.tcpListeners,
+    required this.udpBridges,
+    required this.transportCached,
+  });
+
+  /// Node lifecycle generation; increments on every stop/teardown.
+  final int epoch;
+
+  /// Live serve publications (process-owned reverse-proxy mounts).
+  final int servePublications;
+
+  /// Live funnel forwarders (one per exposed port).
+  final int funnelForwarders;
+
+  /// Live tailnet HTTP server bindings.
+  final int httpBindings;
+
+  /// Live tailnet TCP listeners.
+  final int tcpListeners;
+
+  /// Live UDP socketpair bridges.
+  final int udpBridges;
+
+  /// Whether the pooled tailnet HTTP client transport is currently cached.
+  final bool transportCached;
+
+  @override
+  bool operator ==(Object other) =>
+      other is NodeStateSnapshot &&
+          epoch == other.epoch &&
+          servePublications == other.servePublications &&
+          funnelForwarders == other.funnelForwarders &&
+          httpBindings == other.httpBindings &&
+          tcpListeners == other.tcpListeners &&
+          udpBridges == other.udpBridges &&
+          transportCached == other.transportCached;
+
+  @override
+  int get hashCode => Object.hash(
+    epoch,
+    servePublications,
+    funnelForwarders,
+    httpBindings,
+    tcpListeners,
+    udpBridges,
+    transportCached,
+  );
+
+  @override
+  String toString() =>
+      'NodeStateSnapshot(epoch: $epoch, serve: $servePublications, '
+      'funnel: $funnelForwarders, http: $httpBindings, tcp: $tcpListeners, '
+      'udp: $udpBridges, transportCached: $transportCached)';
+}
+
 typedef DiagPingFn =
     Future<PingResult> Function(String ip, Duration? timeout, PingType type);
 typedef DiagMetricsFn = Future<String> Function();
 typedef DiagDERPMapFn = Future<DERPMap> Function();
 typedef DiagCheckUpdateFn = Future<ClientVersion?> Function();
+typedef DiagNodeStateFn = Future<NodeStateSnapshot> Function();
 
 /// Observability and diagnostics. All read-only; nothing here affects
 /// connectivity.
@@ -312,6 +379,13 @@ abstract class Diag {
   /// Checks whether a newer version of the embedded tsnet runtime is
   /// available. Returns null when already on the latest.
   Future<ClientVersion?> checkUpdate();
+
+  /// Census of the native runtime's internal registries — live listener,
+  /// binding, and forwarder counts plus the teardown epoch.
+  ///
+  /// Intended for leak diagnostics and bug reports; after closing every
+  /// listener/binding the counts should all be zero.
+  Future<NodeStateSnapshot> nodeState();
 }
 
 /// Library-internal factory. Reach via `Tailscale.instance.diag`.
@@ -321,15 +395,23 @@ Diag createDiag({
   required DiagMetricsFn metricsFn,
   required DiagDERPMapFn derpMapFn,
   required DiagCheckUpdateFn checkUpdateFn,
-}) => _Diag(pingFn, metricsFn, derpMapFn, checkUpdateFn);
+  required DiagNodeStateFn nodeStateFn,
+}) => _Diag(pingFn, metricsFn, derpMapFn, checkUpdateFn, nodeStateFn);
 
 final class _Diag implements Diag {
-  _Diag(this._ping, this._metrics, this._derpMap, this._checkUpdate);
+  _Diag(
+    this._ping,
+    this._metrics,
+    this._derpMap,
+    this._checkUpdate,
+    this._nodeState,
+  );
 
   final DiagPingFn _ping;
   final DiagMetricsFn _metrics;
   final DiagDERPMapFn _derpMap;
   final DiagCheckUpdateFn _checkUpdate;
+  final DiagNodeStateFn _nodeState;
 
   @override
   Future<PingResult> ping(
@@ -346,4 +428,7 @@ final class _Diag implements Diag {
 
   @override
   Future<ClientVersion?> checkUpdate() => _checkUpdate();
+
+  @override
+  Future<NodeStateSnapshot> nodeState() => _nodeState();
 }

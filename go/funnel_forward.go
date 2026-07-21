@@ -34,10 +34,8 @@ const funnelMaxConcurrentConns = 512
 const funnelUpTimeout = 30 * time.Second
 
 var (
-	funnelMu            sync.Mutex
-	funnelForwarders    = map[uint16]*funnelForwarder{}
-	funnelPublicationMu sync.Mutex
-	funnelPublications  = map[servePublicationKey]struct{}{}
+	funnelMu         sync.Mutex
+	funnelForwarders = map[uint16]*funnelForwarder{}
 )
 
 type funnelTarget struct {
@@ -220,10 +218,10 @@ func installFunnelForwarder(gate nodeGate, port uint16, domain string, rawLn net
 	return attachFunnelTargetLocked(ff, mount, target, domain, port), nil
 }
 
-// reapFunnelForwarder removes [ff] from the registry and untracks its
-// publications once its listener has closed. Idempotent and safe if a different
-// forwarder has since taken the port (it only reaps [ff] itself), so it
-// composes with closeAllFunnelForwarders.
+// reapFunnelForwarder removes [ff] from the registry once its listener has
+// closed. Idempotent and safe if a different forwarder has since taken the
+// port (it only reaps [ff] itself), so it composes with
+// closeAllFunnelForwarders.
 func reapFunnelForwarder(port uint16, ff *funnelForwarder) {
 	funnelMu.Lock()
 	if funnelForwarders[port] != ff {
@@ -231,28 +229,19 @@ func reapFunnelForwarder(port uint16, ff *funnelForwarder) {
 		return // already reaped, or the port was reclaimed by a newer forwarder
 	}
 	delete(funnelForwarders, port)
-	keys := make([]servePublicationKey, 0)
-	ff.mu.RLock()
-	for mount := range ff.targets {
-		keys = append(keys, servePublicationKey{host: ff.domain, port: port, path: mount})
-	}
-	ff.mu.RUnlock()
 	funnelMu.Unlock()
 
 	_ = ff.server.Close()
-	untrackFunnelPublications(keys)
 }
 
-// attachFunnelTargetLocked registers a mount on an existing forwarder and
-// records the publication. The caller must hold funnelMu; the lock order it
-// takes (funnelMu -> ff.mu, funnelMu -> funnelPublicationMu) matches every
-// other path, so holding funnelMu across it cannot deadlock
+// attachFunnelTargetLocked registers a mount on an existing forwarder. The
+// caller must hold funnelMu; the only lock it takes (funnelMu -> ff.mu)
+// matches every other path, so holding funnelMu across it cannot deadlock
 // closeAllFunnelForwarders.
 func attachFunnelTargetLocked(ff *funnelForwarder, mount string, target funnelTarget, domain string, port uint16) servePublication {
 	ff.mu.Lock()
 	ff.targets[mount] = target
 	ff.mu.Unlock()
-	trackFunnelPublication(servePublicationKey{host: domain, port: port, path: mount})
 	return servePublication{
 		URL:          serveURL(true, domain, port, mount),
 		Port:         int(port),
@@ -274,12 +263,10 @@ func clearFunnelForward(payload serveClearPayload) error {
 		return err
 	}
 
-	var domain string
 	var removePort bool
 	funnelMu.Lock()
 	ff := funnelForwarders[port]
 	if ff != nil {
-		domain = ff.domain
 		ff.mu.Lock()
 		delete(ff.targets, mount)
 		removePort = len(ff.targets) == 0
@@ -293,7 +280,6 @@ func clearFunnelForward(payload serveClearPayload) error {
 	if ff == nil {
 		return nil
 	}
-	untrackFunnelPublication(servePublicationKey{host: domain, port: port, path: mount})
 	if removePort {
 		_ = ff.server.Close()
 		_ = ff.listener.Close()
@@ -301,63 +287,14 @@ func clearFunnelForward(payload serveClearPayload) error {
 	return nil
 }
 
-func trackFunnelPublication(key servePublicationKey) {
-	if key.host == "" || key.port == 0 || key.path == "" {
-		return
-	}
-	funnelPublicationMu.Lock()
-	funnelPublications[key] = struct{}{}
-	funnelPublicationMu.Unlock()
-}
-
-func untrackFunnelPublication(key servePublicationKey) {
-	funnelPublicationMu.Lock()
-	delete(funnelPublications, key)
-	funnelPublicationMu.Unlock()
-}
-
-func untrackFunnelPublications(keys []servePublicationKey) {
-	funnelPublicationMu.Lock()
-	for _, key := range keys {
-		delete(funnelPublications, key)
-	}
-	funnelPublicationMu.Unlock()
-}
-
-func takeFunnelPublications() []servePublicationKey {
-	funnelPublicationMu.Lock()
-	defer funnelPublicationMu.Unlock()
-	keys := make([]servePublicationKey, 0, len(funnelPublications))
-	for key := range funnelPublications {
-		keys = append(keys, key)
-	}
-	funnelPublications = map[servePublicationKey]struct{}{}
-	return keys
-}
-
 func closeAllFunnelForwarders() {
 	funnelMu.Lock()
-	keys := make([]servePublicationKey, 0)
 	for port, ff := range funnelForwarders {
 		_ = ff.server.Close()
 		_ = ff.listener.Close()
-		ff.mu.RLock()
-		for mount := range ff.targets {
-			keys = append(keys, servePublicationKey{
-				host: ff.domain,
-				port: port,
-				path: mount,
-			})
-		}
-		ff.mu.RUnlock()
 		delete(funnelForwarders, port)
 	}
 	funnelMu.Unlock()
-	if len(keys) == 0 {
-		keys = takeFunnelPublications()
-	} else {
-		untrackFunnelPublications(keys)
-	}
 }
 
 func (ff *funnelForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {

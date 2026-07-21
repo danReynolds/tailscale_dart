@@ -69,7 +69,7 @@ One global order; take locks left to right, never right to left:
 
 ```
 mu  →  serveConfigMu   →  servePublicationMu
-mu  →  funnelMu        →  ff.mu (per-forwarder), funnelPublicationMu
+mu  →  funnelMu        →  ff.mu (per-forwarder)
 mu  →  httpBindingMu | tcpFdListenerMu | udpFdBindingMu
 mu  →  tailnetHTTPTransports.mu        (stopLocked's reset path)
 watchMu  →  identityCache.mu

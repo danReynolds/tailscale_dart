@@ -133,24 +133,6 @@ func TestFunnelForwarderStripsSpoofedIdentityAndProxyHeaders(t *testing.T) {
 	}
 }
 
-func TestFunnelPublicationRegistryTracksProcessOwnedMappings(t *testing.T) {
-	resetFunnelPublicationRegistryForTest(t)
-
-	key := servePublicationKey{
-		host: "demo.tailnet.ts.net",
-		port: 443,
-		path: "/",
-	}
-	trackFunnelPublication(key)
-	keys := takeFunnelPublications()
-	if len(keys) != 1 || keys[0] != key {
-		t.Fatalf("keys = %+v, want [%+v]", keys, key)
-	}
-	if keys := takeFunnelPublications(); len(keys) != 0 {
-		t.Fatalf("registry was not drained: %+v", keys)
-	}
-}
-
 func mustParseURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)
@@ -158,16 +140,4 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 		t.Fatal(err)
 	}
 	return u
-}
-
-func resetFunnelPublicationRegistryForTest(t *testing.T) {
-	t.Helper()
-	funnelPublicationMu.Lock()
-	funnelPublications = map[servePublicationKey]struct{}{}
-	funnelPublicationMu.Unlock()
-	t.Cleanup(func() {
-		funnelPublicationMu.Lock()
-		funnelPublications = map[servePublicationKey]struct{}{}
-		funnelPublicationMu.Unlock()
-	})
 }

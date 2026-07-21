@@ -41,7 +41,7 @@ var (
 type funnelTarget struct {
 	localAddress string
 	localPort    uint16
-	proxy        *httputil.ReverseProxy
+	proxy        http.Handler
 }
 
 type funnelForwarder struct {
@@ -103,7 +103,7 @@ func startFunnelForward(payload serveForwardPayload) (servePublication, error) {
 	target := funnelTarget{
 		localAddress: localAddress,
 		localPort:    localPort,
-		proxy:        newFunnelReverseProxy(targetURL),
+		proxy:        funnelMountHandler(mount, newFunnelReverseProxy(targetURL)),
 	}
 
 	// Fast path: an existing forwarder for this port just gains a mount. No
@@ -304,6 +304,18 @@ func (ff *funnelForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target.proxy.ServeHTTP(w, r)
+}
+
+// funnelMountHandler strips the mount prefix before proxying, matching
+// tailscaled's Serve behavior (ipn/ipnlocal/serve.go uses http.StripPrefix) so
+// a backend mounted at a non-root path receives paths relative to its mount
+// rather than the public-facing prefix. A root mount ("/") strips nothing.
+func funnelMountHandler(mount string, proxy http.Handler) http.Handler {
+	prefix := strings.TrimSuffix(mount, "/")
+	if prefix == "" {
+		return proxy
+	}
+	return http.StripPrefix(prefix, proxy)
 }
 
 func newFunnelReverseProxy(targetURL *url.URL) *httputil.ReverseProxy {

@@ -44,9 +44,10 @@ abstract class Funnel {
 
   /// Removes a Funnel publication for [publicPort] and [path].
   ///
-  /// Idempotent: clearing an absent mapping succeeds. This removes the
-  /// underlying Serve path as well; use [Serve.forward] when you want tailnet-
-  /// only publication.
+  /// Idempotent: clearing an absent mapping succeeds. Funnel publications are
+  /// independent of [Serve] — this clears only the Funnel mapping and does not
+  /// touch any Serve path for the same port. Use [Serve] for tailnet-only
+  /// publication.
   Future<void> clear({int publicPort = 443, String path = '/'});
 }
 

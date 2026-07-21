@@ -586,3 +586,26 @@ func TestClassifyLocalAPIError_KnownCodesAreStable(t *testing.T) {
 		}
 	}
 }
+
+// TestIsTransientNoSuggestion pins the exit-node suggest() fix: the transient
+// "node not ready yet" errors (which cross the LocalAPI boundary as message
+// text) are recognized so ExitNodeSuggest maps them to a null suggestion
+// instead of throwing, while genuine errors still propagate.
+func TestIsTransientNoSuggestion(t *testing.T) {
+	transient := []string{
+		"no preferred DERP, try again later",
+		"no network map, try again later",
+		`Post "http://local-tailscaled.invalid/localapi/v0/suggest-exit-node": no preferred DERP, try again later`,
+	}
+	for _, m := range transient {
+		if !isTransientNoSuggestion(errors.New(m)) {
+			t.Errorf("isTransientNoSuggestion(%q) = false, want true", m)
+		}
+	}
+	notTransient := []string{"access denied", "404 not found", "internal error"}
+	for _, m := range notTransient {
+		if isTransientNoSuggestion(errors.New(m)) {
+			t.Errorf("isTransientNoSuggestion(%q) = true, want false", m)
+		}
+	}
+}

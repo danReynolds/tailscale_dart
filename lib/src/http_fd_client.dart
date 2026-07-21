@@ -36,8 +36,25 @@ final class TailscaleHttpClient extends http.BaseClient {
       rethrow;
     }
 
+    // `request.finalize()` runs before the request fd is adopted by
+    // `_writeRequestBody`. It can throw (a re-sent request, or a custom
+    // BaseRequest override); if it does, the request fd is still a bare fd
+    // with no finalizer, so it — and the already-adopted response transport —
+    // must be released here, or the fd leaks and the Go request goroutine
+    // pins forever.
+    final Stream<List<int>> requestBody;
+    try {
+      requestBody = request.finalize();
+    } catch (_) {
+      await responseTransport.close();
+      closePosixFdForCleanup(start.requestBodyFd);
+      rethrow;
+    }
+
+    // From here `_writeRequestBody` owns (adopts + closes) the request fd, so
+    // the response-await failure path only needs to close the response side.
     final bodyWriteDone = _writeRequestBody(
-      request.finalize(),
+      requestBody,
       start.requestBodyFd,
     );
 

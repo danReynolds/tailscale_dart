@@ -581,7 +581,10 @@ class Tailscale implements TailscaleClient {
   /// without re-pulling the full node list on every refresh. For
   /// push-style updates, see [onNodeChanges].
   @override
-  Future<List<TailscaleNode>> nodes() {
+  Future<List<TailscaleNode>> nodes() async {
+    // async so a failed _requireInitialized() guard surfaces as a Future
+    // rejection (catchable via .catchError / await), consistent with every
+    // other lifecycle method, rather than throwing synchronously.
     _requireInitialized();
     return _snapshotNodes();
   }
@@ -649,7 +652,9 @@ class Tailscale implements TailscaleClient {
   /// [TailscaleNodeIdentity.tags] before handling. See
   /// <https://tailscale.com/kb/1068/tags> for the tag model.
   @override
-  Future<TailscaleNodeIdentity?> whois(String ip) {
+  Future<TailscaleNodeIdentity?> whois(String ip) async {
+    // async so the _requireInitialized() guard rejects the returned Future
+    // instead of throwing synchronously (see nodes()).
     _requireInitialized();
     return _worker.whois(ip);
   }

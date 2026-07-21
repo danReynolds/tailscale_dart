@@ -141,3 +141,35 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 	}
 	return u
 }
+
+// TestFunnelMountHandlerStripsMountPrefix pins the fix for the funnel
+// path-prefix bug: a non-root mount must strip its prefix before proxying, so
+// the backend receives paths relative to its mount (matching Serve/tailscaled),
+// while a root mount strips nothing.
+func TestFunnelMountHandlerStripsMountPrefix(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Echo back the exact path the backend received.
+		_, _ = w.Write([]byte(r.URL.Path))
+	}))
+	defer backend.Close()
+	backendURL := mustParseURL(t, backend.URL)
+
+	cases := []struct {
+		name, mount, reqPath, wantBackendPath string
+	}{
+		{"non-root mount strips its own prefix", "/api", "/api/users", "/users"},
+		{"root mount strips nothing", "/", "/users", "/users"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := funnelMountHandler(tc.mount, newFunnelReverseProxy(backendURL))
+			req := httptest.NewRequest(http.MethodGet, "https://public.example"+tc.reqPath, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if got := rec.Body.String(); got != tc.wantBackendPath {
+				t.Errorf("mount %q request %q: backend received path %q, want %q",
+					tc.mount, tc.reqPath, got, tc.wantBackendPath)
+			}
+		})
+	}
+}

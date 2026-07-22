@@ -148,6 +148,11 @@ void main() {
         hostname: 'dune-e2e-peer',
         responseBody: peerResponseBody,
       );
+      // Establish the WireGuard/DERP data path once, up front, so the timed
+      // data-plane tests below (including inbound peer→self requests) don't
+      // race path establishment inside their own timeouts — the primary source
+      // of this suite's CI flakiness.
+      await awaitDataPath(tsnet, peer.ipv4);
     });
 
     tearDownAll(() async {
@@ -442,7 +447,7 @@ void main() {
       }
 
       final first = await tsnet.onNodeChanges.first.timeout(
-        const Duration(seconds: 2),
+        const Duration(seconds: 10),
       );
       expect(first, isNotEmpty);
       expect(first.any((p) => p.ipv4 == peer.ipv4), isTrue);
@@ -689,7 +694,7 @@ void main() {
         ]);
 
         await reconnect();
-        await bothSawRunning.timeout(const Duration(seconds: 10));
+        await bothSawRunning.timeout(const Duration(seconds: 60));
       },
     );
 

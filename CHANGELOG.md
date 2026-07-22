@@ -1,3 +1,29 @@
+## 0.8.0
+
+Cleanup and consistency release following an architecture-health review.
+
+**Behavior changes:**
+
+- `udp.send()` now throws `ArgumentError`/`RangeError` for an invalid argument —
+  a bad remote port or address, or an oversize payload — instead of
+  `TailscaleUdpException`. This matches the argument-validation behavior of
+  `serve`, `funnel`, and the HTTP client. Errors parsing datagrams received from
+  the network still throw `TailscaleUdpException`.
+
+**Improvements:**
+
+- Status and peer-list failures from a slow or misbehaving backend now carry a
+  structured error code, instead of surfacing as an unclassified error.
+- The HTTP client's request file-descriptor cleanup was unified so a failure
+  mid-request can no longer leak a descriptor or pin a native goroutine
+  (internal hardening; no API change).
+
+**Internal:**
+
+- Deduplicated the Serve/Funnel argument validators into one module; pruned dead
+  LocalAPI error-classification patterns; CI now runs the Go suite under the
+  race detector.
+
 ## 0.7.1
 
 Correctness fixes from a follow-up review of the public API, worker lifecycle,

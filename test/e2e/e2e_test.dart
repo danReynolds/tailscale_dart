@@ -447,7 +447,7 @@ void main() {
       }
 
       final first = await tsnet.onNodeChanges.first.timeout(
-        const Duration(seconds: 10),
+        const Duration(seconds: 5),
       );
       expect(first, isNotEmpty);
       expect(first.any((p) => p.ipv4 == peer.ipv4), isTrue);
@@ -694,7 +694,7 @@ void main() {
         ]);
 
         await reconnect();
-        await bothSawRunning.timeout(const Duration(seconds: 60));
+        await bothSawRunning.timeout(const Duration(seconds: 45));
       },
     );
 

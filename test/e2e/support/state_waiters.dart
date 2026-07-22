@@ -4,16 +4,19 @@ import 'package:tailscale/tailscale.dart';
 
 /// Records state changes until [terminal] is observed.
 ///
-/// Headscale first-boot auth and credential-reconnect can be the slow leg on a
-/// loaded CI runner (control-plane round-trips against a containerized
-/// Headscale), so the budget is sized for that worst case rather than a warm
-/// local machine. Terminal-state paths like Stopped and NoState are synthetic
-/// and nearly instant, so the headroom costs nothing when those paths succeed.
+/// This timeout is a ceiling, not a wait: a transition that completes in 2s
+/// costs 2s, so the value only bounds the failure case. It is sized for the one
+/// genuinely variable leg — Headscale auth (first-boot or credential-reconnect)
+/// against a containerized control plane on a contended CI runner — where the
+/// original 30s occasionally fell short. 45s adds headroom over that without
+/// being so generous it masks a real slowdown (a transition that suddenly takes
+/// 40s should still fail the suite). Fast synthetic paths (Stopped, NoState)
+/// complete in well under a second and are unaffected.
 Future<List<NodeState>> recordUntil(
   Tailscale tsnet,
   NodeState terminal,
   Future<void> Function() action, {
-  Duration timeout = const Duration(seconds: 60),
+  Duration timeout = const Duration(seconds: 45),
 }) async {
   final sequence = <NodeState>[];
   final done = Completer<void>();

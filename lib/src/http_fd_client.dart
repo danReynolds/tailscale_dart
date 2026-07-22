@@ -25,50 +25,51 @@ final class TailscaleHttpClient extends http.BaseClient {
       throw const TailscaleHttpException('Windows is not supported.');
     }
     final start = _startNativeRequest(request);
-    late final PosixFdTransport responseTransport;
-    try {
-      responseTransport = await PosixFdTransport.adopt(start.responseBodyFd);
-    } catch (_) {
-      // `adopt` owns and closes the fd it was given on failure, so only the
-      // request fd (not yet adopted — it is written below) needs closing here.
-      // Closing responseBodyFd again would double-close it.
-      closePosixFdForCleanup(start.requestBodyFd);
-      rethrow;
-    }
-
-    // `request.finalize()` runs before the request fd is adopted by
-    // `_writeRequestBody`. It can throw (a re-sent request, or a custom
-    // BaseRequest override); if it does, the request fd is still a bare fd
-    // with no finalizer, so it — and the already-adopted response transport —
-    // must be released here, or the fd leaks and the Go request goroutine
-    // pins forever.
-    final Stream<List<int>> requestBody;
-    try {
-      requestBody = request.finalize();
-    } catch (_) {
-      await responseTransport.close();
-      closePosixFdForCleanup(start.requestBodyFd);
-      rethrow;
-    }
-
-    // From here `_writeRequestBody` owns (adopts + closes) the request fd, so
-    // the response-await failure path only needs to close the response side.
-    final bodyWriteDone = _writeRequestBody(
-      requestBody,
-      start.requestBodyFd,
+    return _sendOverFds(
+      requestBodyFd: start.requestBodyFd,
+      responseBodyFd: start.responseBodyFd,
+      request: request,
     );
+  }
+}
 
-    final parsed = _HttpResponseParser(
+/// Drives [request] over the two native fds and returns the streamed response.
+///
+/// Owns both fds once called: [responseBodyFd] is adopted into a transport
+/// (which closes it itself on adopt-failure), and [requestBodyFd] is handed to
+/// [_writeRequestBody] (which adopts and closes it). A single cleanup path
+/// releases whatever is still owned if any step throws — ownership is tracked
+/// by the [requestFdTransferred] flag rather than by code position, so a future
+/// inserted step can't silently leak an fd (and pin the Go request goroutine).
+/// Mirrors the inbound accept path's cleanup shape in `api/http.dart`.
+Future<http.StreamedResponse> _sendOverFds({
+  required int requestBodyFd,
+  required int responseBodyFd,
+  required http.BaseRequest request,
+}) async {
+  PosixFdTransport? responseTransport;
+  var requestFdTransferred = false;
+  try {
+    // adopt closes responseBodyFd itself if it throws.
+    responseTransport = await PosixFdTransport.adopt(responseBodyFd);
+
+    // finalize() can throw (a re-sent request, or a custom BaseRequest
+    // override) before the request fd is adopted.
+    final requestBody = request.finalize();
+
+    // From here _writeRequestBody owns (adopts + closes) the request fd.
+    requestFdTransferred = true;
+    final bodyWriteDone = _writeRequestBody(requestBody, requestBodyFd);
+
+    return await _HttpResponseParser(
       responseTransport,
       request,
       bodyWriteDone,
-    );
-    try {
-      return await parsed.response;
-    } catch (_) {
-      await responseTransport.close();
-      rethrow;
-    }
+    ).response;
+  } catch (_) {
+    await responseTransport?.close();
+    if (!requestFdTransferred) closePosixFdForCleanup(requestBodyFd);
+    rethrow;
   }
 }
 
@@ -91,6 +92,20 @@ Future<http.StreamedResponse> parseHttpFdResponseForTesting({
 @visibleForTesting
 Future<void> writeRequestBodyForTesting(Stream<List<int>> body, int fd) =>
     _writeRequestBody(body, fd);
+
+/// Test seam over [_sendOverFds]: drives the fd-owning core directly on
+/// caller-supplied fds, so a fault-injection test can prove both fds are
+/// released when a step (e.g. `request.finalize()`) throws.
+@visibleForTesting
+Future<http.StreamedResponse> sendOverFdsForTesting({
+  required int requestBodyFd,
+  required int responseBodyFd,
+  required http.BaseRequest request,
+}) => _sendOverFds(
+  requestBodyFd: requestBodyFd,
+  responseBodyFd: responseBodyFd,
+  request: request,
+);
 
 ({int requestBodyFd, int responseBodyFd}) _startNativeRequest(
   http.BaseRequest request,

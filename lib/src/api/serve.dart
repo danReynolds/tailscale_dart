@@ -1,8 +1,9 @@
-import 'dart:io' show InternetAddress, Platform;
+import 'dart:io' show Platform;
 
 import 'package:meta/meta.dart';
 
 import '../errors.dart';
+import 'serve_validation.dart';
 
 typedef ServeForwardFn =
     Future<
@@ -167,10 +168,10 @@ final class _Serve implements Serve {
     if (Platform.isWindows) {
       throw const TailscaleServeException('Windows is not supported.');
     }
-    final normalizedPath = _normalizePath(path);
-    final normalizedAddress = _normalizeLocalAddress(localAddress);
-    _validatePort(tailnetPort, 'tailnetPort');
-    _validatePort(localPort, 'localPort');
+    final normalizedPath = normalizeServePath(path);
+    final normalizedAddress = normalizeServeLocalAddress(localAddress);
+    validateServePort(tailnetPort, 'tailnetPort');
+    validateServePort(localPort, 'localPort');
 
     try {
       final published = await _forward(
@@ -199,8 +200,8 @@ final class _Serve implements Serve {
     if (Platform.isWindows) {
       throw const TailscaleServeException('Windows is not supported.');
     }
-    final normalizedPath = _normalizePath(path);
-    _validatePort(tailnetPort, 'tailnetPort');
+    final normalizedPath = normalizeServePath(path);
+    validateServePort(tailnetPort, 'tailnetPort');
     try {
       await _clear(
         tailnetPort: tailnetPort,
@@ -254,67 +255,3 @@ TailscalePublishedService _publicationFrom(
   funnel: published.funnel,
   closeFn: closeFn,
 );
-
-int _validatePort(int port, String name) {
-  if (port < 1 || port > 65535) {
-    throw RangeError.range(port, 1, 65535, name);
-  }
-  return port;
-}
-
-String _normalizeLocalAddress(String localAddress) {
-  final trimmed = localAddress.trim();
-  if (trimmed.isEmpty) {
-    throw ArgumentError.value(
-      localAddress,
-      'localAddress',
-      'must not be empty',
-    );
-  }
-  if (!_isLoopbackAddress(trimmed)) {
-    throw ArgumentError.value(
-      localAddress,
-      'localAddress',
-      'must be a loopback address such as 127.0.0.1, ::1, or localhost',
-    );
-  }
-  if (trimmed.toLowerCase() == 'localhost') {
-    return '127.0.0.1';
-  }
-  return trimmed;
-}
-
-bool _isLoopbackAddress(String address) {
-  if (address.toLowerCase() == 'localhost') return true;
-  return InternetAddress.tryParse(address)?.isLoopback ?? false;
-}
-
-String _normalizePath(String path) {
-  final trimmed = path.trim();
-  if (trimmed.isEmpty) return '/';
-  if (!trimmed.startsWith('/')) {
-    throw ArgumentError.value(path, 'path', 'must start with /');
-  }
-  if (trimmed.contains('?') || trimmed.contains('#')) {
-    throw ArgumentError.value(
-      path,
-      'path',
-      'must not include query or fragment',
-    );
-  }
-  if (_containsPathTraversal(trimmed)) {
-    throw ArgumentError.value(
-      path,
-      'path',
-      'must not include . or .. segments',
-    );
-  }
-  return trimmed;
-}
-
-bool _containsPathTraversal(String path) {
-  for (final segment in path.split('/')) {
-    if (segment == '.' || segment == '..') return true;
-  }
-  return false;
-}

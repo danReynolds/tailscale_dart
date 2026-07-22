@@ -65,7 +65,9 @@ void main() {
             List<int>.filled(tailscaleMaxDatagramPayloadBytes + 1, 1),
             to: const TailscaleEndpoint(address: '100.64.0.2', port: 7001),
           ),
-          throwsA(isA<TailscaleUdpException>()),
+          // Caller-argument validation now throws ArgumentError (consistent
+          // with serve/funnel/http), not TailscaleUdpException.
+          throwsA(isA<ArgumentError>()),
         );
       });
 

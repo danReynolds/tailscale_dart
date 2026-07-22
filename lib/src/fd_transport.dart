@@ -40,6 +40,15 @@ final class PosixFdTransport {
 
   /// Adopts [fd] and registers it with the shared POSIX fd reactor.
   ///
+  /// Ownership contract: on success the returned transport owns [fd] and closes
+  /// it on [close]. If **reactor registration** fails, `adopt` closes [fd]
+  /// itself before throwing, so the caller must not close it again (that would
+  /// double-close a possibly-reused fd number). The only throws that leave
+  /// [fd] untouched are the up-front argument checks below (a negative fd or a
+  /// non-positive size limit) — programming errors, not runtime failures. This
+  /// lets a multi-fd caller release only the fds it still holds after a partial
+  /// failure — see `_sendOverFds` in `http_fd_client.dart`.
+  ///
   /// Set [datagram] for a `SOCK_DGRAM` fd. Datagram reads must never be clamped
   /// below a whole message — a short `read(2)` on a datagram socket silently
   /// discards the tail — so in datagram mode the reactor reads a full

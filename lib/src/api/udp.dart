@@ -332,21 +332,31 @@ final class _FdTailscaleDatagramBinding implements TailscaleDatagramBinding {
 }
 
 Uint8List _encodeDatagramEnvelope(TailscaleEndpoint remote, List<int> payload) {
+  // Caller-argument validation uses ArgumentError/RangeError (as serve, funnel,
+  // and http do) — these signal a bad value the caller passed, not an
+  // operational failure. Wire-parsing errors in _decodeDatagramEnvelope stay
+  // TailscaleUdpException.
   if (remote.address.isEmpty) {
-    throw const TailscaleUdpException('remote address is required');
+    throw ArgumentError.value(remote.address, 'remote.address', 'is required');
   }
   if (remote.port < 1 || remote.port > 65535) {
-    throw TailscaleUdpException('invalid remote UDP port ${remote.port}');
+    throw RangeError.range(remote.port, 1, 65535, 'remote.port');
   }
   if (payload.length > tailscaleMaxDatagramPayloadBytes) {
-    throw TailscaleUdpException(
-      'UDP payload exceeds $tailscaleMaxDatagramPayloadBytes bytes',
+    throw ArgumentError.value(
+      payload.length,
+      'payload',
+      'exceeds $tailscaleMaxDatagramPayloadBytes bytes',
     );
   }
 
   final address = utf8.encode(remote.address);
   if (address.length > 255) {
-    throw const TailscaleUdpException('remote address is too long');
+    throw ArgumentError.value(
+      remote.address,
+      'remote.address',
+      'is too long (max 255 encoded bytes)',
+    );
   }
 
   final envelope = Uint8List(

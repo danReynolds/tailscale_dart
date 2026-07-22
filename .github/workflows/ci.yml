@@ -25,7 +25,9 @@ jobs:
         run: go vet ./...
       - name: Run Go tests
         working-directory: go
-        run: go test -v -count=1 ./...
+        # -race: the teardown/reactor tests were written to stress register-vs-
+        # teardown under the race detector (see node_gate_test.go); gate on it.
+        run: go test -race -v -count=1 ./...
 
   dart-tests:
     name: Dart tests

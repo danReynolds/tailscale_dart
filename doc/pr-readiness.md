@@ -97,11 +97,10 @@ Coverage added in the readiness pass:
 
 ## 1.0 Launch Blockers
 
-- Replace the current two-isolates-per-fd backend with a bounded shared POSIX
-  fd reactor, or explicitly replace it with another bounded-I/O backend. See
-  [`rfc-shared-fd-reactor.md`](rfc-shared-fd-reactor.md). The current backend is
-  correct for validation and moderate traffic, but isolate count scales with
-  active fd count and should not be the final high-concurrency server story.
+- ✅ Done: the two-isolates-per-fd backend was replaced by a bounded, sharded
+  shared POSIX fd reactor (see
+  [`rfc-shared-fd-reactor.md`](rfc-shared-fd-reactor.md)). Isolate count no
+  longer scales with active fd count.
 
 ## Accepted PR Feedback To Address
 

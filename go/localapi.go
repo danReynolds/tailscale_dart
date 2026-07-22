@@ -249,22 +249,22 @@ func classifyLocalAPIError(err error) (code string, status int) {
 	case http.StatusPreconditionFailed:
 		code = "preconditionFailed"
 	}
-	// String match as a backstop for 4xx errors that LocalAPI
-	// returns without HTTP status propagation (e.g. taildrop
-	// disabled). These messages are stable enough in practice to
-	// hinge a feature-disabled signal on — wrapped in a helper so
-	// the fragility stays local.
+	// String match as a backstop for feature 4xx errors the LocalAPI returns
+	// without HTTP status propagation. The live signal is the funnel-permission
+	// error, whose text always begins "Funnel not available; ..." (upstream
+	// ipn/serve.go NodeCanFunnel, both the HTTPS-off and node-attribute-not-set
+	// variants) — caught by "not available". The remaining phrasings are
+	// speculative backstops for similarly-shaped feature errors. Fragile by
+	// nature (upstream text can change); kept local and covered by a test that
+	// uses the real upstream strings so drift on the live path is caught.
 	if code == "" {
 		lower := strings.ToLower(err.Error())
 		switch {
 		case strings.Contains(lower, "not allowed for funnel"):
 			code = "forbidden"
-		case strings.Contains(lower, "no funnel attribute"),
-			strings.Contains(lower, "does not have funnel attribute"):
-			code = "featureDisabled"
-		case strings.Contains(lower, "not enabled"),
+		case strings.Contains(lower, "not available"),
+			strings.Contains(lower, "not enabled"),
 			strings.Contains(lower, "must enable"),
-			strings.Contains(lower, "not available"),
 			strings.Contains(lower, "is disabled"),
 			strings.Contains(lower, "disabled by"):
 			code = "featureDisabled"

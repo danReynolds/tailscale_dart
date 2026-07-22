@@ -284,7 +284,7 @@ func DuneStatus() string {
 	defer cancel()
 	status, err := lc.StatusWithoutPeers(ctx)
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 	jsonBytes, err := json.Marshal(status)
 	if err != nil {
@@ -309,7 +309,7 @@ func DunePeers() string {
 	defer cancel()
 	status, err := lc.Status(ctx)
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 
 	peers := make([]*ipnstate.PeerStatus, 0, len(status.Peer))

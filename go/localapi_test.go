@@ -169,21 +169,36 @@ func TestClassifyLocalAPIError_HTTPStatusCodes(t *testing.T) {
 }
 
 func TestClassifyLocalAPIError_FeatureDisabledFromMessage(t *testing.T) {
-	cases := []string{
-		"Taildrop is disabled",
-		"funnel not enabled for this node",
-		"MagicDNS is disabled by operator",
-		"tsnet: you must enable HTTPS in the admin panel to proceed",
-		"Funnel not available; HTTPS must be enabled",
-		"node has no funnel attribute",
+	// The live path: the exact strings tailscale.com's ipn/serve.go
+	// NodeCanFunnel returns (both variants). If upstream rewords these, this
+	// test fails — which is the point, since classification hinges on the text.
+	realUpstream := []string{
+		`Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.`,
+		`Funnel not available; "funnel" node attribute not set. See https://tailscale.com/s/no-funnel.`,
 	}
-	for _, msg := range cases {
+	// Speculative backstop phrasings (not tied to a specific current upstream
+	// error — classifyLocalAPIError documents them as such).
+	speculative := []string{
+		"feature not enabled for this node",
+		"you must enable this in the admin panel",
+		"this capability is disabled by the operator",
+	}
+	for _, msg := range append(realUpstream, speculative...) {
 		t.Run(msg, func(t *testing.T) {
 			code, _ := classifyLocalAPIError(errors.New(msg))
 			if code != "featureDisabled" {
 				t.Errorf("code = %q, want %q", code, "featureDisabled")
 			}
 		})
+	}
+}
+
+func TestClassifyLocalAPIError_ForbiddenFromFunnelPortMessage(t *testing.T) {
+	// Real upstream string (ipn/serve.go CheckFunnelAccess): a disallowed
+	// funnel port maps to forbidden, not featureDisabled.
+	code, _ := classifyLocalAPIError(errors.New("port 8080 is not allowed for funnel; allowed ports are: [443 8443 10000]"))
+	if code != "forbidden" {
+		t.Errorf("code = %q, want %q", code, "forbidden")
 	}
 }
 

@@ -82,9 +82,11 @@ func (g nodeGate) stillCurrent() bool {
 // for tests and leak diagnostics. The JSON tags are the FFI contract with
 // `Diag.nodeState()` on the Dart side.
 type nodeStateSnapshot struct {
+	// No funnelForwarders count: Funnel is no longer a separate registry of
+	// listeners, it is a serve-config entry with AllowFunnel set, so its
+	// publications are counted by ServePublications.
 	Epoch             uint64 `json:"epoch"`
 	ServePublications int    `json:"servePublications"`
-	FunnelForwarders  int    `json:"funnelForwarders"`
 	HttpBindings      int    `json:"httpBindings"`
 	TcpListeners      int    `json:"tcpListeners"`
 	UdpBridges        int    `json:"udpBridges"`
@@ -111,10 +113,6 @@ func debugNodeState() nodeStateSnapshot {
 	servePublicationMu.Lock()
 	snap.ServePublications = len(servePublications)
 	servePublicationMu.Unlock()
-
-	funnelMu.Lock()
-	snap.FunnelForwarders = len(funnelForwarders)
-	funnelMu.Unlock()
 
 	httpBindingMu.Lock()
 	snap.HttpBindings = len(httpBindingRegistry)

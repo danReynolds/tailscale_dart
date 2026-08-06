@@ -506,17 +506,6 @@ func ServeForward(payloadJSON string) string {
 		return jsonError(fmt.Errorf("invalid serve forward JSON: %w", err))
 	}
 
-	if payload.Funnel {
-		publication, err := startFunnelForward(payload)
-		if err != nil {
-			return localAPIError(err)
-		}
-		b, err := json.Marshal(publication)
-		if err != nil {
-			return jsonError(err)
-		}
-		return string(b)
-	}
 	gate, ok := acquireNodeGate()
 	if !ok {
 		return jsonError(errors.New("ServeForward called before Start"))
@@ -599,12 +588,6 @@ func ServeClear(payloadJSON string) string {
 	lc, err := lcOr("ServeClear")
 	if err != nil {
 		return jsonError(err)
-	}
-	if payload.Funnel {
-		if err := clearFunnelForward(payload); err != nil {
-			return localAPIError(err)
-		}
-		return `{"ok":true}`
 	}
 	serveConfigMu.Lock()
 	defer serveConfigMu.Unlock()
@@ -739,11 +722,20 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 	if st.Self == nil {
 		return servePublication{}, errors.New("serve unavailable: local node status missing")
 	}
-	if payload.Funnel {
-		return servePublication{}, errors.New("funnel forwarding must use startFunnelForward")
-	}
 	if payload.HTTPS && !st.Self.HasCap(tailcfg.CapabilityHTTPS) {
 		return servePublication{}, errors.New("Serve not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
+	}
+	if payload.Funnel {
+		// Same shape as `tailscale funnel`: one web handler plus AllowFunnel on
+		// the same host:port. Upstream's CLI takes exactly this path — funnel is
+		// a bool argument to the function that configures serve
+		// (cmd/tailscale/cli/serve_v2.go setServe), not a separate mechanism —
+		// so a publication serves the tailnet and the public internet from one
+		// config entry. Checked before SetWebHandler so a node without the
+		// funnel attribute leaves no half-applied mount behind.
+		if err := ipn.CheckFunnelAccess(port, st.Self); err != nil {
+			return servePublication{}, err
+		}
 	}
 	if sc.IsTCPForwardingOnPort(port, "") {
 		return servePublication{}, fmt.Errorf("cannot serve web; already serving TCP on port %d", port)
@@ -762,6 +754,9 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 		payload.HTTPS,
 		magicDNSSuffix,
 	)
+	if payload.Funnel {
+		sc.SetFunnel(dnsName, port, true)
+	}
 
 	return servePublication{
 		URL:          serveURL(payload.HTTPS, dnsName, port, mount),
@@ -770,7 +765,7 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 		LocalPort:    int(localPort),
 		Path:         mount,
 		HTTPS:        payload.HTTPS,
-		Funnel:       false,
+		Funnel:       payload.Funnel,
 	}, nil
 }
 
@@ -795,6 +790,14 @@ func applyServeClear(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveClea
 	}
 
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(port))))
+	if payload.Funnel {
+		// Withdraw public ingress for the whole host:port, the same unit
+		// `tailscale funnel <port> off` operates on — AllowFunnel is keyed by
+		// host:port, not by mount. Done up front so clearing a Funnel
+		// publication stops public traffic even when other mounts keep the web
+		// handler alive below.
+		sc.SetFunnel(dnsName, port, false)
+	}
 	web := sc.Web[hp]
 	if web == nil {
 		return nil

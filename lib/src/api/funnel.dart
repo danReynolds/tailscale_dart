@@ -8,22 +8,43 @@ import 'serve_validation.dart';
 
 /// Public-internet publication for an existing local HTTP service.
 ///
-/// Reached via [Tailscale.funnel]. Funnel is the public counterpart to
-/// [Serve.forward]: Tailscale publishes this node's MagicDNS HTTPS name to the
-/// open internet, then proxies requests through the tailnet to the local
-/// loopback HTTP service you own.
+/// Reached via [Tailscale.funnel]. Funnel is [Serve.forward] with public
+/// ingress turned on: Tailscale publishes this node's MagicDNS HTTPS name to
+/// the open internet and proxies requests to the local loopback HTTP service
+/// you own. This mirrors `tailscale funnel`, which is `tailscale serve` plus a
+/// flag on the same configuration entry.
 ///
-/// Requirements are controlled by the tailnet operator: HTTPS must be enabled,
-/// the node must have the Funnel node attribute, and the requested port must be
-/// allowed by policy.
+/// Requirements are controlled by the tailnet operator, and none of them can be
+/// satisfied from Dart. All three must be in place or [Funnel.forward] throws:
 ///
-/// Unlike [Serve.forward], public Funnel requests do not include Tailscale
-/// identity headers. Authenticate public callers at the forwarded service layer
-/// if the endpoint is not intentionally anonymous.
+/// - HTTPS certificates enabled for the tailnet (admin console -> DNS ->
+///   HTTPS Certificates; see https://tailscale.com/kb/1153/enabling-https).
+/// - The `funnel` node attribute granted to this node in the tailnet policy
+///   file, e.g.
+///   `"nodeAttrs": [{"target": ["autogroup:member"], "attr": ["funnel"]}]`.
+/// - A policy-approved public port (commonly 443, 8443, 10000).
 ///
-/// Funnel publications are process-scoped in this package. Close returned
-/// handles explicitly; `Tailscale.down()` also tears down package-created
-/// Funnel listeners and clears their Funnel config best-effort.
+/// A publication serves **both** the public internet and this node's own
+/// tailnet, matching `tailscale funnel`.
+/// Note the two arrive differently: requests that come in over Funnel are from
+/// the anonymous internet and carry no Tailscale identity headers, while
+/// tailnet requests do. Authenticate public callers at the forwarded service
+/// layer if the endpoint is not intentionally anonymous — do not assume a
+/// request reached you over the tailnet.
+///
+/// Publishing also creates a **public DNS record** for this node's MagicDNS
+/// name, which can take a few minutes to appear. A request made immediately
+/// after [Funnel.forward] returns may fail until it propagates, and a resolver
+/// that cached the earlier NXDOMAIN can hide it for longer.
+///
+/// Because a publication is one entry, [Funnel.forward] and [Serve.forward] on
+/// the same port and path configure the *same* thing rather than two competing
+/// ones: calling [Funnel.forward] for a port you already serve turns on public
+/// ingress for it, and the later call owns the handler. Use a different path if
+/// you want the two to coexist with separate backends.
+///
+/// Close returned handles explicitly; `Tailscale.down()` also clears
+/// package-created publications best-effort.
 abstract class Funnel {
   /// Publishes `http://[localAddress]:[localPort]` on the public internet.
   ///
@@ -45,10 +66,14 @@ abstract class Funnel {
 
   /// Removes a Funnel publication for [publicPort] and [path].
   ///
-  /// Idempotent: clearing an absent mapping succeeds. Funnel publications are
-  /// independent of [Serve] — this clears only the Funnel mapping and does not
-  /// touch any Serve path for the same port. Use [Serve] for tailnet-only
-  /// publication.
+  /// Idempotent: clearing an absent mapping succeeds.
+  ///
+  /// This withdraws public ingress for the whole `publicPort` — the unit
+  /// `AllowFunnel` is keyed by, and what `tailscale funnel <port> off` operates
+  /// on — and removes the handler at [path]. Since Funnel and Serve share one
+  /// entry per port and path, clearing a publication you created with
+  /// [Funnel.forward] also removes the [Serve.forward] handler if it was made
+  /// for that same port and path. Use [Serve] for tailnet-only publication.
   Future<void> clear({int publicPort = 443, String path = '/'});
 }
 

@@ -329,7 +329,6 @@ void _workerEntrypoint(SendPort sendPort) {
                 snapshot: NodeStateSnapshot(
                   epoch: result['epoch'] as int? ?? 0,
                   servePublications: result['servePublications'] as int? ?? 0,
-                  funnelForwarders: result['funnelForwarders'] as int? ?? 0,
                   httpBindings: result['httpBindings'] as int? ?? 0,
                   tcpListeners: result['tcpListeners'] as int? ?? 0,
                   udpBridges: result['udpBridges'] as int? ?? 0,

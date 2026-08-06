@@ -88,7 +88,6 @@ void main() {
       final census = jsonDecode(result) as Map<String, dynamic>;
       expect(census['epoch'], isA<int>());
       expect(census['servePublications'], 0);
-      expect(census['funnelForwarders'], 0);
       expect(census['httpBindings'], 0);
       expect(census['tcpListeners'], 0);
       expect(census['udpBridges'], 0);

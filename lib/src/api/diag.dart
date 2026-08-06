@@ -289,7 +289,6 @@ final class NodeStateSnapshot {
   const NodeStateSnapshot({
     required this.epoch,
     required this.servePublications,
-    required this.funnelForwarders,
     required this.httpBindings,
     required this.tcpListeners,
     required this.udpBridges,
@@ -299,11 +298,11 @@ final class NodeStateSnapshot {
   /// Node lifecycle generation; increments on every stop/teardown.
   final int epoch;
 
-  /// Live serve publications (process-owned reverse-proxy mounts).
+  /// Live serve publications, including Funnel ones.
+  ///
+  /// Funnel is a serve-config entry with public ingress allowed on the same
+  /// host:port, not a separate listener, so its publications are counted here.
   final int servePublications;
-
-  /// Live funnel forwarders (one per exposed port).
-  final int funnelForwarders;
 
   /// Live tailnet HTTP server bindings.
   final int httpBindings;
@@ -322,7 +321,6 @@ final class NodeStateSnapshot {
       other is NodeStateSnapshot &&
           epoch == other.epoch &&
           servePublications == other.servePublications &&
-          funnelForwarders == other.funnelForwarders &&
           httpBindings == other.httpBindings &&
           tcpListeners == other.tcpListeners &&
           udpBridges == other.udpBridges &&
@@ -332,7 +330,6 @@ final class NodeStateSnapshot {
   int get hashCode => Object.hash(
     epoch,
     servePublications,
-    funnelForwarders,
     httpBindings,
     tcpListeners,
     udpBridges,
@@ -342,7 +339,7 @@ final class NodeStateSnapshot {
   @override
   String toString() =>
       'NodeStateSnapshot(epoch: $epoch, serve: $servePublications, '
-      'funnel: $funnelForwarders, http: $httpBindings, tcp: $tcpListeners, '
+      'http: $httpBindings, tcp: $tcpListeners, '
       'udp: $udpBridges, transportCached: $transportCached)';
 }
 

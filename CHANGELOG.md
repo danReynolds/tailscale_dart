@@ -1,3 +1,51 @@
+## 0.9.0
+
+Funnel now works the way Tailscale works.
+
+Funnel was built as a parallel mechanism to Serve: a `tsnet.ListenFunnel`
+listener plus a package-owned reverse proxy, independent of the serve config.
+Upstream has no such split — `tailscale funnel` and `tailscale serve` are the
+same code path, and Funnel is a boolean on it
+(`cmd/tailscale/cli/serve_v2.go`, `setServe(..., allowFunnel, ...)`). Every
+Funnel defect below descends from that divergence, so this release removes it:
+`funnel.forward` is now a serve entry with public ingress allowed on the same
+host:port, exactly like the CLI.
+
+**Behavior changes:**
+
+- A Funnel publication is now reachable from **inside your own tailnet** as well
+  as the public internet, matching `tailscale funnel`. Previously it answered
+  only public traffic and reset tailnet connections — so testing your own Funnel
+  URL from a machine on your tailnet appeared to be a total failure, with no
+  error anywhere. Reported by @cdiethelm in #87.
+- Serve and Funnel on the same port and path are now **one publication**, not
+  two independent ones, again matching upstream: `funnel.forward` on a port you
+  already serve turns on public ingress for it rather than creating a second,
+  conflicting handler. Requests arriving over the tailnet still carry Tailscale
+  identity headers; requests arriving over Funnel are anonymous, so do not infer
+  the origin from their absence.
+- `Diag.nodeState()` no longer reports `funnelForwarders`. Funnel publications
+  are serve publications now and are counted by `servePublications`; the
+  separate registry no longer exists.
+
+**Bug fixes:**
+
+- `funnel.forward` (and `tls.bind`) destroyed any existing `serve.forward`
+  mount. Both reach `tsnet.Up`, whose first run per process clears the whole
+  persisted serve config; `serve.forward` does not, so it was always the victim.
+  Reordering could not fix it — `ListenFunnel`/`ListenTLS` call `Up` internally —
+  so the serve config is now snapshotted and restored around it.
+- The Funnel listener applied a 10s header-read timeout to the TLS handshake
+  budget, which could cut off a first request while its certificate was still
+  being issued. tailscaled terminates TLS now, so the timeout is gone with the
+  listener.
+
+**Internal:**
+
+- Deleted the package-owned Funnel reverse proxy, its connection limiter, its
+  header-stripping helpers, and the funnel forwarder registry and teardown
+  sweep. tailscaled performs the proxying, as it does for Serve.
+
 ## 0.8.0
 
 Cleanup and consistency release following an architecture-health review.

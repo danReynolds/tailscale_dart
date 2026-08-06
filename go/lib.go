@@ -131,10 +131,12 @@ func stopLocked() {
 	if srv != nil {
 		lc, _ = srv.LocalClient()
 	}
+	// Funnel publications live in the serve config now (same entry as Serve,
+	// with AllowFunnel set — see applyServeForward), so closeAllServePublications
+	// tears them down too. There is no separate funnel registry to sweep.
 	closeAllServePublications(lc)
 	closeAllTcpFdListeners()
 	closeAllHttpBindings()
-	closeAllFunnelForwarders()
 	closeAllUdpBindings()
 	// Drop the cached HTTP client transport so no pooled connection (dialed and
 	// authenticated as this node's identity) survives into a later node with a

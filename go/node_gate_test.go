@@ -184,24 +184,9 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 			},
 			sweep: func() { tailnetHTTPTransports.reset() },
 		},
-		{
-			name: "funnel-forwarder",
-			register: func(t *testing.T, gate nodeGate) bool {
-				ln, err := net.Listen("tcp", "127.0.0.1:0")
-				if err != nil {
-					t.Fatalf("listen: %v", err)
-				}
-				_, err = installFunnelForwarder(gate, 8443, "harness.ts.net", ln, "/", funnelTarget{})
-				// installFunnelForwarder closed ln on refusal.
-				return err == nil
-			},
-			count: func() int {
-				funnelMu.Lock()
-				defer funnelMu.Unlock()
-				return len(funnelForwarders)
-			},
-			sweep: closeAllFunnelForwarders,
-		},
+		// No funnel-forwarder case: Funnel is a serve-config entry with
+		// AllowFunnel set, not a listener registry, so it is covered by the
+		// serve publication case above.
 		{
 			name: "http-binding",
 			register: func(t *testing.T, gate nodeGate) bool {
@@ -423,7 +408,7 @@ func TestDebugNodeStateJSONContract(t *testing.T) {
 		t.Fatalf("DebugNodeState is not valid JSON: %v", err)
 	}
 	for _, key := range []string{
-		"epoch", "servePublications", "funnelForwarders",
+		"epoch", "servePublications",
 		"httpBindings", "tcpListeners", "udpBridges", "transportCached",
 	} {
 		if _, ok := decoded[key]; !ok {

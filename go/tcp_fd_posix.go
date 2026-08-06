@@ -116,8 +116,21 @@ func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 		return nil, errors.New("TlsListenFd called before Start")
 	}
 
+	lc, err := gate.s.LocalClient()
+	if err != nil {
+		return nil, fmt.Errorf("local client for tls listen: %w", err)
+	}
+
+	// ListenTLS calls tsnet.Up internally (tsnet.go:1365), whose first run per
+	// process wipes the persisted ServeConfig — destroying any serve.forward
+	// mount. Bracket it; see serve_config_preserve.go and issue #87.
 	addr := net.JoinHostPort(tailnetHost, strconv.Itoa(tailnetPort))
-	ln, err := gate.s.ListenTLS("tcp", addr)
+	var ln net.Listener
+	err = preserveServeConfigAcrossUp(lc, func() error {
+		var listenErr error
+		ln, listenErr = gate.s.ListenTLS("tcp", addr)
+		return listenErr
+	})
 	if err != nil {
 		return nil, fmt.Errorf("tsnet listen tls %s: %w", addr, err)
 	}

@@ -29,6 +29,48 @@ jobs:
         # teardown under the race detector (see node_gate_test.go); gate on it.
         run: go test -race -v -count=1 ./...
 
+  android-build:
+    name: Android cross-build (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    # Every ABI we ship. Nothing else in CI compiles for Android at all, so an
+    # Android-only build break — a syscall or build tag that only resolves on
+    # some arches — would otherwise reach a release unnoticed. See issue #81.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            cc: aarch64-linux-android24-clang
+          - goarch: amd64
+            cc: x86_64-linux-android24-clang
+          - goarch: arm
+            cc: armv7a-linux-androideabi24-clang
+          - goarch: '386'
+            cc: i686-linux-android24-clang
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      # Pinned rather than taking the runner image default: the NDK version
+      # determines the clang target triples above, so an image bump silently
+      # changing it would break this job for reasons unrelated to the code.
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r28
+          local-cache: true
+      - name: Build
+        working-directory: go
+        env:
+          GOOS: android
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          CC="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.cc }}"
+          echo "CC=$CC"
+          CC="$CC" go build -tags 'ts_omit_listenrawdisco ts_omit_portmapper' ./...
+
   dart-tests:
     name: Dart tests
     runs-on: ubuntu-latest

@@ -1,3 +1,26 @@
+## 0.8.1
+
+Critical Android fix. Anyone running on Android should upgrade from 0.8.0.
+
+**Bug fixes:**
+
+- Android x86_64 — the ABI every standard emulator image runs — crashed with
+  `SIGSYS` on the reactor's first poll, killing the process before Flutter
+  rendered a frame. The epoll poller issued the legacy `epoll_wait` syscall,
+  which Android's seccomp filter does not permit for app processes; it now
+  issues `epoll_pwait` with an empty signal mask, which is semantically
+  identical and is the same call the Go runtime's own network poller makes.
+  arm64-v8a was unaffected, because that syscall table has no `epoll_wait` at
+  all and the call was already being routed to `epoll_pwait` there. Reported by
+  @philipreese in #81, with the diagnosis and the fix.
+
+**Internal:**
+
+- CI now cross-builds every shipped Android ABI, and the Go suite gates on a
+  seccomp regression test that reproduces the denial above on an ordinary
+  runner. A `workflow_dispatch` job boots the package on an Android x86_64
+  emulator for release checks.
+
 ## 0.8.0
 
 Cleanup and consistency release following an architecture-health review.

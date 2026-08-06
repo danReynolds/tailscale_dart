@@ -1,0 +1,143 @@
+name: Android emulator smoke (x86_64)
+
+# Deliberately workflow_dispatch-only.
+#
+# This is the only check that executes the package on the ABI that issue #81
+# actually broke: Android x86_64, the image every stock emulator runs. It is
+# also slow (~15 min) and emulator jobs are the classic source of CI flake, so
+# it does not run on pull requests. Fire it by hand before a release that
+# touches the reactor or the native build, and after any change to how we issue
+# syscalls.
+#
+# WHY AN APP AND NOT A TEST BINARY: Android's seccomp policy for apps is
+# installed by the zygote when it spawns an app process. A binary pushed to
+# /data/local/tmp and run over `adb shell` runs in the shell domain and does NOT
+# get that filter — it would pass whether or not the bug is present. The whole
+# point of this job is the app-process policy, so it must launch a real,
+# zygote-spawned app and watch it survive. Do not "simplify" this into
+# `adb push` + `go test`; that green would be meaningless.
+#
+# The cheap, always-on guard for the same bug class is
+# go/epoll_pwait_seccomp_linux_test.go, which reproduces the denial with a BPF
+# filter on an ordinary runner and gates every PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api-level:
+        description: Android API level to boot
+        required: false
+        default: '35'
+
+permissions:
+  contents: read
+
+jobs:
+  emulator-smoke:
+    name: Boot on Android x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # The emulator needs hardware acceleration; the hosted image ships KVM but
+      # not the group permissions to use it.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # This package is a pure Dart package built through native-asset hooks,
+      # not a Flutter plugin, so there is no app in the repo to install. Build a
+      # throwaway host app whose only job is to call Tailscale.init() — that is
+      # what starts the Go runtime and brings the reactor up, which is where
+      # issue #81 killed the process before a frame ever rendered.
+      - name: Scaffold host app
+        run: |
+          flutter config --enable-native-assets
+          flutter create --platforms=android /tmp/smoke
+          cd /tmp/smoke
+          # Path-depend on the checkout rather than the published version.
+          python3 - <<'PY'
+          import re, pathlib
+          p = pathlib.Path('pubspec.yaml')
+          s = p.read_text()
+          s = s.replace(
+              'dependencies:\n  flutter:\n    sdk: flutter',
+              'dependencies:\n  flutter:\n    sdk: flutter\n  tailscale:\n    path: ${{ github.workspace }}',
+          )
+          p.write_text(s)
+          PY
+          cat > lib/main.dart <<'DART'
+          import 'package:flutter/material.dart';
+          import 'package:tailscale/tailscale.dart';
+
+          void main() {
+            // Do NOT join a tailnet — no credentials in CI, and none are needed.
+            // init() alone starts the Go runtime and the reactor, which is the
+            // code path that died with SIGSYS on x86_64 (issue #81).
+            Tailscale.init(stateDir: '/data/local/tmp/ts-smoke');
+            runApp(const MaterialApp(home: Scaffold(body: Text('up'))));
+          }
+          DART
+          flutter pub get
+
+      - name: Build APK (x86_64 only)
+        working-directory: /tmp/smoke
+        run: flutter build apk --debug --target-platform android-x64
+
+      - name: Boot emulator and smoke the app
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ inputs.api-level || '35' }}
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            adb logcat -c
+            adb install -r /tmp/smoke/build/app/outputs/flutter-apk/app-debug.apk
+            adb shell am start -n com.example.smoke/.MainActivity
+            # Give the Go runtime time to start and the reactor to poll at least
+            # once. The #81 crash was immediate — well inside this window.
+            sleep 25
+
+            adb logcat -d > /tmp/logcat.txt || true
+
+            echo "--- searching for seccomp kills ---"
+            if grep -Eq 'SIGSYS|SYS_SECCOMP|seccomp prevented' /tmp/logcat.txt; then
+              echo "FAIL: seccomp killed the process — issue #81 has regressed."
+              grep -E -B5 -A20 'SIGSYS|SYS_SECCOMP|seccomp prevented' /tmp/logcat.txt || true
+              exit 1
+            fi
+
+            echo "--- confirming the process is still alive ---"
+            if ! adb shell pidof com.example.smoke > /dev/null; then
+              echo "FAIL: app process is not running after launch."
+              tail -200 /tmp/logcat.txt
+              exit 1
+            fi
+
+            echo "PASS: app survived startup on Android x86_64."
+
+      - name: Upload logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logcat
+          path: /tmp/logcat.txt
+          if-no-files-found: ignore

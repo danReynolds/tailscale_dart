@@ -110,7 +110,10 @@ func (p *epollReactorPoller) Wait(out []ReactorEvent, timeoutMillis int) (int, e
 		p.scratch = make([]unix.EpollEvent, len(out))
 	}
 	events := p.scratch[:len(out)]
-	n, err := unix.EpollWait(p.epfd, events, timeoutMillis)
+	// epollPwait, not unix.EpollWait: the latter lowers to the legacy
+	// epoll_wait syscall on amd64, which Android's seccomp filter denies
+	// (SIGSYS, instant process death). See epoll_pwait_linux.go — issue #81.
+	n, err := epollPwait(p.epfd, events, timeoutMillis)
 	if err != nil {
 		if err == unix.EINTR {
 			return 0, nil

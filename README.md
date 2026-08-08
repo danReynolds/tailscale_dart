@@ -62,7 +62,7 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 
 ```yaml
 dependencies:
-  tailscale: ^0.8.0
+  tailscale: ^0.8.1
 ```
 
 The first `dart run`, `dart test`, or `flutter build` triggers a native build hook that compiles the Go runtime for the target platform. Subsequent builds are cached and only recompile when Go source changes.
@@ -71,7 +71,7 @@ Prerequisites:
 
 - Dart SDK 3.10.4 or newer.
 - Go 1.26 or newer on `PATH` (or Go 1.25+ with the default
-  `GOTOOLCHAIN=auto`, which auto-fetches the 1.26.4 toolchain that
+  `GOTOOLCHAIN=auto`, which auto-fetches the 1.26.5 toolchain that
   `tailscale.com` requires).
 - Native toolchain for the target platform: Xcode for iOS/macOS, Android NDK through Flutter for Android, and a C toolchain for Linux.
 

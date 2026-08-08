@@ -7,7 +7,7 @@ require (
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.52.0
-	tailscale.com v1.102.0
+	tailscale.com v1.102.2
 )
 
 require (

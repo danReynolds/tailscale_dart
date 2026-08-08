@@ -110,6 +110,10 @@ func (p *epollReactorPoller) Wait(out []ReactorEvent, timeoutMillis int) (int, e
 		p.scratch = make([]unix.EpollEvent, len(out))
 	}
 	events := p.scratch[:len(out)]
+	// x/sys v0.47.0 maps EpollWait to SYS_EPOLL_PWAIT on Linux and
+	// Android. Keep that dependency floor: Android's x86_64 app-process
+	// seccomp policy denies the legacy epoll_wait syscall with SIGSYS.
+	// epoll_wait_seccomp_linux_test.go guards the mapping on Linux CI.
 	n, err := unix.EpollWait(p.epfd, events, timeoutMillis)
 	if err != nil {
 		if err == unix.EINTR {

@@ -1,3 +1,23 @@
+## 0.8.1
+
+Critical Android fix. Anyone running 0.8.0 on Android should upgrade.
+
+**Bug fixes:**
+
+- Android x86_64 apps could crash with `SIGSYS` on the reactor's first poll,
+  before Flutter rendered a frame. Android's app-process seccomp policy denies
+  the legacy `epoll_wait` syscall. `golang.org/x/sys` v0.47.0 now maps
+  `unix.EpollWait` to the permitted `epoll_pwait` syscall on Linux and Android.
+  Reported and diagnosed by @philipreese in #81.
+- Updated `tailscale.com` from v1.100.0 to v1.102.2, including the upstream
+  incoming Funnel regression fix from v1.102.2.
+
+**Internal:**
+
+- CI now cross-builds every shipped Android ABI and gates on a Linux seccomp
+  regression test. A workflow triggered for relevant PRs (and manually for
+  releases) boots a real Android x86_64 app process.
+
 ## 0.8.0
 
 Cleanup and consistency release following an architecture-health review.

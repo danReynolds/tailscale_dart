@@ -2,8 +2,14 @@
 
 ## Status
 
-This is the current v1 direction after replacing the earlier authenticated
-loopback session design with fd-backed local capabilities.
+**Current implementation reference, not the target architecture.** See the
+[accepted rearchitecture plan](rearchitecture-plan.md),
+[runtime lifecycle ADR](adr-runtime-ownership-and-lifecycle.md), and
+[encrypted-state ADR](adr-encrypted-node-state.md) for the implementation target
+adopted on 2026-08-09.
+
+This documents the current v1 direction after replacing the earlier
+authenticated loopback session design with fd-backed local capabilities.
 
 The implementation is no longer a throwaway spike. HTTP, TCP, and UDP are
 implemented and validated through unit tests, package tests, Flutter demo tests,

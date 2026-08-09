@@ -374,8 +374,10 @@ class Tailscale implements TailscaleClient {
   ///
   /// [stateDir] is an app-owned directory where Tailscale persists
   /// its node identity, keys, and profile data under a `tailscale/`
-  /// subdirectory. The library creates that subdirectory `0700` and
-  /// stores the node private key in an owner-only (`0600`) database.
+  /// subdirectory. The library creates that subdirectory as `0700` and the
+  /// database as `0600`. The current implementation attempts to tighten
+  /// pre-existing modes but logs and continues when chmod is unavailable; it
+  /// does not yet provide application-layer StateStore encryption.
   /// On a fresh install this directory is empty; after the first
   /// successful [up], it contains credentials that let subsequent
   /// launches reconnect without an auth key.

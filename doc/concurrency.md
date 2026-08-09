@@ -4,6 +4,12 @@ How the Go layer stays correct now that native calls arrive from more than one
 Dart isolate. Read this before adding a lock, a process-global registry, or a
 new offloaded call.
 
+> **Current-state document.** The epoch and commit-gate invariants remain part
+> of the target, but process-global resource ownership will move incrementally
+> onto `nodeRuntime`. See the [rearchitecture plan](rearchitecture-plan.md) and
+> [runtime lifecycle ADR](adr-runtime-ownership-and-lifecycle.md). Update this
+> file in each ownership-migration PR so it continues to describe `main`.
+
 ## Two execution regimes
 
 Every native call enters the Go layer from one of two places:

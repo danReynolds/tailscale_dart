@@ -118,12 +118,18 @@ final class TailscalePublishedService {
 /// Tailscale forwards identity headers such as `Tailscale-User-Login`,
 /// `Tailscale-User-Name`, and `Tailscale-User-Profile-Pic` to the loopback
 /// backend. Public Funnel requests do not include those headers.
+///
+/// Mobile HTTPS publication is not currently a qualified support surface. Do
+/// not infer iOS/Android support from desktop behavior; it remains gated on
+/// real-device HTTPS and persistent-sidecar inventory receipts.
 abstract class Serve {
   /// Publishes `http://[localAddress]:[localPort]` inside the tailnet.
   ///
   /// [tailnetPort] is the port on this node's MagicDNS name. [https] defaults
   /// to true, so the tailnet URL is `https://<node>...` and Tailscale
   /// terminates TLS before forwarding plaintext HTTP to the local service.
+  /// On iOS and Android this HTTPS mode is currently unqualified and should not
+  /// be presented as supported until the package's mobile receipt is published.
   ///
   /// [localAddress] must be loopback (`127.0.0.1`, `::1`, or `localhost`).
   /// This prevents accidentally publishing arbitrary LAN or metadata-service

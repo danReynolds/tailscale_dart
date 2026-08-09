@@ -6,10 +6,20 @@ purpose, and a copy-pasteable
 example. For the forward-looking phase plan, see
 [`api-roadmap.md`](api-roadmap.md).
 
-The **core public path** is lifecycle + private HTTP/TCP/UDP/TLS,
-Serve/Funnel forwarding, identity, diagnostics, prefs, and exit-node controls.
-Optional namespaces remain tracked here, but they do not block a useful release
-for embedded Dart apps.
+> **Architecture transition:** this file describes callable APIs on current
+> `main`. The [accepted rearchitecture plan](rearchitecture-plan.md) and its
+> [runtime](adr-runtime-ownership-and-lifecycle.md) and
+> [encrypted-state](adr-encrypted-node-state.md) ADRs describe target behavior
+> that has not all shipped. Current persistent StateStore paths are created with
+> owner-only modes and existing modes are tightened best-effort, but current
+> startup does not fail closed when chmod verification is unavailable and the
+> data is not yet application-layer encrypted.
+
+The **core mobile public path** is lifecycle + private HTTP/TCP/UDP, identity,
+diagnostics, prefs, and exit-node controls. Platform-qualified TLS and
+Serve/Funnel forwarding remain useful desktop/server surfaces. Optional
+namespaces remain tracked here, but they do not block a useful release for
+embedded Dart apps.
 
 **Legend:**
 - ✅ Working — callable today, tested, returns real values.
@@ -29,8 +39,16 @@ HTTP, TCP, UDP, TLS, Funnel, and future service listeners follow
 `tsnet`; node introspection, diagnostics, prefs, profiles, serve
 config, exit nodes, and taildrop follow LocalAPI via `local.Client`.
 
-**Version note:** the current repo pin is `tailscale.com v1.100.0`. Keep
-upstream version skew visible when adding new wrappers.
+**Mobile TLS qualification:** both the current upstream v1.100.0 pin and the
+reviewed v1.102.2 target compile the LocalAPI certificate endpoint used by
+default `tsnet.ListenTLS` and `ListenFunnel` as a 404 stub on iOS and Android.
+Those two HTTPS surfaces are therefore unsupported on mobile until an alternate
+certificate path passes real-device handshakes. The private HTTP/TCP/UDP core
+remains the mobile support target.
+
+**Version note:** the current repo pin is `tailscale.com v1.100.0`; PR #90 is
+the tracked v1.102.2 / Go 1.26.5 baseline. Keep upstream version skew visible
+when adding new wrappers.
 
 ## Namespace overview
 
@@ -39,9 +57,9 @@ upstream version skew visible when adding new wrappers.
 | [Lifecycle](#lifecycle-top-level) | Engine start/stop + node state snapshot + reactive streams | Core      | ✅        |
 | [`http`](#http)         | Outbound HTTP client + inbound request server                     | Core      | ✅        |
 | [`tcp`](#tcp)           | Raw TCP between tailnet nodes                                      | Core      | ✅        |
-| [`tls`](#tls)           | TLS-terminated listener with auto-provisioned cert                 | Advanced  | ✅             |
+| [`tls`](#tls)           | Certificate-domain discovery and TLS-terminated listener           | Advanced  | domains ✅; bind ✅ desktop/server, unsupported mobile |
 | [`udp`](#udp)           | UDP datagram bindings on a tailnet IP                               | Advanced  | ✅        |
-| [`funnel`](#funnel)     | Public-internet HTTPS forwarding via Tailscale Funnel              | Optional  | ✅               |
+| [`funnel`](#funnel)     | Public-internet HTTPS forwarding via Tailscale Funnel              | Optional  | ✅ desktop/server; unsupported mobile |
 | [`taildrop`](#taildrop) | Node-to-node file transfer                                          | Optional  | Planned          |
 | [`serve`](#serve)       | Tailnet publication for existing local HTTP services                | Optional  | ✅               |
 | [`services`](#tailscale-services) | Tailscale Services hosts via upstream `ListenService`       | Optional  | Planned          |
@@ -119,15 +137,19 @@ plane. Handlers see plaintext bytes — TLS is terminated server-side.
 Useful for server-style apps, but not required for the package to be
 valuable.
 
-**Status:** implemented with package-native fd-backed listeners.
+**Status:** `tls.domains()` is a read-only status query and does not use the
+disabled LocalAPI certificate endpoint; it remains available as discovery and
+does not imply certificate provisioning works. `tls.bind()` is implemented with
+package-native fd-backed listeners on desktop/server builds and unsupported on
+iOS/Android pending an alternate certificate path and real-device proof.
 **Requires:** MagicDNS **and** HTTPS enabled on the tailnet by the
 operator. Headscale CI covers only the clear unsupported failure path; live
 Tailscale tests cover successful TLS serving against hosted Tailscale.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `tls.bind({port, address})` → `Future<TailscaleListener>` | ✅ | TLS-terminated listener with auto-cert. Accepted connections are plaintext package-native streams. | `final l = await tsnet.tls.bind(port: 443);` |
-| `tls.domains()` → `Future<List<String>>` | ✅ | Cert SANs; preflight for `bind`. Empty = MagicDNS or HTTPS disabled on the tailnet. | `final sans = await tsnet.tls.domains();` |
+| `tls.bind({port, address})` → `Future<TailscaleListener>` | ✅ desktop/server; unsupported mobile | TLS-terminated listener with auto-cert. Accepted connections are plaintext package-native streams. | `final l = await tsnet.tls.bind(port: 443);` |
+| `tls.domains()` → `Future<List<String>>` | ✅ discovery | Advertised cert SANs. Empty = MagicDNS or HTTPS disabled. This is not proof that `bind` can fetch a cert on the platform. | `final sans = await tsnet.tls.domains();` |
 
 ## `udp`
 
@@ -154,16 +176,17 @@ loopback service.
 This is explicitly optional: useful for some hosted/server apps, but
 not part of the core embedded-private-network story.
 
-**Status:** implemented for local HTTP forwarding. **Requires:** operator
+**Status:** implemented for desktop/server local HTTP forwarding; unsupported
+on iOS and Android pending an alternate certificate path. **Requires:** operator
 has enabled HTTPS and Funnel for this node and an allowed Funnel port
 (usually 443, 8443, or 10000). Headscale doesn't support Funnel; live
 Tailscale test only.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `funnel.forward({publicPort, localPort, localAddress, path})` → `Future<TailscalePublishedService>` | ✅ | Publicly publish a local HTTP service through Funnel. | `final p = await tsnet.funnel.forward(localPort: 3000);` |
-| `funnel.clear({publicPort, path})` | ✅ | Remove a Funnel publication. | `await tsnet.funnel.clear();` |
-| `TailscalePublishedService.close()` | ✅ | Remove the publication created by `forward`. Idempotent per handle. | `await p.close();` |
+| `funnel.forward({publicPort, localPort, localAddress, path})` → `Future<TailscalePublishedService>` | ✅ desktop/server; unsupported mobile | Publicly publish a local HTTP service through Funnel. | `final p = await tsnet.funnel.forward(localPort: 3000);` |
+| `funnel.clear({publicPort, path})` | ✅ desktop/server; unsupported mobile | Remove a Funnel publication. | `await tsnet.funnel.clear();` |
+| `TailscalePublishedService.close()` | ✅ where publication is supported | Remove the publication created by `forward`. Idempotent per handle. | `await p.close();` |
 
 ## `taildrop`
 
@@ -215,12 +238,14 @@ than persistent `tailscale serve --bg` configuration. Close the returned
 `TailscalePublishedService` explicitly; `Tailscale.down()` also removes
 package-created publications best-effort before stopping the embedded node.
 
-**Status:** implemented for local HTTP forwarding. Raw `ServeConfig`
-get/set remains a possible future escape hatch.
+**Status:** implemented for local HTTP forwarding. Desktop/server HTTPS has a
+live hosted-Tailscale receipt; mobile HTTPS Serve remains unqualified pending
+its own real-device receipt. Raw `ServeConfig` get/set remains a possible future
+escape hatch.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `serve.forward({tailnetPort, localPort, localAddress, path, https})` → `Future<TailscalePublishedService>` | ✅ | Publish a local HTTP service inside the tailnet. | `final p = await tsnet.serve.forward(tailnetPort: 443, localPort: 3000);` |
+| `serve.forward({tailnetPort, localPort, localAddress, path, https})` → `Future<TailscalePublishedService>` | ✅ desktop/server HTTPS; mobile HTTPS unqualified | Publish a local HTTP service inside the tailnet. | `final p = await tsnet.serve.forward(tailnetPort: 443, localPort: 3000);` |
 | `serve.clear({tailnetPort, path})` | ✅ | Remove a tailnet Serve publication. | `await tsnet.serve.clear(tailnetPort: 443);` |
 | `TailscalePublishedService` | ✅ | Publication handle with `url`, local target metadata, and `close()`. | `print(p.url); await p.close();` |
 

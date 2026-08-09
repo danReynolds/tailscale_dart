@@ -1,5 +1,12 @@
 # API roadmap
 
+The launch-critical architecture work is tracked in the
+[accepted rearchitecture plan](rearchitecture-plan.md). Its runtime ownership,
+auth conformance, encrypted StateStore, fail-safe teardown, publication
+convergence, and platform-proof work takes priority over new feature breadth.
+The plan describes the target; this roadmap continues to describe public API
+priorities.
+
 This package is consumer-first rather than full Tailscale CLI parity. The
 current public spine is already useful for embedded Dart and Flutter apps:
 
@@ -17,7 +24,10 @@ fd capabilities plus kqueue/epoll; Windows needs a separate backend decision.
 
 | Priority | Area | Why it matters | Current stance |
 | --- | --- | --- | --- |
-| P0 | Publishing readiness | Users need accurate README, changelog, platform metadata, package contents, and repeatable validation commands before public release. | Completed for the `0.3.x` public release line. |
+| P0 | Runtime and lifecycle conformance | One `nodeRuntime`, non-destructive enrollment, and automatic fail-safe teardown are the ownership foundation for every public namespace. | Accepted design; implement R2 and R3, then the R4 secure-state cutover, before adding lifecycle-bound features. |
+| P0 | Encrypted node state | Persistent node identity must resist state-directory/backup copying without rebuilding platform custody already provided by Keybay. | Accepted whole-map encrypted StateStore with an injectable custodian seam, Keybay reference adapter, and no SQLite migration. |
+| P0 | Serve/Funnel and mobile truth | Serve and Funnel share upstream state, while default tsnet certificate fetching is disabled on iOS/Android. | Repair #89 on #90 with one first-Up/config authority. Keep current direct ListenTLS/ListenFunnel unsupported; keep `tls.bind` blocked on an alternate cert path and ServeConfig Funnel unqualified until separate device/sidecar receipts pass. |
+| P0 | Publishing readiness | Users need accurate README, changelog, platform metadata, package contents, and repeatable validation commands before public release. | Historical `0.3.x` gate completed; R10 in the rearchitecture plan is the next launch gate. |
 | P1 | Windows backend decision | Windows is the only major platform gap. Supporting it likely requires either a Windows-native handle/reactor backend or a separate fallback carrier. | Deferred intentionally; do not expose as supported until designed. |
 | P2 | Taildrop | Useful for app-to-app file transfer, but upstream semantics are user-device-oriented and the byte-path decision should stay stream-safe. | Declared API, not implemented. |
 | P2 | Profiles | Useful when one app needs multiple tailnet identities, but most embedded apps only need one node identity. | Declared API, not implemented. |
@@ -57,6 +67,10 @@ Strongest use cases:
 - one app switches between a personal tailnet and a work tailnet
 - development builds switch between staging and production tailnets without
   deleting local state
+
+Profile switching is deliberately outside the current rearchitecture. A future
+switch is a generation-changing teardown/start operation; it must never mutate
+the identity of a live `nodeRuntime` in place.
 
 Profiles are useful, but optional. They add account/state complexity without
 improving the common "one embedded node per app install" path.

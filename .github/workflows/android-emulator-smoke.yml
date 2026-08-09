@@ -104,35 +104,10 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: |
-            set -euo pipefail
-            adb logcat -c
-            adb install -r /tmp/smoke/build/app/outputs/flutter-apk/app-debug.apk
-            adb shell am start -n com.example.smoke/.MainActivity
-            # The issue #81 crash was immediate, on the reactor's first poll.
-            sleep 25
-
-            echo "--- confirming the process is still alive ---"
-            APP_PID="$(adb shell pidof com.example.smoke 2>/dev/null | tr -d '\r' || true)"
-            if [ -z "$APP_PID" ]; then
-              adb logcat -d > /tmp/logcat.txt || true
-              echo "FAIL: app process is not running after launch."
-              tail -200 /tmp/logcat.txt
-              exit 1
-            fi
-
-            # Restrict the positive-path SIGSYS check to this app. Device-wide
-            # logcat can contain unrelated seccomp failures from emulator
-            # services and should not make this receipt flaky.
-            adb logcat -d --pid="$APP_PID" > /tmp/logcat.txt || true
-            echo "--- searching the app log for seccomp kills ---"
-            if grep -Eq 'SIGSYS|SYS_SECCOMP|seccomp prevented' /tmp/logcat.txt; then
-              echo "FAIL: seccomp killed the process; issue #81 has regressed."
-              grep -E -B5 -A20 'SIGSYS|SYS_SECCOMP|seccomp prevented' /tmp/logcat.txt || true
-              exit 1
-            fi
-
-            echo "PASS: app survived startup on Android x86_64."
+          # The runner executes each script line independently with `sh -c`.
+          # Enter Bash once so strict mode, variables, and control flow share a
+          # single process.
+          script: bash .github/scripts/android-emulator-smoke.sh
 
       - name: Upload logcat
         if: always()

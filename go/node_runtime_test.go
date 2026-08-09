@@ -49,11 +49,28 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 func TestConfiguredStateDirRejectsReplacedRoot(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
 	root := filepath.Dir(stateDir)
-	if err := os.RemoveAll(root); err != nil {
+	// Keep the original inode allocated while recreating the configured lexical
+	// path. A remove-then-mkdir test can immediately reuse the same inode on
+	// Linux filesystems, making os.SameFile correctly report identity and the
+	// test nondeterministic.
+	originalRoot := root + "-original"
+	if err := os.Rename(root, originalRoot); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = os.RemoveAll(originalRoot) })
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	originalInfo, err := os.Stat(originalRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementInfo, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(originalInfo, replacementInfo) {
+		t.Fatal("test setup reused the configured root identity")
 	}
 
 	if _, err := configuredStateDir(); !errors.Is(err, ErrConfigurationMismatch) {

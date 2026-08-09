@@ -12,15 +12,17 @@ func TestLifecycleErrorJSONPreservesLogoutDisposition(t *testing.T) {
 	payload := decodeLifecycleErrorForTest(t, lifecycleErrorJSON(
 		errors.Join(tailscale.ErrLogoutIndeterminate, errors.New("remote timeout")),
 		logoutDisposition(tailscale.LogoutResult{
-			Token:   81001,
-			Started: true,
-			NoState: false,
+			Token:       81001,
+			Started:     true,
+			EmitStopped: true,
+			NoState:     false,
 		}),
 	))
 
 	assertLifecycleFieldForTest(t, payload, "code", "logoutIndeterminate")
 	assertLifecycleFieldForTest(t, payload, "token", float64(81001))
 	assertLifecycleFieldForTest(t, payload, "started", true)
+	assertLifecycleFieldForTest(t, payload, "emitStopped", true)
 	assertLifecycleFieldForTest(t, payload, "noState", false)
 }
 
@@ -28,10 +30,11 @@ func TestLifecycleErrorJSONPreservesCloseDisposition(t *testing.T) {
 	payload := decodeLifecycleErrorForTest(t, lifecycleErrorJSON(
 		errors.Join(tailscale.ErrLifecycleBusy, errors.New("cleanup failed")),
 		runtimeCloseDisposition(tailscale.RuntimeCloseResult{
-			Token:   81002,
-			Matched: true,
-			Started: true,
-			Pending: false,
+			Token:       81002,
+			Matched:     true,
+			Started:     true,
+			EmitStopped: true,
+			Pending:     false,
 		}),
 	))
 
@@ -39,6 +42,7 @@ func TestLifecycleErrorJSONPreservesCloseDisposition(t *testing.T) {
 	assertLifecycleFieldForTest(t, payload, "token", float64(81002))
 	assertLifecycleFieldForTest(t, payload, "matched", true)
 	assertLifecycleFieldForTest(t, payload, "started", true)
+	assertLifecycleFieldForTest(t, payload, "emitStopped", true)
 	assertLifecycleFieldForTest(t, payload, "pending", false)
 }
 

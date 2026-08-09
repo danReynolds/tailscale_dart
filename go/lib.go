@@ -76,11 +76,14 @@ func boundedCallCtxFrom(parent context.Context, timeout time.Duration) (context.
 }
 
 // LogoutResult is the event-silent lifecycle receipt returned to Dart. Started
-// means a live or temporary runtime was actually detached for close; NoState
-// means local cleanup was confirmed or the configured root was already clean.
+// means a live or temporary runtime was actually detached for close. EmitStopped
+// is narrower: the public node was active when logout began, so Dart should
+// publish the terminal transition. NoState means local cleanup was confirmed or
+// the configured root was already clean.
 type LogoutResult struct {
 	Token         uint64 `json:"token"`
 	Started       bool   `json:"started"`
+	EmitStopped   bool   `json:"emitStopped,omitempty"`
 	NoState       bool   `json:"noState"`
 	CleanupFailed bool   `json:"cleanupFailed,omitempty"`
 	receiptStored bool
@@ -152,6 +155,7 @@ func LogoutWithToken(requestToken uint64, hostNetworkSnapshot string) (result Lo
 				Operation:     lifecycleOperationLogout,
 				Matched:       true,
 				Started:       result.Started,
+				EmitStopped:   result.EmitStopped,
 				NoState:       result.NoState,
 				CleanupFailed: result.CleanupFailed,
 			},
@@ -177,6 +181,7 @@ func logoutWithDependencies(requestToken uint64, hostNetworkSnapshot string, dep
 	}
 
 	runtime := currentRuntime()
+	publicRuntimeWasActive := runtime != nil
 	if runtime != nil {
 		if requestToken == 0 || runtime.token != requestToken {
 			return result, fmt.Errorf("%w: logout token does not own the active runtime", ErrRuntimeStale)
@@ -219,6 +224,7 @@ func logoutWithDependencies(requestToken uint64, hostNetworkSnapshot string, dep
 	if logoutErr != nil {
 		closeResult, closeErr := dependencies.closeRuntime(runtime.token)
 		result.Started = closeResult.Started
+		result.EmitStopped = publicRuntimeWasActive && closeResult.Started
 		result.CleanupFailed = closeErr != nil
 		cleanupErr = runtimes.recordCleanupFailure(runtime.token, closeErr)
 		return result, errors.Join(
@@ -230,6 +236,7 @@ func logoutWithDependencies(requestToken uint64, hostNetworkSnapshot string, dep
 
 	closeResult, closeErr := dependencies.closeRuntime(runtime.token)
 	result.Started = closeResult.Started
+	result.EmitStopped = publicRuntimeWasActive && closeResult.Started
 	result.CleanupFailed = closeErr != nil
 	cleanupErr = runtimes.recordCleanupFailure(runtime.token, closeErr)
 	if closeErr != nil {

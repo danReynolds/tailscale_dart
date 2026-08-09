@@ -423,6 +423,7 @@ func logoutDisposition(result tailscale.LogoutResult) map[string]any {
 	return map[string]any{
 		"token":         result.Token,
 		"started":       result.Started,
+		"emitStopped":   result.EmitStopped,
 		"noState":       result.NoState,
 		"cleanupFailed": result.CleanupFailed,
 	}
@@ -434,6 +435,7 @@ func runtimeCloseDisposition(result tailscale.RuntimeCloseResult) map[string]any
 		"operation":     result.Operation,
 		"matched":       result.Matched,
 		"started":       result.Started,
+		"emitStopped":   result.EmitStopped,
 		"pending":       result.Pending,
 		"noState":       result.NoState,
 		"cleanupFailed": result.CleanupFailed,

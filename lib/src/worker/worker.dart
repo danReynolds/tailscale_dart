@@ -598,6 +598,7 @@ final class Worker {
           runtimeToken: response.runtimeToken,
           matched: response.matched,
           started: response.started,
+          emitStopped: response.emitStopped,
           noState: response.noState,
           cleanupFailed: response.cleanupFailed,
           error: errorMessage == null
@@ -658,6 +659,7 @@ final class Worker {
           runtimeToken: response.runtimeToken,
           matched: response.matched,
           started: response.started,
+          emitStopped: response.emitStopped,
           noState: response.noState,
           cleanupFailed: response.cleanupFailed,
           error: errorMessage == null
@@ -709,6 +711,7 @@ final class WorkerCloseResult {
     required this.runtimeToken,
     required this.matched,
     required this.started,
+    required this.emitStopped,
     required this.noState,
     required this.cleanupFailed,
     required this.error,
@@ -717,6 +720,7 @@ final class WorkerCloseResult {
   final int runtimeToken;
   final bool matched;
   final bool started;
+  final bool emitStopped;
   final bool noState;
   final bool cleanupFailed;
   final TailscaleOperationException? error;

@@ -510,6 +510,7 @@ final class _WorkerAckResponse extends _WorkerResponse {
     this.runtimeToken = 0,
     this.matched = false,
     this.started = false,
+    this.emitStopped = false,
     this.noState = false,
     this.cleanupFailed = false,
     this.errorMessage,
@@ -520,6 +521,7 @@ final class _WorkerAckResponse extends _WorkerResponse {
   final int runtimeToken;
   final bool matched;
   final bool started;
+  final bool emitStopped;
   final bool noState;
   final bool cleanupFailed;
   final String? errorMessage;

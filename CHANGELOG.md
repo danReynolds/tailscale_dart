@@ -22,7 +22,10 @@ encrypted-state cutover.
   an active node behind the failed Future.
 - `logout()` is remote-first. Failed or timed-out revocation closes the
   possibly-mutated runtime, preserves local state, and reports
-  `logoutIndeterminate`; local deletion follows only confirmed success.
+  `logoutIndeterminate`; local deletion follows only confirmed success. A
+  temporary runtime reconstructed after `down()` remains hidden from public
+  state streams, so successful idle logout emits `noState` without a phantom
+  second `stopped` transition.
 - Idle logout reconstruction uses only the exact configuration proven applied
   by a successful `Server.Start`; a fresh failed attempt invalidates any older
   cached tuple instead of risking the wrong control plane.

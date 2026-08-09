@@ -70,6 +70,7 @@ final class RuntimeQuarantineResult {
     required this.operation,
     required this.matched,
     required this.started,
+    required this.emitStopped,
     required this.pending,
     required this.noState,
     required this.cleanupFailed,
@@ -80,6 +81,7 @@ final class RuntimeQuarantineResult {
   final String? operation;
   final bool matched;
   final bool started;
+  final bool emitStopped;
   final bool pending;
   final bool noState;
   final bool cleanupFailed;
@@ -99,6 +101,7 @@ RuntimeQuarantineResult _execRuntimeQuarantine(int token) {
     operation: result['operation'] as String?,
     matched: result['matched'] == true,
     started: result['started'] == true,
+    emitStopped: result['emitStopped'] == true,
     pending: result['pending'] == true,
     noState: result['noState'] == true,
     cleanupFailed: result['cleanupFailed'] == true,

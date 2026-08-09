@@ -81,6 +81,8 @@ Logout is remote-first. It reconstructs a temporary runtime from persisted
 state after `down()`, asks upstream to revoke, and deletes local state only
 after confirmed success. Failure or timeout closes the possibly-mutated
 runtime, retains recovery evidence, and returns `logoutIndeterminate`.
+That temporary runtime is not a public lifecycle transition: logout from an
+already stopped node emits `noState`, not a second synthetic `stopped`.
 Starting a fresh candidate first invalidates the cached reopen tuple; only a
 successful `Server.Start` records the exact hostname, control URL, and
 ephemeral setting it proved it applied. An abandoned late success therefore

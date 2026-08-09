@@ -218,8 +218,8 @@ func TestLogout_ConfirmedSuccessRevokesThenClosesThenRemoves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("logoutWithDependencies: %v", err)
 	}
-	if !result.Started || !result.NoState {
-		t.Fatalf("logout result = %+v, want started and noState", result)
+	if !result.Started || !result.EmitStopped || !result.NoState {
+		t.Fatalf("logout result = %+v, want public stop and noState", result)
 	}
 	if got := fmt.Sprint(events); got != "[remote close remove]" {
 		t.Fatalf("logout order = %s, want [remote close remove]", got)
@@ -388,8 +388,8 @@ func TestLogout_ReconstructsRuntimeAfterDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("logoutWithDependencies: %v", err)
 	}
-	if !result.Started || !result.NoState {
-		t.Fatalf("logout result = %+v, want started and noState", result)
+	if !result.Started || result.EmitStopped || !result.NoState {
+		t.Fatalf("logout result = %+v, want hidden temporary close and noState", result)
 	}
 	if got := fmt.Sprint(events); got != "[start remote close remove]" {
 		t.Fatalf("logout order = %s, want [start remote close remove]", got)

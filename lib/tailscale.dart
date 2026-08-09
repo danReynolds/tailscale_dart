@@ -398,7 +398,7 @@ class Tailscale implements TailscaleClient {
       }
     } else if (idleStatus != null) {
       _publishQuiescentState(
-        started: quarantine?.started == true,
+        emitStopped: quarantine?.emitStopped == true,
         idleStatus: idleStatus,
       );
       if (quarantine?.started == true ||
@@ -429,15 +429,16 @@ class Tailscale implements TailscaleClient {
   }
 
   void _publishQuiescentState({
-    required bool started,
+    required bool emitStopped,
     required TailscaleStatus idleStatus,
   }) {
-    if (started) {
+    if (emitStopped) {
       _stateController.add(NodeState.stopped);
     }
-    // `stopped` is a transition only when a started runtime was actually
-    // detached. `noState` remains useful after confirmed deletion or a clean
-    // idle root, including a logout acknowledgement lost with the worker.
+    // `stopped` is a transition only when the caller-visible runtime was active
+    // and actually detached. A temporary runtime reconstructed by idle logout
+    // stays hidden. `noState` remains useful after confirmed deletion or a
+    // clean idle root, including a logout acknowledgement lost with the worker.
     if (idleStatus.state == NodeState.noState) {
       _stateController.add(NodeState.noState);
     }
@@ -449,12 +450,12 @@ class Tailscale implements TailscaleClient {
     if (receipt.cleanupFailed) return;
     if (receipt.error != null) {
       if (receipt.error?.code == TailscaleErrorCode.logoutIndeterminate &&
-          receipt.started) {
+          receipt.emitStopped) {
         _stateController.add(NodeState.stopped);
       }
       return;
     }
-    if (receipt.started) {
+    if (receipt.emitStopped) {
       _stateController.add(NodeState.stopped);
     }
     if (receipt.noState) {
@@ -502,7 +503,7 @@ class Tailscale implements TailscaleClient {
           _requireQuiescentStatus(idleStatus);
           _idleStatusError = null;
           _publishQuiescentState(
-            started: result.started,
+            emitStopped: result.emitStopped,
             idleStatus: idleStatus,
           );
         } catch (error) {
@@ -1324,7 +1325,7 @@ class Tailscale implements TailscaleClient {
         }
         throw closeError;
       }
-      if (result.started) {
+      if (result.emitStopped) {
         _stateController.add(NodeState.stopped);
       }
     } finally {
@@ -1385,7 +1386,7 @@ class Tailscale implements TailscaleClient {
           if (logoutError != null) throw logoutError;
           throw cleanupFailure;
         }
-        if (result.started) {
+        if (result.emitStopped) {
           _stateController.add(NodeState.stopped);
         }
         if (result.noState) {

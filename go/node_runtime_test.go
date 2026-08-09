@@ -203,11 +203,11 @@ func TestCloseRuntime_TerminalReceiptSurvivesUntilRescueConsumesIt(t *testing.T)
 	runtimes.mu.Unlock()
 
 	closed, err := CloseRuntime(token)
-	if err != nil || !closed.Matched || !closed.Started {
+	if err != nil || !closed.Matched || !closed.Started || !closed.EmitStopped {
 		t.Fatalf("CloseRuntime = (%+v, %v), want clean close", closed, err)
 	}
 	recovered, err := AbandonRuntime(token)
-	if err != nil || recovered.Operation != lifecycleOperationDown || !recovered.Matched || !recovered.Started {
+	if err != nil || recovered.Operation != lifecycleOperationDown || !recovered.Matched || !recovered.Started || !recovered.EmitStopped {
 		t.Fatalf("receipt recovery = (%+v, %v), want exact down receipt", recovered, err)
 	}
 	again, err := AbandonRuntime(token)

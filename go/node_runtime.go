@@ -647,6 +647,7 @@ func (c *runtimeController) finishLogout(
 				Operation:     lifecycleOperationLogout,
 				Matched:       true,
 				Started:       result.Started,
+				EmitStopped:   result.EmitStopped,
 				NoState:       result.NoState,
 				CleanupFailed: result.CleanupFailed,
 			},
@@ -659,14 +660,16 @@ func (c *runtimeController) finishLogout(
 }
 
 // RuntimeCloseResult is the event-silent native lifecycle result returned to
-// the Dart supervisor. Pending means a non-cancellable Server.Start is still
-// unwinding; the token is already quarantined and cannot commit or admit a
-// replacement runtime.
+// the Dart supervisor. Started records an actual native detach; EmitStopped is
+// the narrower caller-visible stream transition. Pending means a
+// non-cancellable Server.Start is still unwinding; the token is already
+// quarantined and cannot commit or admit a replacement runtime.
 type RuntimeCloseResult struct {
 	Token         uint64 `json:"token"`
 	Operation     string `json:"operation,omitempty"`
 	Matched       bool   `json:"matched"`
 	Started       bool   `json:"started"`
+	EmitStopped   bool   `json:"emitStopped,omitempty"`
 	Pending       bool   `json:"pending"`
 	NoState       bool   `json:"noState,omitempty"`
 	CleanupFailed bool   `json:"cleanupFailed,omitempty"`
@@ -699,6 +702,7 @@ func finishRuntimeDrain(draining *drainingRuntime, err error) error {
 					Operation:     draining.receiptOperation,
 					Matched:       true,
 					Started:       true,
+					EmitStopped:   true,
 					CleanupFailed: err != nil,
 				},
 				err: err,
@@ -759,6 +763,7 @@ func AbandonRuntime(token uint64) (RuntimeCloseResult, error) {
 		draining := detachRuntimeLocked(runtime, "")
 		result.Matched = true
 		result.Started = true
+		result.EmitStopped = true
 		runtimes.mu.Unlock()
 
 		err := runtime.close()
@@ -865,6 +870,7 @@ func closeRuntime(token uint64, logoutOwner bool) (RuntimeCloseResult, error) {
 			done := draining.done
 			result.Matched = true
 			result.Started = true
+			result.EmitStopped = draining.receiptOperation == lifecycleOperationDown
 			runtimes.mu.Unlock()
 			<-done
 			result.CleanupFailed = draining.err != nil
@@ -882,6 +888,7 @@ func closeRuntime(token uint64, logoutOwner bool) (RuntimeCloseResult, error) {
 		draining := detachRuntimeLocked(runtime, receiptOperation)
 		result.Matched = true
 		result.Started = true
+		result.EmitStopped = !logoutOwner
 		runtimes.mu.Unlock()
 
 		err := runtime.close()

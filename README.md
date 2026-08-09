@@ -107,6 +107,10 @@ Subsequent launches can call `up()` without an auth key. The node identity is pe
 > [encrypted-state design](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md) replaces SQLite with
 > an authenticated encrypted StateStore whose key is held by Keybay, integrated
 > directly into the core package as the required persistent-state mechanism.
+> Until that cutover lands, do not ship this intermediate storage state in a
+> client application. `logout()` is remote-first: it deletes the retained local
+> StateStore only after confirmed control-plane success and preserves that
+> recovery evidence when revocation is indeterminate.
 
 For short-lived CI jobs, preview environments, and disposable test nodes, pass
 `ephemeral: true` to register a node that Tailscale removes after it goes
@@ -128,7 +132,7 @@ existing node instead of registering a new ephemeral one.
 
 Area | API | Status | Notes
 --- | --- | --- | ---
-Lifecycle | `init`, `up`, `down`, `logout`, `status` | Supported | `up(ephemeral: true)` supports disposable CI/test nodes; `up()` resolves on the first stable state: running, needs login, or needs machine auth.
+Lifecycle | `init`, `up`, `down`, `logout`, `status` | Supported | `up(ephemeral: true)` supports disposable CI/test nodes; `up()` resolves on the first stable state and quarantines a timed-out generation before returning. `logout()` is remote-first and preserves local state if revocation is indeterminate.
 Reactive state | `onStateChange`, `onError`, `onNodeChanges` | Supported | Go pushes updates to Dart; callers do not poll.
 Node identity | `nodes`, `nodeByIp`, `whois` | Supported | Use stable node IDs for durable references.
 Outbound HTTP | `http.client` | Supported | A normal `package:http` client routed through tsnet.
@@ -258,22 +262,30 @@ The package is intentionally POSIX-first because owned transports use native des
 ## Runtime model
 
 ```
-Dart app
+Dart app / lifecycle supervisor
   |
   | typed API calls and streams
   v
-FFI worker isolate
+Replaceable FFI worker isolate
   |
-  | control ops + fd-backed data-plane handoff
+  | token-tagged control ops + fd-backed data-plane handoff
   v
-Go tsnet runtime
+Go nodeRuntime generation
   |
   | WireGuard, ACLs, MagicDNS, DERP
   v
 Tailnet peers
 ```
 
-Control-plane calls go through a worker isolate so Dart's main isolate does not block on native work. Runtime events come back through Dart ports as streams.
+Control-plane calls go through a worker isolate so Dart's main isolate does not
+block on native work. The caller isolate supervises that worker: every startup
+has a token known before dispatch, timeout or worker death quarantines only that
+generation, and replacement waits for native watcher/teardown joins. Runtime
+events carry the generation token back through Dart ports so stale pushes are
+dropped. Native `down`/`logout` receipts remain token-addressable until the
+caller receives them, so worker death cannot erase a completed result. A
+failed native cleanup is typed as `runtimeCleanupFailed` and blocks replacement
+for the rest of the process rather than guessing that teardown succeeded.
 
 Owned transports (`http.bind`, `tcp.bind`, `udp.bind`, `tls.bind`) use private fd-backed capabilities. That keeps listener ownership inside the package and avoids pretending that a localhost proxy is secure. Forwarding APIs (`serve.forward`, `funnel.forward`) intentionally use loopback because their purpose is to publish an existing local HTTP server the application already owns.
 

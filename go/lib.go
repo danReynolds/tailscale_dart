@@ -22,6 +22,14 @@ import (
 // Accessed atomically — safe to change at any time from any goroutine.
 var LogLevel int32 // default 0 (silent)
 
+var directRuntimeToken atomic.Uint64
+
+func nextDirectRuntimeToken() uint64 {
+	// Keep package-direct callers in a disjoint token namespace from Dart's
+	// positive signed-64-bit supervisor tokens.
+	return directRuntimeToken.Add(1) | (uint64(1) << 63)
+}
+
 // defaultNativeCallTimeout bounds native calls whose caller supplied no
 // timeout. NO native call runs on an unbounded context: each in-flight call
 // pins a helper isolate, an OS thread, an offload-gate permit, and a Go
@@ -67,63 +75,184 @@ func boundedCallCtxFrom(parent context.Context, timeout time.Duration) (context.
 	return context.WithTimeout(parent, timeout)
 }
 
-// Logout revokes the node key with the control plane (best-effort), then stops
-// the server and removes the state directory.
-//
-// The control-plane logout is what actually invalidates the credential.
-// Without it, any surviving copy of the state DB (a cloud backup, a disk image,
-// a file read before the wipe) would remain a valid credential and the device
-// would stay registered in the tailnet until key expiry. It is attempted while
-// the server is still running, and is best-effort: if the control plane is
-// unreachable we still tear down and wipe local state so a "logout" never
-// leaves the node running or its on-disk credential intact.
+// LogoutResult is the event-silent lifecycle receipt returned to Dart. Started
+// means a live or temporary runtime was actually detached for close; NoState
+// means local cleanup was confirmed or the configured root was already clean.
+type LogoutResult struct {
+	Token         uint64 `json:"token"`
+	Started       bool   `json:"started"`
+	NoState       bool   `json:"noState"`
+	CleanupFailed bool   `json:"cleanupFailed,omitempty"`
+	receiptStored bool
+}
+
+type runtimeLogoutDependencies struct {
+	configuredStateDir func() (string, error)
+	classifyIdleState  func(string) (IdleStateClass, error)
+	loadRuntimeConfig  func() (runtimeConfig, error)
+	startRuntime       func(uint64, runtimeConfig, string) (uint64, error)
+	revokeNodeKey      func(*nodeRuntime) error
+	closeRuntime       func(uint64) (RuntimeCloseResult, error)
+	removeAll          func(string) error
+}
+
+var productionRuntimeLogoutDependencies = runtimeLogoutDependencies{
+	configuredStateDir: configuredStateDir,
+	classifyIdleState:  ClassifyIdleState,
+	loadRuntimeConfig:  lastRuntimeConfig,
+	startRuntime: func(token uint64, config runtimeConfig, hostNetworkSnapshot string) (uint64, error) {
+		_, runtimeToken, err := StartRuntimeWithToken(
+			token,
+			config.hostname,
+			"",
+			config.controlURL,
+			config.ephemeral,
+			hostNetworkSnapshot,
+		)
+		return runtimeToken, err
+	},
+	revokeNodeKey: revokeNodeKey,
+	closeRuntime:  closeRuntimeForLogout,
+	removeAll:     removeOwnedDirectory,
+}
+
+// Logout follows the remote-first contract using either the active runtime or
+// a temporary runtime reconstructed from persisted state.
 func Logout() error {
-	stateDir, err := configuredStateDir()
+	token := nextDirectRuntimeToken()
+	if runtime := currentRuntime(); runtime != nil {
+		token = runtime.token
+	}
+	result, err := LogoutWithToken(token, "")
+	AcknowledgeLifecycleResult(result.Token)
+	return err
+}
+
+// LogoutWithToken never deletes package state unless upstream logout returns a
+// confirmed success. A failure/timeout closes the potentially mutated runtime,
+// retains the state directory, and returns ErrLogoutIndeterminate.
+func LogoutWithToken(requestToken uint64, hostNetworkSnapshot string) (result LogoutResult, err error) {
+	result, err = logoutWithDependencies(
+		requestToken,
+		hostNetworkSnapshot,
+		productionRuntimeLogoutDependencies,
+	)
+	// Cleanup can fail before beginLogout installs its deferred terminal
+	// receipt, for example while unwinding a temporary runtime reconstructed
+	// from persisted state. Preserve that disposition independently of where
+	// the typed error originated so both the direct response and rescue receipt
+	// poison the Dart supervisor consistently.
+	if errors.Is(err, ErrRuntimeCleanupFailed) {
+		result.CleanupFailed = true
+	}
+	if !result.receiptStored {
+		runtimes.recordLifecycleReceipt(lifecycleReceipt{
+			result: RuntimeCloseResult{
+				Token:         result.Token,
+				Operation:     lifecycleOperationLogout,
+				Matched:       true,
+				Started:       result.Started,
+				NoState:       result.NoState,
+				CleanupFailed: result.CleanupFailed,
+			},
+			err: err,
+		})
+	}
+	if result.NoState && err == nil {
+		runtimes.mu.Lock()
+		runtimes.lastConfig = nil
+		runtimes.mu.Unlock()
+	}
+	return result, err
+}
+
+func logoutWithDependencies(requestToken uint64, hostNetworkSnapshot string, dependencies runtimeLogoutDependencies) (result LogoutResult, err error) {
+	result = LogoutResult{Token: requestToken}
+	if err := runtimeCleanupAdmissionError(); err != nil {
+		return result, err
+	}
+	stateDir, err := dependencies.configuredStateDir()
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	runtime := currentRuntime()
 	if runtime != nil {
-		revokeNodeKey(runtime.localClient)
+		if requestToken == 0 || runtime.token != requestToken {
+			return result, fmt.Errorf("%w: logout token does not own the active runtime", ErrRuntimeStale)
+		}
+		result.Token = runtime.token
+	} else {
+		state, err := dependencies.classifyIdleState(stateDir)
+		if err != nil {
+			return result, err
+		}
+		if state == IdleStateAbsent {
+			result.NoState = true
+			return result, nil
+		}
+
+		config, err := dependencies.loadRuntimeConfig()
+		if err != nil {
+			return result, err
+		}
+		runtimeToken, err := dependencies.startRuntime(requestToken, config, hostNetworkSnapshot)
+		if err != nil {
+			return result, err
+		}
+		result.Token = runtimeToken
+		runtime = currentRuntime()
+		if runtime == nil || runtime.token != runtimeToken {
+			return result, fmt.Errorf("%w: logout runtime was not published", ErrRuntimeStale)
+		}
 	}
 
-	wasRunning, closeErr := closeCurrentRuntime()
-	if wasRunning {
-		publishState("Stopped")
+	logout, err := runtimes.beginLogout(runtime)
+	if err != nil {
+		return result, err
 	}
-	removeErr := removeOwnedDirectory(stateDir)
-	if removeErr != nil {
-		closeErr = errors.Join(closeErr, fmt.Errorf("failed to remove state dir: %w", removeErr))
+	result.receiptStored = true
+	var cleanupErr error
+	defer func() { runtimes.finishLogout(logout, result, err, cleanupErr) }()
+
+	logoutErr := dependencies.revokeNodeKey(runtime)
+	if logoutErr != nil {
+		closeResult, closeErr := dependencies.closeRuntime(runtime.token)
+		result.Started = closeResult.Started
+		result.CleanupFailed = closeErr != nil
+		cleanupErr = runtimes.recordCleanupFailure(runtime.token, closeErr)
+		return result, errors.Join(
+			ErrLogoutIndeterminate,
+			fmt.Errorf("upstream logout result is indeterminate: %w", logoutErr),
+			cleanupErr,
+		)
 	}
+
+	closeResult, closeErr := dependencies.closeRuntime(runtime.token)
+	result.Started = closeResult.Started
+	result.CleanupFailed = closeErr != nil
+	cleanupErr = runtimes.recordCleanupFailure(runtime.token, closeErr)
 	if closeErr != nil {
-		return closeErr
+		return result, cleanupErr
 	}
-	// Post-logout the node has no credentials and — per NodeState.parse on
-	// the Dart side — should report NoState. Publish that explicitly so
-	// stream subscribers see the transition; if `Stop()` above had a live
-	// server to tear down it also published Stopped, so the full sequence
-	// delivered to Dart is Stopped → NoState (or just NoState if the node
-	// was already stopped).
-	publishState("NoState")
-	return nil
+	if err := dependencies.removeAll(stateDir); err != nil {
+		result.CleanupFailed = true
+		cleanupErr = runtimes.recordCleanupFailure(
+			runtime.token,
+			fmt.Errorf("failed to remove state dir after confirmed logout: %w", err),
+		)
+		return result, cleanupErr
+	}
+	result.NoState = true
+	return result, nil
 }
 
-// Stop stops the server and closes all listeners.
-//
-// Publishes `Stopped` to stream subscribers iff there was actually a server
-// to tear down — tsnet.Server.Close() doesn't emit a terminal state through
-// the IPN bus, so without this explicit publish our onStateChange subscribers
-// drift from the actual engine state. No-op (and no event) when already
-// stopped, to avoid phantom emits for callers that subscribe across
-// lifecycle boundaries.
+// Stop stops the server and closes all listeners. Public lifecycle events are
+// emitted by the Dart supervisor from the token-qualified close receipt.
 func Stop() {
-	wasRunning, err := closeCurrentRuntime()
+	_, err := closeCurrentRuntime()
 	if err != nil {
 		logInfo("Stop: runtime cleanup failed: %v", err)
-	}
-	if wasRunning {
-		publishState("Stopped")
 	}
 }
 
@@ -144,11 +273,28 @@ func StartRuntime(hostname, authKey, controlURL string, ephemeral bool) (already
 // after reserving a fresh candidate. Active no-ops and configuration mismatches
 // therefore cannot mutate the current runtime before their config is checked.
 func StartRuntimeWithHostNetwork(hostname, authKey, controlURL string, ephemeral bool, hostNetworkSnapshot string) (alreadyActive bool, err error) {
+	alreadyActive, _, err = StartRuntimeWithToken(
+		nextDirectRuntimeToken(),
+		hostname,
+		authKey,
+		controlURL,
+		ephemeral,
+		hostNetworkSnapshot,
+	)
+	return alreadyActive, err
+}
+
+// StartRuntimeWithToken binds native preparation to a token created by the
+// live Dart supervisor before it dispatches work to the control isolate. The
+// returned token is the active runtime token; for an idempotent start it may be
+// older than requestToken.
+func StartRuntimeWithToken(requestToken uint64, hostname, authKey, controlURL string, ephemeral bool, hostNetworkSnapshot string) (alreadyActive bool, runtimeToken uint64, err error) {
 	stateDir, err := configuredStateDir()
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	return startRuntimeWithDependencies(
+	return startRuntimeWithDependenciesForToken(
+		requestToken,
 		hostname,
 		authKey,
 		controlURL,
@@ -160,14 +306,28 @@ func StartRuntimeWithHostNetwork(hostname, authKey, controlURL string, ephemeral
 }
 
 func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string, ephemeral bool, hostNetworkSnapshot string, dependencies runtimeStartDependencies) (alreadyActive bool, err error) {
+	alreadyActive, _, err = startRuntimeWithDependenciesForToken(
+		nextDirectRuntimeToken(),
+		hostname,
+		authKey,
+		controlURL,
+		stateDir,
+		ephemeral,
+		hostNetworkSnapshot,
+		dependencies,
+	)
+	return alreadyActive, err
+}
+
+func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey, controlURL, stateDir string, ephemeral bool, hostNetworkSnapshot string, dependencies runtimeStartDependencies) (alreadyActive bool, runtimeToken uint64, err error) {
 	config := runtimeConfig{
 		hostname:   hostname,
 		controlURL: controlURL,
 		ephemeral:  ephemeral,
 	}
-	candidate, active, err := runtimes.reserve(config)
+	candidate, active, err := runtimes.reserve(requestToken, config)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if active != nil {
 		// Repeated same-config up() calls are identity no-ops, but Android's
@@ -175,9 +335,9 @@ func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string
 		// reserve validated the immutable runtime tuple before this mutation, so
 		// a configuration mismatch cannot alter the active runtime's snapshot.
 		if err := applyHostNetworkSnapshot(hostNetworkSnapshot, dependencies); err != nil {
-			return false, err
+			return false, 0, err
 		}
-		return true, nil
+		return true, active.token, nil
 	}
 
 	serverStarted := false
@@ -185,43 +345,54 @@ func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string
 		if err == nil {
 			return
 		}
+		var cleanupErr error
 		if serverStarted {
-			err = errors.Join(err, candidate.close())
+			cleanupErr = candidate.close()
 		} else {
 			// Server.Start owns and unwinds its partial initialization on error.
 			// Calling Server.Close concurrently or after that error violates the
 			// upstream lifecycle contract; only caller-owned resources close here.
 			candidate.cancel()
 			if candidate.storeCloser != nil {
-				err = errors.Join(err, candidate.storeCloser.Close())
+				cleanupErr = candidate.storeCloser.Close()
 			}
 		}
-		runtimes.release(candidate)
+		cleanupErr = runtimes.release(candidate, cleanupErr)
+		err = errors.Join(err, cleanupErr)
 	}()
 
 	if err := setRawDiscoCompatibility(); err != nil {
-		return false, err
+		return false, 0, err
+	}
+	if runtimes.isAbandoned(candidate) {
+		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
 	}
 	if err := applyHostNetworkSnapshot(hostNetworkSnapshot, dependencies); err != nil {
-		return false, err
+		return false, 0, err
+	}
+	if runtimes.isAbandoned(candidate) {
+		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
 	}
 
 	if err := ensurePrivateOwnedDirectory(stateDir); err != nil {
-		return false, fmt.Errorf("prepare state dir: %w", err)
+		return false, 0, fmt.Errorf("prepare state dir: %w", err)
 	}
 	logDir := filepath.Join(stateDir, "logs")
 	if err := ensurePrivateOwnedDirectory(logDir); err != nil {
-		return false, fmt.Errorf("prepare log dir: %w", err)
+		return false, 0, fmt.Errorf("prepare log dir: %w", err)
 	}
 
 	statePath := filepath.Join(stateDir, "state.db")
 	newStore, newStoreCloser, err := dependencies.openStore(statePath)
 	if err != nil {
-		return false, fmt.Errorf("failed to create sqlite store: %w", err)
+		return false, 0, fmt.Errorf("failed to create sqlite store: %w", err)
 	}
 	candidate.store = newStore
 	candidate.storeCloser = newStoreCloser
 	candidate.closeServer = dependencies.closeServer
+	if runtimes.isAbandoned(candidate) {
+		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
+	}
 
 	newSrv := &tsnet.Server{
 		Hostname:   hostname,
@@ -246,7 +417,14 @@ func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string
 		func() error { return dependencies.startServer(newSrv) },
 	)
 	if startErr != nil {
-		return false, fmt.Errorf("failed to start tsnet: %w", startErr)
+		return false, 0, fmt.Errorf("failed to start tsnet: %w", startErr)
+	}
+	// Server.Start has now applied its immutable identity inputs and may have
+	// persisted them. Record this exact tuple before any later abandonment or
+	// LocalClient failure so idle logout can never reopen with stale settings.
+	runtimes.rememberStartedConfig(candidate)
+	if runtimes.isAbandoned(candidate) {
+		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
 	}
 
 	// tsnet's LocalClient reaches the LocalAPI over an in-process memory pipe,
@@ -261,7 +439,7 @@ func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string
 	// loopback_latency_diag_test.go for the bisection.
 	lc, err := dependencies.localClient(newSrv)
 	if err != nil {
-		return false, fmt.Errorf("get local client after start: %w", err)
+		return false, 0, fmt.Errorf("get local client after start: %w", err)
 	}
 	lc.OmitAuth = true
 	candidate.localClient = lc
@@ -271,9 +449,9 @@ func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string
 	// closeCurrentRuntime), and a gate acquired after this point is current by
 	// construction.
 	if err := runtimes.commit(candidate); err != nil {
-		return false, err
+		return false, 0, err
 	}
-	return false, nil
+	return false, candidate.token, nil
 }
 
 func applyHostNetworkSnapshot(snapshot string, dependencies runtimeStartDependencies) error {
@@ -359,20 +537,17 @@ func DunePeers() string {
 	return string(jsonBytes)
 }
 
-// revokeNodeKey best-effort expires the node key with the control plane via
-// the LocalAPI Logout, bounded by a timeout. Callers invoke this while the
-// server is still running and before wiping local state; failures are logged
-// and swallowed so local teardown always proceeds.
-func revokeNodeKey(lc *local.Client) {
-	if lc == nil {
-		logInfo("logout: LocalClient unavailable, skipping control-plane revoke")
-		return
+// revokeNodeKey invokes upstream logout while the runtime remains current.
+// Any failure is indeterminate and must be handled by closing while retaining
+// local recovery evidence.
+func revokeNodeKey(runtime *nodeRuntime) error {
+	if runtime == nil || runtime.localClient == nil {
+		return fmt.Errorf("LocalClient unavailable")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(runtime.ctx, 10*time.Second)
 	defer cancel()
-	if err := lc.Logout(ctx); err != nil {
-		logInfo("logout: control-plane revoke failed (continuing with local wipe): %v", err)
-	}
+	err := runtime.localClient.Logout(ctx)
+	return runtime.resultError(err)
 }
 
 func jsonError(err error) string {

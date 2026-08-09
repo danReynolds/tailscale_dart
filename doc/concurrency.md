@@ -14,13 +14,15 @@ new offloaded call.
 
 Every native call enters the Go layer from one of two places:
 
-1. **The worker isolate (serial FIFO).** Fast local calls (`status`, `prefs`,
+1. **The supervised worker isolate (serial FIFO).** Fast local calls (`status`, `prefs`,
    listener setup, …) and the lifecycle calls (`start`, `stop`, `logout`,
    `up`, `down`) run one-at-a-time on a single Dart isolate. Two worker calls
    can never race each other. Lifecycle intent is also reserved in a
    supervisor-side FIFO before Android's asynchronous network snapshot, so an
    earlier `up()` cannot be overtaken by a later `down()` or `logout()` before
-   its command reaches the worker.
+   its command reaches the worker. The caller isolate owns a replaceable worker
+   instance; public calls resolve that instance at call time rather than
+   retaining method tear-offs from a dead isolate.
 2. **Helper isolates (concurrent).** The long, contended calls — `tcp.dial`,
    `diag.ping`, `serve.forward`, `funnel.forward`, plus every HTTP client
    request goroutine — run on short-lived `Isolate.run` helpers (capped at 32,
@@ -31,6 +33,59 @@ The consequence: **any offloaded call can race a lifecycle call.** A
 `serve.forward` can be mid-flight while `stop()` tears the node down. Code on
 these paths cannot assume the node it started with still exists when it
 finishes.
+
+## Supervisor tokens and fail-safe teardown
+
+The caller isolate creates a unique runtime token before any asynchronous
+startup preparation and carries it through the worker into Go. The native
+`runtimeController` binds that exact token to one candidate/current/draining
+generation. An abandoned token is retired even when timeout happens before the
+worker reaches native code, so delayed preparation cannot later reuse it.
+
+`up(timeout:)` establishes token-qualified quarantine before returning a
+`startupTimeout` error. If non-cancellable `tsnet.Server.Start` is still
+running, native code marks its candidate abandoned and does **not** call
+`Server.Close` concurrently. The construction path observes abandonment when
+`Start` returns: late success closes Server then Store; failure closes only the
+caller-owned Store. Another lifecycle waits for that cleanup barrier.
+
+Every worker exit invokes the event-silent rescue entry point from a helper
+isolate. Pending worker RPCs fail promptly with `workerTerminated`; rescue
+closes only the captured token, joins native cleanup, classifies idle state,
+and only then permits worker replacement. Unexpected exit emits one `worker`
+incident followed by truthful terminal state. An exact expected-exit tag
+suppresses only that duplicate incident, not rescue or state reconciliation.
+
+Completed `down`/`logout` results are retained natively by token until the
+caller isolate acknowledges receipt. That acknowledgement is a tiny in-memory
+map deletion (no filesystem, network, or Tailscale work) and is the only native
+call made on the caller isolate. If the worker exits after native completion
+but before delivery, rescue consumes the retained result instead: cleanup
+errors cannot be swallowed and a confirmed logout cannot be mislabeled as
+indeterminate.
+
+A failed Server close, Store close, startup unwind, or confirmed-logout state
+removal poisons lifecycle admission for the rest of the process with
+`runtimeCleanupFailed`. Detachment is not reported as a clean `stopped`
+transition unless quiescence was proved. This intentionally requires process
+restart instead of opening a replacement over unknown resources or partially
+removed state. R4 replaces the process-local partial-removal guard with the
+durable encrypted-store reset marker.
+
+Native status, error, and peer pushes carry their runtime token. Dart drops a
+push that is not owned by the worker's current/preparing token. `StopWatch`
+cancels and joins both the IPN watcher and any in-flight debounced peer publish
+before teardown completes, so a replacement port cannot race an old source.
+
+Logout is remote-first. It reconstructs a temporary runtime from persisted
+state after `down()`, asks upstream to revoke, and deletes local state only
+after confirmed success. Failure or timeout closes the possibly-mutated
+runtime, retains recovery evidence, and returns `logoutIndeterminate`.
+Starting a fresh candidate first invalidates the cached reopen tuple; only a
+successful `Server.Start` records the exact hostname, control URL, and
+ephemeral setting it proved it applied. An abandoned late success therefore
+remains safely revocable, while an unproven failed attempt cannot make logout
+reuse an older control plane.
 
 ## The node epoch (teardown registration gate)
 
@@ -95,8 +150,9 @@ hostNetworkMu, state_store.mu   (leaf, no nesting)
 
 Rules that keep it acyclic:
 
-- `runtimeController.mu` protects candidate/current/draining transitions and
-  brief reads/publication of the frozen init tuple. It is released before
+- `runtimeController.mu` protects candidate/current/draining transitions,
+  terminal receipts, cleanup poison, and brief reads/publication of the frozen
+  init tuple. It is released before
   filesystem, tsnet, LocalAPI, registry sweep, or close work. (`nodeEpoch`
   reads exist so commit-point checks never need it.)
 - `runtimeController.configureMu` serializes one-time path resolution and may

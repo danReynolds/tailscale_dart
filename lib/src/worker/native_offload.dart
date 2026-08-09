@@ -61,6 +61,74 @@ part of 'worker.dart';
 const int _maxConcurrentOffloads = 32;
 final _offloadGate = _Semaphore(_maxConcurrentOffloads);
 
+/// Event-silent native quarantine receipt used by the caller-isolate
+/// supervisor. This path deliberately bypasses the ordinary offload semaphore:
+/// rescue must remain available even if every data-plane permit is occupied.
+final class RuntimeQuarantineResult {
+  const RuntimeQuarantineResult({
+    required this.token,
+    required this.operation,
+    required this.matched,
+    required this.started,
+    required this.pending,
+    required this.noState,
+    required this.cleanupFailed,
+    required this.error,
+  });
+
+  final int token;
+  final String? operation;
+  final bool matched;
+  final bool started;
+  final bool pending;
+  final bool noState;
+  final bool cleanupFailed;
+  final TailscaleOperationException? error;
+}
+
+Future<RuntimeQuarantineResult> quarantineNativeRuntime(int token) =>
+    Isolate.run(() => _execRuntimeQuarantine(token));
+
+RuntimeQuarantineResult _execRuntimeQuarantine(int token) {
+  final result =
+      _decodeNativeJson(() => native.duneAbandon(token))
+          as Map<String, dynamic>;
+  final errorMessage = result['error'] as String?;
+  return RuntimeQuarantineResult(
+    token: result['token'] as int? ?? token,
+    operation: result['operation'] as String?,
+    matched: result['matched'] == true,
+    started: result['started'] == true,
+    pending: result['pending'] == true,
+    noState: result['noState'] == true,
+    cleanupFailed: result['cleanupFailed'] == true,
+    error: errorMessage == null
+        ? null
+        : TailscaleOperationException(
+            'runtime quarantine',
+            errorMessage,
+            code: _parseErrorCode(result['code'] as String?),
+            statusCode: result['statusCode'] as int?,
+          ),
+  );
+}
+
+Future<void> awaitNativeRuntimeQuiescence(int token) => Isolate.run(() {
+  _callNativeJson(
+    () => native.duneAwaitRuntimeQuiescence(token),
+    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+        TailscaleOperationException(
+          'runtime quarantine',
+          message,
+          code: code,
+          statusCode: statusCode,
+        ),
+  );
+});
+
+Future<TailscaleStatus> classifyNativeIdleStatus() =>
+    Isolate.run(_loadStatusSnapshot);
+
 /// Runs [nativeOp] on a fresh short-lived isolate and returns its result,
 /// subject to the concurrency cap. [nativeOp] must be a top-level/static call
 /// capturing only sendable state and returning sendable data; thrown exceptions

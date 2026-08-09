@@ -85,15 +85,15 @@ returning a transitional state such as `starting`.
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
 | `Tailscale.init({stateDir, logLevel})` | ✅ | Freezes one native path/inode + log-level identity. Repeating the exact tuple is a no-op; a mismatch throws `TailscaleConfigurationException`. Native lifecycle calls derive the owned `tailscale/` subtree from this root. | `Tailscale.init(stateDir: '/app/state');` |
-| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; `ephemeral: true` registers short-lived CI/test nodes. Same-config active calls are idempotent and an auth key never replaces the active identity. Concurrent startup returns `lifecycleBusy`; active tuple mismatch returns `configurationMismatch`. Resolves on the first stable state only. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
-| `down()` | ✅ | Stop engine, keep persisted credentials. | `await tsnet.down();` |
-| `logout()` | ✅ | Stop + wipe persisted credentials. | `await tsnet.logout();` |
-| `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. While idle, `stopped` means recognized local state artifacts exist; it does not prove valid enrollment or reconnectability. | `final s = await tsnet.status();` |
+| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; `ephemeral: true` registers short-lived CI/test nodes. Same-config active calls are idempotent and an auth key never replaces the active identity. Concurrent startup returns `lifecycleBusy`; active tuple mismatch returns `configurationMismatch`. Resolves on the first stable state only. The deadline bounds startup/state waiting, then quarantine must finish before `startupTimeout` returns, so slow safety teardown can extend total wall time. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
+| `down()` | ✅ | Stop the exact active generation and keep persisted credentials. A completed native result survives worker-response loss. Cleanup failure returns `runtimeCleanupFailed`, publishes no false clean-state transition, and blocks replacement until process restart. | `await tsnet.down();` |
+| `logout()` | ✅ | Remote-first revocation, then local deletion only after confirmed success. Reconstructs a temporary runtime after `down()` using only a configuration proven by `Server.Start`; missing/stale configuration fails closed. Failure preserves local recovery evidence and returns `logoutIndeterminate`. A confirmed result survives worker-response loss. | `await tsnet.logout();` |
+| `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. Waits for worker recovery; a failed post-incident state classification remains a typed status error rather than guessed state. While idle, `stopped` means recognized local state artifacts exist; it does not prove valid enrollment or reconnectability. | `final s = await tsnet.status();` |
 | `nodes()` → `List<TailscaleNode>` | ✅ | Current node inventory. | `final nodes = await tsnet.nodes();` |
 | `nodeByIp(ip)` → `TailscaleNode?` | ✅ | Lookup a known node by Tailscale IP from the current inventory. | `final node = await tsnet.nodeByIp('100.64.0.5');` |
 | `onStateChange` → `Stream<NodeState>` | ✅ | Duplicate-filtered state transitions. Repeated `needsLogin` remains observable so callers can refresh `status().authUrl`. | `tsnet.onStateChange.listen(print);` |
-| `onError` → `Stream<TailscaleRuntimeError>` | ✅ | Async runtime errors pushed from Go. | `tsnet.onError.listen(report);` |
-| `onNodeChanges` → `Stream<List<TailscaleNode>>` | ✅ | Node inventory changes without polling. Replays the current inventory to new subscribers, then emits only when the node list actually changes. | `tsnet.onNodeChanges.listen(render);` |
+| `onError` → `Stream<TailscaleRuntimeError>` | ✅ | Async runtime errors pushed from Go. Unexpected worker exit produces one `worker` incident after native quarantine and idle-state classification. | `tsnet.onError.listen(report);` |
+| `onNodeChanges` → `Stream<List<TailscaleNode>>` | ✅ | Node inventory changes without polling. Replays the current inventory, emits only changes, and publishes an empty terminal snapshot after teardown so subscribers cannot retain old peers. | `tsnet.onNodeChanges.listen(render);` |
 
 ## `http`
 
@@ -372,7 +372,7 @@ surface `featureDisabled`, rethrow otherwise).
 
 | Type | Status | Thrown by | Example |
 | ---- | ------ | --------- | ------- |
-| `TailscaleErrorCode` enum | ✅ | Includes lifecycle codes `lifecycleBusy`, `configurationMismatch`, and `staleRuntime`; LocalAPI codes `notFound`, `forbidden`, `conflict`, `preconditionFailed`, `featureDisabled`; and `unknown`. | `if (e.code == TailscaleErrorCode.conflict) retry();` |
+| `TailscaleErrorCode` enum | ✅ | Includes lifecycle codes `lifecycleBusy`, `runtimeCleanupFailed`, `configurationMismatch`, `staleRuntime`, `startupAbandoned`, `startupTimeout`, `logoutIndeterminate`, and `workerTerminated`; LocalAPI codes `notFound`, `forbidden`, `conflict`, `preconditionFailed`, `featureDisabled`; and `unknown`. | `if (e.code == TailscaleErrorCode.conflict) retry();` |
 | `TailscaleUsageException` | ✅ | Misuse: `http.client` before `up()`, empty `stateDir`, etc. | `on TailscaleUsageException catch (_) { ... }` |
 | `TailscaleConfigurationException` | ✅ | A repeated `init` conflicts with the process-owned state root or log level. | `on TailscaleConfigurationException catch (_) { ... }` |
 | `TailscaleUpException` | ✅ | `up()` failed before reaching a stable state. | `on TailscaleUpException catch (e) { showAuth(e); }` |

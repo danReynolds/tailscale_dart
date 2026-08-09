@@ -213,7 +213,7 @@ func TestClassifyLocalAPIError_UnknownError(t *testing.T) {
 }
 
 func TestRuntimeLocalClient_CancelsAndClassifiesStaleGeneration(t *testing.T) {
-	runtime := newNodeRuntime(nodeEpoch.Load(), runtimeConfig{})
+	runtime := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
 	access := &runtimeLocalClient{runtime: runtime}
 	ctx, cancel := access.callContext(0)
 	defer cancel()

@@ -3,6 +3,7 @@ package tailscale
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -115,6 +116,206 @@ func TestRuntimeConstruction_PostStartFailureClosesServerBeforeStore(t *testing.
 	}
 }
 
+func TestRuntimeConstruction_AbandonedStartCannotCommitLateSuccess(t *testing.T) {
+	stateDir := configureFreshStateRootForTest(t)
+	const token uint64 = 71001
+	enteredStart := make(chan struct{})
+	releaseStart := make(chan struct{})
+
+	var eventMu sync.Mutex
+	events := []string{}
+	record := func(event string) {
+		eventMu.Lock()
+		events = append(events, event)
+		eventMu.Unlock()
+	}
+	store := &recordingStateStore{onClose: func() { record("store") }}
+	deps := constructionDependencies(
+		store,
+		func(*tsnet.Server) error {
+			close(enteredStart)
+			<-releaseStart
+			return nil
+		},
+		func(*tsnet.Server) (*local.Client, error) {
+			return nil, errors.New("LocalClient called for an abandoned startup")
+		},
+		func(*tsnet.Server) error {
+			record("server")
+			return nil
+		},
+	)
+
+	startDone := make(chan error, 1)
+	go func() {
+		_, _, err := startRuntimeWithDependenciesForToken(
+			token,
+			"node",
+			"",
+			"https://control/",
+			stateDir,
+			false,
+			"",
+			deps,
+		)
+		startDone <- err
+	}()
+	select {
+	case <-enteredStart:
+	case startErr := <-startDone:
+		t.Fatalf("startup returned before entering Server.Start: %v", startErr)
+	}
+
+	result, err := AbandonRuntime(token)
+	if err != nil {
+		t.Fatalf("AbandonRuntime: %v", err)
+	}
+	if !result.Matched || !result.Pending || result.Started {
+		t.Fatalf("abandon result = %+v, want matched pending candidate", result)
+	}
+	eventMu.Lock()
+	if len(events) != 0 {
+		t.Fatalf("abandon closed Server.Start concurrently: events=%v", events)
+	}
+	eventMu.Unlock()
+	if _, _, reserveErr := runtimes.reserve(71002, runtimeConfig{}); !errors.Is(reserveErr, ErrLifecycleBusy) {
+		t.Fatalf("replacement reserve during quarantine = %v, want lifecycle busy", reserveErr)
+	}
+
+	close(releaseStart)
+	if startErr := <-startDone; !errors.Is(startErr, ErrStartupAbandoned) {
+		t.Fatalf("late startup error = %v, want ErrStartupAbandoned", startErr)
+	}
+	if err := AwaitRuntimeQuiescence(token); err != nil {
+		t.Fatalf("AwaitRuntimeQuiescence: %v", err)
+	}
+	if currentRuntime() != nil {
+		t.Fatal("abandoned late success became current")
+	}
+	config, configErr := lastRuntimeConfig()
+	if configErr != nil || config != (runtimeConfig{hostname: "node", controlURL: "https://control/"}) {
+		t.Fatalf("late-success reopen config = (%+v, %v), want exact applied tuple", config, configErr)
+	}
+	eventMu.Lock()
+	defer eventMu.Unlock()
+	if got := fmt.Sprint(events); got != "[server store]" {
+		t.Fatalf("late-success close order = %s, want [server store]", got)
+	}
+}
+
+func TestRuntimeConstruction_AbandonedStartFailureNeverClosesServer(t *testing.T) {
+	stateDir := configureFreshStateRootForTest(t)
+	const token uint64 = 71003
+	enteredStart := make(chan struct{})
+	releaseStart := make(chan struct{})
+	startFailure := errors.New("injected late Start failure")
+	store := new(recordingStateStore)
+	var serverCloseCalls atomic.Int32
+	deps := constructionDependencies(
+		store,
+		func(*tsnet.Server) error {
+			close(enteredStart)
+			<-releaseStart
+			return startFailure
+		},
+		func(*tsnet.Server) (*local.Client, error) {
+			return nil, errors.New("LocalClient called after Start failure")
+		},
+		func(*tsnet.Server) error {
+			serverCloseCalls.Add(1)
+			return nil
+		},
+	)
+
+	startDone := make(chan error, 1)
+	go func() {
+		_, _, err := startRuntimeWithDependenciesForToken(
+			token,
+			"node",
+			"",
+			"https://control/",
+			stateDir,
+			false,
+			"",
+			deps,
+		)
+		startDone <- err
+	}()
+	select {
+	case <-enteredStart:
+	case startErr := <-startDone:
+		t.Fatalf("startup returned before entering Server.Start: %v", startErr)
+	}
+	result, err := AbandonRuntime(token)
+	if err != nil || !result.Pending {
+		t.Fatalf("AbandonRuntime = (%+v, %v), want pending", result, err)
+	}
+	close(releaseStart)
+	if startErr := <-startDone; !errors.Is(startErr, startFailure) {
+		t.Fatalf("late startup error = %v, want injected failure", startErr)
+	}
+	if err := AwaitRuntimeQuiescence(token); err != nil {
+		t.Fatalf("AwaitRuntimeQuiescence cleanup error = %v, want nil", err)
+	}
+	if got := serverCloseCalls.Load(); got != 0 {
+		t.Fatalf("Server.Close calls = %d after Start failure, want 0", got)
+	}
+	if got := store.closeCalls.Load(); got != 1 {
+		t.Fatalf("Store.Close calls = %d after Start failure, want 1", got)
+	}
+}
+
+func TestRuntimeConstruction_QuiescenceReportsLateCloseFailure(t *testing.T) {
+	stateDir := configureFreshStateRootForTest(t)
+	const token uint64 = 71004
+	enteredStart := make(chan struct{})
+	releaseStart := make(chan struct{})
+	closeFailure := errors.New("injected late close failure")
+	deps := constructionDependencies(
+		new(recordingStateStore),
+		func(*tsnet.Server) error {
+			close(enteredStart)
+			<-releaseStart
+			return nil
+		},
+		func(*tsnet.Server) (*local.Client, error) {
+			return nil, errors.New("LocalClient called for abandoned startup")
+		},
+		func(*tsnet.Server) error { return closeFailure },
+	)
+
+	startDone := make(chan error, 1)
+	go func() {
+		_, _, err := startRuntimeWithDependenciesForToken(
+			token,
+			"node",
+			"",
+			"https://control/",
+			stateDir,
+			false,
+			"",
+			deps,
+		)
+		startDone <- err
+	}()
+	select {
+	case <-enteredStart:
+	case startErr := <-startDone:
+		t.Fatalf("startup returned before entering Server.Start: %v", startErr)
+	}
+	if result, err := AbandonRuntime(token); err != nil || !result.Pending {
+		t.Fatalf("AbandonRuntime = (%+v, %v), want pending", result, err)
+	}
+	close(releaseStart)
+	startErr := <-startDone
+	if !errors.Is(startErr, ErrStartupAbandoned) || !errors.Is(startErr, closeFailure) {
+		t.Fatalf("late startup error = %v, want abandonment plus close failure", startErr)
+	}
+	if err := AwaitRuntimeQuiescence(token); !errors.Is(err, closeFailure) {
+		t.Fatalf("quiescence error = %v, want close failure", err)
+	}
+}
+
 func TestRuntimeConstruction_CachesPrivateDialClientBeforeCommit(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
 	var closeMu sync.Mutex
@@ -164,6 +365,14 @@ func TestRuntimeConstruction_CachesPrivateDialClientBeforeCommit(t *testing.T) {
 	}
 	if _, err := closeCurrentRuntime(); err != nil {
 		t.Fatalf("closeCurrentRuntime: %v", err)
+	}
+	cachedConfig, err := lastRuntimeConfig()
+	if err != nil {
+		t.Fatalf("lastRuntimeConfig after down: %v", err)
+	}
+	wantConfig := runtimeConfig{hostname: "node", controlURL: "https://control/"}
+	if cachedConfig != wantConfig {
+		t.Fatalf("last runtime config after down = %+v, want %+v", cachedConfig, wantConfig)
 	}
 	closeMu.Lock()
 	defer closeMu.Unlock()
@@ -430,7 +639,7 @@ func TestRuntimeClose_DoesNotHoldControllerLockWhileDraining(t *testing.T) {
 	configureFreshStateRootForTest(t)
 	enteredClose := make(chan struct{})
 	releaseClose := make(chan struct{})
-	runtime := newNodeRuntime(nodeEpoch.Load(), runtimeConfig{})
+	runtime := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
 	runtime.server = &tsnet.Server{}
 	runtime.closeServer = func(*tsnet.Server) error {
 		close(enteredClose)

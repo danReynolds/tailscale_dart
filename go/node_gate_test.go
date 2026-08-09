@@ -26,7 +26,7 @@ func withLiveServer(t *testing.T, s *tsnet.Server, configs ...runtimeConfig) {
 	if len(configs) != 0 {
 		config = configs[0]
 	}
-	runtime := newNodeRuntime(nodeEpoch.Load(), config)
+	runtime := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), config)
 	runtime.server = s
 	runtimes.mu.Lock()
 	prev := runtimes.current
@@ -238,7 +238,7 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 			// generation for this row's live-path assertion.
 			runtimes.mu.Lock()
 			if previous := runtimes.current; previous != nil && previous.generation != nodeEpoch.Load() {
-				next := newNodeRuntime(nodeEpoch.Load(), previous.config)
+				next := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), previous.config)
 				next.server = previous.server
 				runtimes.current = next
 			}
@@ -373,7 +373,7 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 			}
 			tailnetHTTPTransports.mu.Unlock()
 			runtimes.mu.Lock()
-			nextRuntime := newNodeRuntime(nodeEpoch.Load(), runtimeConfig{})
+			nextRuntime := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
 			nextRuntime.server = next
 			runtimes.current = nextRuntime
 			runtimes.mu.Unlock()

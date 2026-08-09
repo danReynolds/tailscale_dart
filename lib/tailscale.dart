@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:ffi/ffi.dart';
 import 'package:http/http.dart' as pkg_http;
+import 'package:meta/meta.dart';
 import 'src/api/diag.dart';
 import 'src/api/exit_node.dart';
 import 'src/api/funnel.dart';
@@ -149,14 +150,18 @@ class Tailscale implements TailscaleClient {
 
   pkg_http.Client? _http;
   List<TailscaleNode>? _latestNodes;
-  final LifecycleQueue _publicLifecycle = LifecycleQueue();
-  bool _publicUpInFlight = false;
-
-  late final _worker = Worker(
-    publishState: _stateController.add,
-    publishRuntimeError: _errorController.add,
-    publishNodes: _publishNodes,
-  );
+  bool _nativeStartInFlight = false;
+  Worker? _workerInstance;
+  Future<void>? _workerRecovery;
+  TailscaleOperationException? _workerRecoveryFailure;
+  TailscaleStatusException? _idleStatusError;
+  final Set<int> _shutdownIntents = <int>{};
+  final Map<int, RuntimeQuarantineResult> _recoveredShutdowns =
+      <int, RuntimeQuarantineResult>{};
+  int _nextRuntimeToken = 1;
+  final LifecycleQueue _supervisorLifecycle = LifecycleQueue();
+  int? _activeUpToken;
+  Completer<Object?>? _activeUpWorkerExit;
 
   // Singleton broadcast controllers — live for the process lifetime alongside
   // the embedded Tailscale engine; intentionally never closed.
@@ -184,10 +189,364 @@ class Tailscale implements TailscaleClient {
     _requireStateBaseDir();
   }
 
+  int _allocateRuntimeToken() {
+    final token = _nextRuntimeToken++;
+    if (_nextRuntimeToken <= 0) _nextRuntimeToken = 1;
+    return token;
+  }
+
+  Worker _spawnWorker() => Worker(
+    publishState: _stateController.add,
+    publishRuntimeError: _errorController.add,
+    publishNodes: _publishNodes,
+    onExit: _handleWorkerExit,
+  );
+
+  Future<void> _awaitWorkerRecoveryCompletion() async {
+    while (true) {
+      final recovery = _workerRecovery;
+      if (recovery == null) break;
+      await recovery;
+    }
+  }
+
+  Future<void> _awaitWorkerRecovery() async {
+    await _awaitWorkerRecoveryCompletion();
+    final failure = _workerRecoveryFailure;
+    if (failure != null) throw failure;
+  }
+
+  Future<Worker> _workerForCall() async {
+    await _awaitWorkerRecovery();
+    return _currentOrSpawnWorker();
+  }
+
+  Worker _currentOrSpawnWorker() {
+    final current = _workerInstance;
+    if (current != null && !current.isDisposed) return current;
+    final replacement = _spawnWorker();
+    _workerInstance = replacement;
+    return replacement;
+  }
+
+  Future<T> _withWorker<T>(Future<T> Function(Worker worker) operation) async {
+    return await operation(await _workerForCall());
+  }
+
+  Future<T> _withNativeRuntime<T>(Future<T> Function() operation) async {
+    await _awaitWorkerRecovery();
+    return await operation();
+  }
+
+  void _trackWorkerRecovery(Future<void> Function() recovery) {
+    final previous = _workerRecovery;
+    // Queue the recovery operation itself, not merely its completion. Rescue
+    // and idle-state classification must never overlap for two lifecycle
+    // incidents, otherwise an older classifier can observe or publish a newer
+    // generation's state.
+    final ordered = (previous ?? Future<void>.value()).then<void>(
+      (_) => recovery(),
+    );
+    final tracked = ordered.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        _workerRecoveryFailure ??= TailscaleOperationException(
+          'worker recovery',
+          'Native runtime recovery failed; further native work is blocked.',
+          code: TailscaleErrorCode.workerTerminated,
+          cause: error,
+        );
+      },
+    );
+    _workerRecovery = tracked;
+    unawaited(
+      tracked.then((_) {
+        if (identical(_workerRecovery, tracked)) {
+          _workerRecovery = null;
+        }
+      }),
+    );
+  }
+
+  void _handleWorkerExit(
+    Worker worker,
+    int? runtimeToken,
+    bool expected,
+    Object? cause,
+  ) {
+    if (!identical(_workerInstance, worker)) return;
+    _workerInstance = null;
+    final activeUpExit = _activeUpWorkerExit;
+    if (_activeUpToken != null &&
+        activeUpExit != null &&
+        !activeUpExit.isCompleted) {
+      activeUpExit.complete(cause);
+    }
+    _reset();
+    _trackWorkerRecovery(
+      () => _recoverExitedWorker(
+        runtimeToken: runtimeToken,
+        expected: expected,
+        cause: cause,
+      ),
+    );
+  }
+
+  Future<void> _recoverExitedWorker({
+    required int? runtimeToken,
+    required bool expected,
+    required Object? cause,
+  }) async {
+    RuntimeQuarantineResult? quarantine;
+    Object? rescueFailure;
+    var cleanupRescueFailure = false;
+    try {
+      final token = runtimeToken ?? 0;
+      quarantine = await quarantineNativeRuntime(token);
+      final quarantineError = quarantine.error;
+      final hasTerminalReceipt = quarantine.operation != null;
+      if (!hasTerminalReceipt && quarantineError != null) {
+        throw quarantineError;
+      }
+      if (!hasTerminalReceipt && quarantine.pending) {
+        await awaitNativeRuntimeQuiescence(token);
+      }
+      if (hasTerminalReceipt && quarantine.cleanupFailed) {
+        _retainCleanupFailure(
+          quarantineError?.code == TailscaleErrorCode.runtimeCleanupFailed
+              ? quarantineError!
+              : TailscaleOperationException(
+                  'worker recovery',
+                  'The completed lifecycle operation did not cleanly close '
+                      'all native resources.',
+                  code: TailscaleErrorCode.runtimeCleanupFailed,
+                  cause: quarantineError,
+                ),
+        );
+      }
+    } catch (error) {
+      rescueFailure = error;
+      if (error is TailscaleOperationException &&
+          error.code == TailscaleErrorCode.runtimeCleanupFailed) {
+        cleanupRescueFailure = true;
+        _retainCleanupFailure(error);
+      } else {
+        _workerRecoveryFailure = TailscaleOperationException(
+          'worker recovery',
+          'Failed to quarantine the native runtime after worker termination.',
+          code: TailscaleErrorCode.workerTerminated,
+          cause: error,
+        );
+      }
+    }
+
+    final hasTerminalReceipt = quarantine?.operation != null;
+    TailscaleStatus? idleStatus;
+    Object? classificationFailure;
+    if (rescueFailure == null && !hasTerminalReceipt) {
+      try {
+        idleStatus = await classifyNativeIdleStatus();
+        _requireQuiescentStatus(idleStatus);
+        _idleStatusError = null;
+      } catch (error) {
+        classificationFailure = error;
+        _idleStatusError = error is TailscaleStatusException
+            ? error
+            : TailscaleStatusException(
+                'Failed to classify state after worker termination.',
+                cause: error,
+              );
+      }
+    } else if (rescueFailure != null && !cleanupRescueFailure) {
+      _idleStatusError = TailscaleStatusException(
+        'Native state could not be classified because runtime quarantine '
+        'failed.',
+        code: TailscaleErrorCode.workerTerminated,
+        cause: rescueFailure,
+      );
+    }
+
+    if (!expected) {
+      final details = <String>[
+        'The supervised Tailscale worker terminated unexpectedly.',
+        if (cause != null) 'Cause: $cause',
+        if (rescueFailure != null) 'Native quarantine failed: $rescueFailure',
+        if (classificationFailure != null)
+          'State classification failed: $classificationFailure',
+      ];
+      _errorController.add(
+        TailscaleRuntimeError(
+          message: details.join(' '),
+          code: TailscaleRuntimeErrorCode.worker,
+        ),
+      );
+    }
+    if (hasTerminalReceipt && quarantine != null) {
+      final receiptError = quarantine.error;
+      if (quarantine.cleanupFailed) {
+        _idleStatusError = TailscaleStatusException(
+          'Native teardown did not reach a proven quiescent state.',
+          code: TailscaleErrorCode.runtimeCleanupFailed,
+          cause: receiptError,
+        );
+      } else {
+        _idleStatusError = null;
+        _publishQuiescentReceipt(quarantine);
+      }
+      if (quarantine.started || quarantine.noState) {
+        _publishTerminalNodes();
+      }
+    } else if (idleStatus != null) {
+      _publishQuiescentState(
+        started: quarantine?.started == true,
+        idleStatus: idleStatus,
+      );
+      if (quarantine?.started == true ||
+          idleStatus.state == NodeState.noState) {
+        _publishTerminalNodes();
+      }
+    } else if (quarantine?.started == true) {
+      _publishTerminalNodes();
+    }
+
+    final token = runtimeToken ?? 0;
+    if (quarantine != null &&
+        (rescueFailure == null || quarantine.error != null) &&
+        _shutdownIntents.contains(token)) {
+      _recoveredShutdowns[token] = quarantine;
+    }
+  }
+
+  static void _requireQuiescentStatus(TailscaleStatus status) {
+    if (status.state == NodeState.stopped ||
+        status.state == NodeState.noState) {
+      return;
+    }
+    throw TailscaleStatusException(
+      'Native runtime remained ${status.state.name} after quarantine.',
+      code: TailscaleErrorCode.workerTerminated,
+    );
+  }
+
+  void _publishQuiescentState({
+    required bool started,
+    required TailscaleStatus idleStatus,
+  }) {
+    if (started) {
+      _stateController.add(NodeState.stopped);
+    }
+    // `stopped` is a transition only when a started runtime was actually
+    // detached. `noState` remains useful after confirmed deletion or a clean
+    // idle root, including a logout acknowledgement lost with the worker.
+    if (idleStatus.state == NodeState.noState) {
+      _stateController.add(NodeState.noState);
+    }
+  }
+
+  void _publishQuiescentReceipt(RuntimeQuarantineResult receipt) {
+    // A cleanup failure means detach was attempted, not that quiescence was
+    // proved. Its typed error is the only truthful public outcome.
+    if (receipt.cleanupFailed) return;
+    if (receipt.error != null) {
+      if (receipt.error?.code == TailscaleErrorCode.logoutIndeterminate &&
+          receipt.started) {
+        _stateController.add(NodeState.stopped);
+      }
+      return;
+    }
+    if (receipt.started) {
+      _stateController.add(NodeState.stopped);
+    }
+    if (receipt.noState) {
+      _stateController.add(NodeState.noState);
+    }
+  }
+
+  void _retainCleanupFailure(TailscaleOperationException error) {
+    _workerRecoveryFailure ??= TailscaleOperationException(
+      'worker recovery',
+      'Native cleanup failed; restart the process before further native work.',
+      code: TailscaleErrorCode.runtimeCleanupFailed,
+      cause: error,
+    );
+    _idleStatusError = TailscaleStatusException(
+      'Native teardown did not reach a proven quiescent state.',
+      code: TailscaleErrorCode.runtimeCleanupFailed,
+      cause: error,
+    );
+  }
+
+  Future<void> _quarantineTimedOutStart(Worker worker, int token) async {
+    worker.detachRuntimeToken(token);
+
+    final quarantined = Completer<void>();
+    _trackWorkerRecovery(() async {
+      try {
+        final result = await quarantineNativeRuntime(token);
+        if (result.matched) {
+          _reset();
+        }
+        final quarantineError = result.error;
+        if (quarantineError != null) throw quarantineError;
+        if (!quarantined.isCompleted) quarantined.complete();
+        // An idempotent up() can time out before receiving the existing
+        // runtime token. Quarantining its request token correctly matches
+        // nothing; do not reset, classify, or republish that live runtime.
+        if (!result.matched) return;
+        if (result.pending) {
+          await awaitNativeRuntimeQuiescence(token);
+        }
+
+        try {
+          final idleStatus = await classifyNativeIdleStatus();
+          _requireQuiescentStatus(idleStatus);
+          _idleStatusError = null;
+          _publishQuiescentState(
+            started: result.started,
+            idleStatus: idleStatus,
+          );
+        } catch (error) {
+          _idleStatusError = error is TailscaleStatusException
+              ? error
+              : TailscaleStatusException(
+                  'Failed to classify state after startup quarantine.',
+                  cause: error,
+                );
+          _errorController.add(
+            TailscaleRuntimeError(
+              message:
+                  'Startup was quarantined, but persisted state could not be '
+                  'classified: $error',
+              code: TailscaleRuntimeErrorCode.worker,
+            ),
+          );
+        }
+      } catch (error, stackTrace) {
+        _reset();
+        _workerRecoveryFailure = TailscaleOperationException(
+          'worker recovery',
+          'Failed to quarantine a timed-out native startup.',
+          code: TailscaleErrorCode.workerTerminated,
+          cause: error,
+        );
+        if (!quarantined.isCompleted) {
+          quarantined.completeError(error, stackTrace);
+        }
+      }
+    });
+    await quarantined.future;
+  }
+
   void _reset() {
     _http?.close();
     _http = null;
     _latestNodes = null;
+  }
+
+  void _publishTerminalNodes() {
+    const empty = <TailscaleNode>[];
+    _latestNodes = empty;
+    _nodesController.add(empty);
   }
 
   void _publishNodes(List<TailscaleNode> nodes) {
@@ -197,7 +556,7 @@ class Tailscale implements TailscaleClient {
   }
 
   Future<List<TailscaleNode>> _snapshotNodes() async {
-    final nodes = await _worker.nodes();
+    final nodes = await _withWorker((worker) => worker.nodes());
     final snapshot = List<TailscaleNode>.unmodifiable(nodes);
     _latestNodes = snapshot;
     return snapshot;
@@ -218,38 +577,74 @@ class Tailscale implements TailscaleClient {
     // Offloaded to a helper isolate: dial is long (a tailnet round trip) and
     // contended (callers dial/status concurrently), so it must not block the
     // worker. See lib/src/worker/native_offload.dart.
-    dialFn: (host, port, timeout) =>
-        offloadTcpDial(host: host, port: port, timeout: timeout),
-    listenFn: (tailnetPort, tailnetHost) =>
-        _worker.tcpListenFd(tailnetPort: tailnetPort, tailnetHost: tailnetHost),
+    dialFn: (host, port, timeout) => _withNativeRuntime(
+      () => offloadTcpDial(host: host, port: port, timeout: timeout),
+    ),
+    listenFn: (tailnetPort, tailnetHost) => _withWorker(
+      (worker) => worker.tcpListenFd(
+        tailnetPort: tailnetPort,
+        tailnetHost: tailnetHost,
+      ),
+    ),
     closeListenerFn: (listenerId) =>
-        _worker.closeFdListener(listenerId: listenerId),
+        _withWorker((worker) => worker.closeFdListener(listenerId: listenerId)),
   );
   @override
   late final Tls tls = createTls(
-    listenFn: (tailnetPort, tailnetHost) =>
-        _worker.tlsListenFd(tailnetPort: tailnetPort, tailnetHost: tailnetHost),
+    listenFn: (tailnetPort, tailnetHost) => _withWorker(
+      (worker) => worker.tlsListenFd(
+        tailnetPort: tailnetPort,
+        tailnetHost: tailnetHost,
+      ),
+    ),
     closeListenerFn: (listenerId) =>
-        _worker.closeFdListener(listenerId: listenerId),
-    domainsFn: _worker.tlsDomains,
+        _withWorker((worker) => worker.closeFdListener(listenerId: listenerId)),
+    domainsFn: () => _withWorker((worker) => worker.tlsDomains()),
   );
   @override
   late final Udp udp = createUdp(
-    bindFn: (host, port) => _worker.udpBindFd(host: host, port: port),
+    bindFn: (host, port) =>
+        _withWorker((worker) => worker.udpBindFd(host: host, port: port)),
     defaultAddressFn: () async => (await status()).ipv4,
-    closeFn: (bindingId) => _worker.udpCloseBinding(bindingId: bindingId),
+    closeFn: (bindingId) =>
+        _withWorker((worker) => worker.udpCloseBinding(bindingId: bindingId)),
   );
   @override
   late final Funnel funnel = createFunnel(
-    forwardFn: offloadServeForward,
-    clearFn: _worker.serveClear,
+    forwardFn:
+        ({
+          required tailnetPort,
+          required localPort,
+          required localAddress,
+          required path,
+          required https,
+          required funnel,
+        }) => _withNativeRuntime(
+          () => offloadServeForward(
+            tailnetPort: tailnetPort,
+            localPort: localPort,
+            localAddress: localAddress,
+            path: path,
+            https: https,
+            funnel: funnel,
+          ),
+        ),
+    clearFn: ({required tailnetPort, required path, required funnel}) =>
+        _withWorker(
+          (worker) => worker.serveClear(
+            tailnetPort: tailnetPort,
+            path: path,
+            funnel: funnel,
+          ),
+        ),
   );
   @override
   late final Http http = createHttp(
     clientGetter: () => _http,
-    bindFn: (port) => _worker.httpBind(tailnetPort: port),
+    bindFn: (port) =>
+        _withWorker((worker) => worker.httpBind(tailnetPort: port)),
     closeBindingFn: (bindingId) =>
-        _worker.httpCloseBinding(bindingId: bindingId),
+        _withWorker((worker) => worker.httpCloseBinding(bindingId: bindingId)),
   );
 
   // ─── Feature namespaces ─────────────────────────────────────────────
@@ -257,19 +652,47 @@ class Tailscale implements TailscaleClient {
   final Taildrop taildrop = Taildrop.instance;
   @override
   late final Serve serve = createServe(
-    forwardFn: offloadServeForward,
-    clearFn: _worker.serveClear,
+    forwardFn:
+        ({
+          required tailnetPort,
+          required localPort,
+          required localAddress,
+          required path,
+          required https,
+          required funnel,
+        }) => _withNativeRuntime(
+          () => offloadServeForward(
+            tailnetPort: tailnetPort,
+            localPort: localPort,
+            localAddress: localAddress,
+            path: path,
+            https: https,
+            funnel: funnel,
+          ),
+        ),
+    clearFn: ({required tailnetPort, required path, required funnel}) =>
+        _withWorker(
+          (worker) => worker.serveClear(
+            tailnetPort: tailnetPort,
+            path: path,
+            funnel: funnel,
+          ),
+        ),
   );
   @override
   late final ExitNode exitNode = createExitNode(
     currentFn: _currentExitNode,
     suggestFn: _suggestExitNode,
     useByIdFn: (stableNodeId) async {
-      await _worker.prefsUpdate(PrefsUpdate(exitNodeId: stableNodeId));
+      await _withWorker(
+        (worker) => worker.prefsUpdate(PrefsUpdate(exitNodeId: stableNodeId)),
+      );
     },
-    useAutoFn: _worker.exitNodeUseAuto,
+    useAutoFn: () => _withWorker((worker) => worker.exitNodeUseAuto()),
     clearFn: () async {
-      await _worker.prefsUpdate(const PrefsUpdate(exitNodeId: ''));
+      await _withWorker(
+        (worker) => worker.prefsUpdate(const PrefsUpdate(exitNodeId: '')),
+      );
     },
     nodeChanges: onNodeChanges,
   );
@@ -277,20 +700,21 @@ class Tailscale implements TailscaleClient {
   final Profiles profiles = Profiles.instance;
   @override
   late final Prefs prefs = createPrefs(
-    getFn: _worker.prefsGet,
-    updateFn: _worker.prefsUpdate,
+    getFn: () => _withWorker((worker) => worker.prefsGet()),
+    updateFn: (update) => _withWorker((worker) => worker.prefsUpdate(update)),
   );
 
   // ─── Diagnostics ────────────────────────────────────────────────────
   @override
   late final Diag diag = createDiag(
     // Offloaded to a helper isolate (long + contended, like dial).
-    pingFn: (ip, timeout, type) =>
-        offloadDiagPing(ip: ip, timeout: timeout, pingType: type.name),
-    metricsFn: _worker.diagMetrics,
-    derpMapFn: _worker.diagDERPMap,
-    checkUpdateFn: _worker.diagCheckUpdate,
-    nodeStateFn: _worker.debugNodeState,
+    pingFn: (ip, timeout, type) => _withNativeRuntime(
+      () => offloadDiagPing(ip: ip, timeout: timeout, pingType: type.name),
+    ),
+    metricsFn: () => _withWorker((worker) => worker.diagMetrics()),
+    derpMapFn: () => _withWorker((worker) => worker.diagDERPMap()),
+    checkUpdateFn: () => _withWorker((worker) => worker.diagCheckUpdate()),
+    nodeStateFn: () => _withWorker((worker) => worker.debugNodeState()),
   );
 
   // ─── Streams ────────────────────────────────────────────────────────
@@ -379,6 +803,11 @@ class Tailscale implements TailscaleClient {
   /// On a fresh install this directory is empty; after the first
   /// successful [up], it contains credentials that let subsequent
   /// launches reconnect without an auth key.
+  ///
+  /// The current pre-launch SQLite StateStore is permission-protected but not
+  /// encrypted at rest. It must not ship in a client application before the
+  /// planned Keybay-backed encrypted StateStore cutover. Filesystem permissions
+  /// and backup exclusion remain defense-in-depth after that cutover.
   ///
   /// Pick somewhere durable but **excluded from cloud backups** — the
   /// directory holds the node's WireGuard private key, and a key that
@@ -494,9 +923,12 @@ class Tailscale implements TailscaleClient {
   /// control URL, and ephemeral mode. An auth key never replaces an active
   /// identity; call [down] before changing runtime configuration.
   ///
-  /// [timeout] bounds how long [up] waits for the node to reach a stable state
-  /// after the native runtime starts. Increase it for slow mobile networks or
-  /// self-hosted control planes.
+  /// [timeout] bounds native startup and the stable-state wait. Once that
+  /// deadline expires, the Future waits as long as required to establish
+  /// fail-safe quarantine before returning, so total wall time can exceed
+  /// [timeout] when native teardown is slow. A non-cancellable late native
+  /// success is closed instead of becoming an unowned active node. Increase
+  /// the timeout for slow mobile networks or self-hosted control planes.
   ///
   /// Throws [TailscaleUpException] if the node fails to start or reach a stable
   /// state before [timeout] (e.g. control plane unreachable). When no auth key
@@ -515,73 +947,147 @@ class Tailscale implements TailscaleClient {
     }
     final validatedHostname = validateRuntimeHostname(hostname);
     final canonicalControlUrl = canonicalizeControlUrl(controlUrl);
-    if (_publicUpInFlight) {
+    if (_nativeStartInFlight) {
       throw const TailscaleUpException(
         'Another node start is already in progress.',
         code: TailscaleErrorCode.lifecycleBusy,
       );
     }
 
-    // Reserve the complete public lifecycle operation synchronously. Native
-    // start serialization alone is insufficient: up() still has to observe a
-    // stable state and construct Dart-side capabilities after start returns.
-    _publicUpInFlight = true;
+    // Reserve the complete public startup synchronously, including recovery,
+    // native construction, stable-state observation, and Dart capability
+    // setup. Teardown operations share this supervisor queue.
+    _nativeStartInFlight = true;
+    final elapsed = Stopwatch()..start();
     try {
-      return await _publicLifecycle.run(
-        () => _runUpLifecycle(
+      return await _supervisorLifecycle.run(
+        () => _runUp(
           hostname: validatedHostname,
           authKey: authKey ?? '',
           ephemeral: ephemeral,
           controlUrl: canonicalControlUrl,
           timeout: timeout,
+          elapsed: elapsed,
         ),
       );
     } finally {
-      _publicUpInFlight = false;
+      _nativeStartInFlight = false;
     }
   }
 
-  Future<TailscaleStatus> _runUpLifecycle({
+  Future<TailscaleStatus> _runUp({
     required String hostname,
     required String authKey,
     required bool ephemeral,
     required String controlUrl,
     required Duration timeout,
+    required Stopwatch elapsed,
   }) async {
     // Only count stable states that arrive AFTER start() returns. A prior
     // runtime's lingering emission must not satisfy a new construction.
     final stable = Completer<void>();
     var startReturned = false;
+    NodeState? lastObservedState;
     final sub = onStateChange.listen((state) {
       if (!startReturned) return;
+      lastObservedState = state;
       if (_isStableState(state) && !stable.isCompleted) {
         stable.complete();
       }
     });
 
-    // `timeout` must bound the whole operation, not just the wait for a stable
-    // state. `_worker.start` runs the native bring-up and has no timeout of its
-    // own, so without bounding it here `up(timeout:)` could block far past its
-    // budget or hang if the native call wedges.
-    final elapsed = Stopwatch()..start();
+    final requestToken = _allocateRuntimeToken();
+    final workerExit = Completer<Object?>();
+    _activeUpToken = requestToken;
+    _activeUpWorkerExit = workerExit;
+
+    Future<T> failOnWorkerExit<T>(Future<T> operation) {
+      return Future.any<T>([
+        operation,
+        workerExit.future.then<T>(
+          (cause) => throw TailscaleUpException(
+            'The supervised worker terminated during node startup.',
+            code: TailscaleErrorCode.workerTerminated,
+            cause: cause,
+          ),
+        ),
+      ]);
+    }
+
+    bool isWorkerTermination(Object error) =>
+        error is TailscaleOperationException &&
+        error.code == TailscaleErrorCode.workerTerminated;
+
+    Duration remainingBudget() {
+      final remaining = timeout - elapsed.elapsed;
+      return remaining > Duration.zero ? remaining : Duration.zero;
+    }
+
+    Future<Never> timeoutAfterQuarantine({
+      required String message,
+      required Worker worker,
+      required int token,
+      required bool quarantine,
+    }) async {
+      if (quarantine) {
+        try {
+          await _quarantineTimedOutStart(worker, token);
+        } catch (error) {
+          throw TailscaleUpException(
+            '$message Native quarantine could not be established.',
+            code: TailscaleErrorCode.startupTimeout,
+            cause: error,
+          );
+        }
+      }
+      throw TailscaleUpException(
+        message,
+        code: TailscaleErrorCode.startupTimeout,
+      );
+    }
+
     try {
-      final startFuture = _worker.start(
+      late final Worker worker;
+      try {
+        await _awaitWorkerRecovery().timeout(remainingBudget());
+        if (remainingBudget() == Duration.zero) throw TimeoutException('');
+        worker = _currentOrSpawnWorker();
+      } on TimeoutException {
+        throw TailscaleUpException(
+          'Node startup could not begin within $timeout because an earlier '
+          'runtime is still being quarantined.',
+          code: TailscaleErrorCode.startupTimeout,
+        );
+      }
+
+      final startFuture = worker.start(
+        requestToken: requestToken,
         hostname: hostname,
         authKey: authKey,
         ephemeral: ephemeral,
         controlUrl: controlUrl,
       );
 
-      bool alreadyActive;
+      late final WorkerStartResult startResult;
       try {
-        alreadyActive = await startFuture.timeout(timeout);
+        startResult = await failOnWorkerExit(
+          startFuture,
+        ).timeout(remainingBudget());
       } on TimeoutException {
-        throw TailscaleUpException(
-          'Node did not start within $timeout. The native runtime may be '
-          'wedged or the control plane unreachable.',
+        return timeoutAfterQuarantine(
+          message:
+              'Node did not start within $timeout. The matching native '
+              'generation was quarantined.',
+          worker: worker,
+          token: requestToken,
+          quarantine: true,
         );
       }
-      if (!alreadyActive || _http == null) {
+
+      _activeUpToken = startResult.runtimeToken;
+
+      _idleStatusError = null;
+      if (!startResult.alreadyActive || _http == null) {
         _http?.close();
         _http = TailscaleHttpClient();
       }
@@ -590,29 +1096,69 @@ class Tailscale implements TailscaleClient {
       // No-op up() case: the engine is already at a stable state and
       // won't emit another event. Check once post-start so we don't
       // wait on a state change that will never come.
-      final postStart = await status();
+      late final TailscaleStatus postStart;
+      try {
+        postStart = await failOnWorkerExit(status()).timeout(remainingBudget());
+      } on TimeoutException {
+        return timeoutAfterQuarantine(
+          message: 'Node status did not respond within $timeout after startup.',
+          worker: worker,
+          token: startResult.runtimeToken,
+          quarantine: !startResult.alreadyActive,
+        );
+      } catch (error, stackTrace) {
+        if (isWorkerTermination(error)) {
+          await _awaitWorkerRecovery();
+        } else if (!startResult.alreadyActive) {
+          await _quarantineTimedOutStart(worker, startResult.runtimeToken);
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      lastObservedState = postStart.state;
       if (_isStableState(postStart.state) && !stable.isCompleted) {
         stable.complete();
       }
 
-      final remaining = timeout - elapsed.elapsed;
       try {
-        await stable.future.timeout(
-          remaining > Duration.zero ? remaining : Duration.zero,
-        );
+        await failOnWorkerExit(stable.future).timeout(remainingBudget());
       } on TimeoutException {
-        final last = await status();
-        throw TailscaleUpException(
-          'Node did not reach a stable state within $timeout '
-          '(last observed: ${last.state.name}). The control plane may '
-          'be unreachable or the tailnet is experiencing issues.',
+        return timeoutAfterQuarantine(
+          message:
+              'Node did not reach a stable state within $timeout '
+              '(last observed: ${lastObservedState?.name ?? 'unknown'}). '
+              'The matching native generation was quarantined.',
+          worker: worker,
+          token: startResult.runtimeToken,
+          quarantine: !startResult.alreadyActive,
         );
       }
+
+      try {
+        return await failOnWorkerExit(status()).timeout(remainingBudget());
+      } on TimeoutException {
+        return timeoutAfterQuarantine(
+          message:
+              'Node reached a stable state but its final status did not '
+              'respond within $timeout.',
+          worker: worker,
+          token: startResult.runtimeToken,
+          quarantine: !startResult.alreadyActive,
+        );
+      } catch (error, stackTrace) {
+        if (isWorkerTermination(error)) {
+          await _awaitWorkerRecovery();
+        } else if (!startResult.alreadyActive) {
+          await _quarantineTimedOutStart(worker, startResult.runtimeToken);
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
     } finally {
+      if (identical(_activeUpWorkerExit, workerExit)) {
+        _activeUpWorkerExit = null;
+        _activeUpToken = null;
+      }
       await sub.cancel();
     }
-
-    return status();
   }
 
   static bool _isStableState(NodeState s) =>
@@ -631,7 +1177,10 @@ class Tailscale implements TailscaleClient {
   @override
   Future<TailscaleStatus> status() async {
     _requireInitialized();
-    return _worker.status();
+    await _awaitWorkerRecovery();
+    final classificationFailure = _idleStatusError;
+    if (classificationFailure != null) throw classificationFailure;
+    return _withWorker((worker) => worker.status());
   }
 
   /// Returns the current node inventory — every node on the tailnet
@@ -678,7 +1227,7 @@ class Tailscale implements TailscaleClient {
     // LocalAPI exposes exit-node selection through prefs, while the public
     // API returns a full TailscaleNode. Resolve against a near-current node
     // snapshot; transient null is acceptable while netmap state catches up.
-    final prefs = await _worker.prefsGet();
+    final prefs = await _withWorker((worker) => worker.prefsGet());
     final nodeSnapshot = await nodes();
 
     for (final node in nodeSnapshot) {
@@ -697,7 +1246,7 @@ class Tailscale implements TailscaleClient {
 
   Future<TailscaleNode?> _suggestExitNode() async {
     _requireInitialized();
-    final nodeId = await _worker.exitNodeSuggest();
+    final nodeId = await _withWorker((worker) => worker.exitNodeSuggest());
     if (nodeId == null) return null;
     return _nodeByStableNodeId(nodeId);
   }
@@ -716,34 +1265,221 @@ class Tailscale implements TailscaleClient {
     // async so the _requireInitialized() guard rejects the returned Future
     // instead of throwing synchronously (see nodes()).
     _requireInitialized();
-    return _worker.whois(ip);
+    return _withWorker((worker) => worker.whois(ip));
   }
 
   /// Brings the embedded node down while preserving persisted credentials.
   @override
   Future<void> down() async {
     _requireInitialized();
-    await _publicLifecycle.run(() async {
-      _reset();
-      try {
-        await _worker.down();
-      } finally {
-        _reset();
-      }
-    });
+    return _supervisorLifecycle.run(_runDown);
   }
 
-  /// Logs out and clears persisted credentials.
+  Future<void> _runDown() async {
+    _reset();
+    int? shutdownToken;
+    try {
+      var expectedRescue = false;
+      late final WorkerCloseResult result;
+      try {
+        result = await _withWorker((worker) {
+          shutdownToken = worker.runtimeToken;
+          expectedRescue = shutdownToken != null;
+          if (shutdownToken case final token?) {
+            _shutdownIntents.add(token);
+          }
+          return worker.down();
+        });
+      } on TailscaleOperationException catch (error) {
+        if (!expectedRescue ||
+            error.code != TailscaleErrorCode.workerTerminated) {
+          rethrow;
+        }
+        await _awaitWorkerRecoveryCompletion();
+        final recovered = _recoveredShutdowns.remove(shutdownToken);
+        if (recovered == null) {
+          await _awaitWorkerRecovery();
+          rethrow;
+        }
+        final recoveryError = recovered.error;
+        if (recoveryError != null) {
+          throw TailscaleOperationException(
+            'down',
+            recoveryError.message,
+            code: recoveryError.code,
+            statusCode: recoveryError.statusCode,
+            cause: recoveryError,
+          );
+        }
+        return;
+      }
+      if (result.started) {
+        _publishTerminalNodes();
+      }
+      final closeError = result.error;
+      if (closeError != null) {
+        if (result.cleanupFailed ||
+            closeError.code == TailscaleErrorCode.runtimeCleanupFailed) {
+          _retainCleanupFailure(closeError);
+        }
+        throw closeError;
+      }
+      if (result.started) {
+        _stateController.add(NodeState.stopped);
+      }
+    } finally {
+      if (shutdownToken case final token?) {
+        _shutdownIntents.remove(token);
+        _recoveredShutdowns.remove(token);
+      }
+      // A preceding queued up() may have completed after the eager reset and
+      // constructed Dart-side capabilities before this down reached native.
+      _reset();
+    }
+  }
+
+  /// Revokes this node with the control plane, then clears local credentials
+  /// only after upstream confirms success.
+  ///
+  /// If the node was previously brought [down], logout temporarily reconstructs
+  /// it from persisted state so revocation can still be attempted. A timeout or
+  /// failure closes that possibly-mutated runtime, preserves local recovery
+  /// evidence, and throws [TailscaleLogoutException] with
+  /// [TailscaleErrorCode.logoutIndeterminate]. It never silently turns a failed
+  /// remote logout into a local-only identity wipe.
   @override
   Future<void> logout() async {
     _requireInitialized();
-    await _publicLifecycle.run(() async {
-      _reset();
+    return _supervisorLifecycle.run(_runLogout);
+  }
+
+  Future<void> _runLogout() async {
+    _reset();
+    int? shutdownToken;
+    try {
+      final requestToken = _allocateRuntimeToken();
+      var workerResponseReceived = false;
       try {
-        await _worker.logout();
-      } finally {
-        _reset();
+        final result = await _withWorker((worker) {
+          shutdownToken = worker.runtimeToken ?? requestToken;
+          _shutdownIntents.add(shutdownToken!);
+          return worker.logout(requestToken: requestToken);
+        });
+        workerResponseReceived = true;
+        _idleStatusError = null;
+        final logoutError = result.error;
+        if (result.started || result.noState) {
+          _publishTerminalNodes();
+        }
+        if (result.cleanupFailed) {
+          final cleanupFailure =
+              logoutError?.code == TailscaleErrorCode.runtimeCleanupFailed
+              ? logoutError!
+              : TailscaleOperationException(
+                  'logout',
+                  'Logout did not cleanly close all native resources.',
+                  code: TailscaleErrorCode.runtimeCleanupFailed,
+                  cause: logoutError,
+                );
+          _retainCleanupFailure(cleanupFailure);
+          if (logoutError != null) throw logoutError;
+          throw cleanupFailure;
+        }
+        if (result.started) {
+          _stateController.add(NodeState.stopped);
+        }
+        if (result.noState) {
+          _stateController.add(NodeState.noState);
+        }
+        if (logoutError != null) throw logoutError;
+      } on TailscaleLogoutException catch (error) {
+        if (!workerResponseReceived &&
+            (error.code == TailscaleErrorCode.workerTerminated ||
+                error.code == TailscaleErrorCode.logoutIndeterminate)) {
+          await _awaitWorkerRecoveryCompletion();
+          final recovered = _recoveredShutdowns.remove(shutdownToken);
+          if (recovered?.operation == 'logout') {
+            final recoveryError = recovered?.error;
+            if (recoveryError == null) return;
+            throw TailscaleLogoutException(
+              recoveryError.message,
+              code: recoveryError.code,
+              statusCode: recoveryError.statusCode,
+              cause: recoveryError,
+            );
+          }
+          final recoveryError = recovered?.error;
+          if (recoveryError != null) {
+            throw TailscaleLogoutException(
+              recoveryError.message,
+              code: recoveryError.code,
+              statusCode: recoveryError.statusCode,
+              cause: recoveryError,
+            );
+          }
+          if (recovered == null) {
+            await _awaitWorkerRecovery();
+          }
+        }
+        rethrow;
       }
-    });
+    } finally {
+      if (shutdownToken case final token?) {
+        _shutdownIntents.remove(token);
+        _recoveredShutdowns.remove(token);
+      }
+      _reset();
+    }
+  }
+
+  /// Terminates the supervised control isolate without touching native state.
+  /// The caller-isolate rescue path must quarantine any matching runtime.
+  @visibleForTesting
+  Future<void> debugTerminateWorkerForTesting({bool expected = false}) async {
+    _requireInitialized();
+    final worker = await _workerForCall();
+    await worker.debugWaitUntilReady();
+    worker.debugTerminate(expected: expected);
+  }
+
+  /// Arms a test-only worker termination immediately after the next
+  /// down/logout intent is tagged and before its native acknowledgement.
+  @visibleForTesting
+  Future<void> debugTerminateWorkerOnNextShutdownForTesting() async {
+    _requireInitialized();
+    final worker = await _workerForCall();
+    await worker.debugWaitUntilReady();
+    worker.debugTerminateOnNextShutdown();
+  }
+
+  /// Arms a test-only termination after the next native start response but
+  /// before the public up operation can complete its stable-state wait.
+  @visibleForTesting
+  Future<void> debugTerminateWorkerAfterNextStartForTesting() async {
+    _requireInitialized();
+    final worker = await _workerForCall();
+    await worker.debugWaitUntilReady();
+    worker.debugTerminateAfterNextStart();
+  }
+
+  /// Arms a test-only termination immediately after the next logout command
+  /// is sent to the worker, before its native acknowledgement reaches Dart.
+  @visibleForTesting
+  Future<void> debugTerminateWorkerAfterNextLogoutDispatchForTesting() async {
+    _requireInitialized();
+    final worker = await _workerForCall();
+    await worker.debugWaitUntilReady();
+    worker.debugTerminateAfterNextLogoutDispatch();
+  }
+
+  /// Terminates the worker after native down/logout has produced a terminal
+  /// receipt but before that receipt can be delivered to the caller isolate.
+  @visibleForTesting
+  Future<void>
+  debugTerminateWorkerAfterNextLifecycleNativeResultForTesting() async {
+    _requireInitialized();
+    final worker = await _workerForCall();
+    await worker.debugWaitUntilReady();
+    worker.debugTerminateAfterNextLifecycleNativeResult();
   }
 }

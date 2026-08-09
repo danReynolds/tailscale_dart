@@ -57,6 +57,12 @@ void main() {
       });
       expect(error.message, 'watch failed');
       expect(error.code, TailscaleRuntimeErrorCode.watcher);
+
+      final workerError = TailscaleRuntimeError.fromPushPayload({
+        'error': 'worker exited',
+        'code': 'worker',
+      });
+      expect(workerError.code, TailscaleRuntimeErrorCode.worker);
     });
 
     test('unknown runtime error codes fall back to unknown', () {

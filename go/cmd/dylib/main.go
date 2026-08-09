@@ -20,19 +20,20 @@ import (
 )
 
 //export DuneStart
-func DuneStart(hostname *C.char, authKey *C.char, controlURL *C.char, ephemeral C.int, hostNetworkSnapshot *C.char) *C.char {
+func DuneStart(requestToken C.ulonglong, hostname *C.char, authKey *C.char, controlURL *C.char, ephemeral C.int, hostNetworkSnapshot *C.char) *C.char {
 	name := C.GoString(hostname)
 	key := C.GoString(authKey)
 	ctl := C.GoString(controlURL)
 	network := C.GoString(hostNetworkSnapshot)
 
-	alreadyActive, err := tailscale.StartRuntimeWithHostNetwork(name, key, ctl, ephemeral != 0, network)
+	alreadyActive, runtimeToken, err := tailscale.StartRuntimeWithToken(uint64(requestToken), name, key, ctl, ephemeral != 0, network)
 	if err != nil {
 		return lifecycleError(err)
 	}
 	b, _ := json.Marshal(map[string]any{
 		"ok":            true,
 		"alreadyActive": alreadyActive,
+		"runtimeToken":  runtimeToken,
 	})
 	return C.CString(string(b))
 }
@@ -353,28 +354,100 @@ func DuneClassifyState() *C.char {
 }
 
 //export DuneLogout
-func DuneLogout() *C.char {
-	if err := tailscale.Logout(); err != nil {
+func DuneLogout(requestToken C.ulonglong, hostNetworkSnapshot *C.char) *C.char {
+	result, err := tailscale.LogoutWithToken(uint64(requestToken), C.GoString(hostNetworkSnapshot))
+	if err != nil {
+		return lifecycleErrorWithFields(err, logoutDisposition(result))
+	}
+	b, _ := json.Marshal(result)
+	return C.CString(string(b))
+}
+
+//export DuneAbandon
+func DuneAbandon(requestToken C.ulonglong) *C.char {
+	result, err := tailscale.AbandonRuntime(uint64(requestToken))
+	if err != nil {
+		return lifecycleErrorWithFields(err, runtimeCloseDisposition(result))
+	}
+	b, _ := json.Marshal(result)
+	return C.CString(string(b))
+}
+
+//export DuneAwaitRuntimeQuiescence
+func DuneAwaitRuntimeQuiescence(requestToken C.ulonglong) *C.char {
+	if err := tailscale.AwaitRuntimeQuiescence(uint64(requestToken)); err != nil {
 		return lifecycleError(err)
 	}
 	return C.CString(`{"ok":true}`)
 }
 
+//export DuneAcknowledgeLifecycle
+func DuneAcknowledgeLifecycle(requestToken C.ulonglong) {
+	tailscale.AcknowledgeLifecycleResult(uint64(requestToken))
+}
+
 func lifecycleError(err error) *C.char {
-	m := map[string]string{"error": err.Error()}
+	return lifecycleErrorWithFields(err, nil)
+}
+
+func lifecycleErrorWithFields(err error, fields map[string]any) *C.char {
+	return C.CString(lifecycleErrorJSON(err, fields))
+}
+
+func lifecycleErrorJSON(err error, fields map[string]any) string {
+	m := map[string]any{"error": err.Error()}
+	for key, value := range fields {
+		m[key] = value
+	}
 	switch {
+	case errors.Is(err, tailscale.ErrLogoutIndeterminate):
+		// Preserve the remote-result uncertainty even when local close also
+		// failed; callers must not mistake it for a confirmed revocation.
+		m["code"] = "logoutIndeterminate"
 	case errors.Is(err, tailscale.ErrLifecycleBusy):
 		m["code"] = "lifecycleBusy"
+	case errors.Is(err, tailscale.ErrRuntimeCleanupFailed):
+		m["code"] = "runtimeCleanupFailed"
 	case errors.Is(err, tailscale.ErrConfigurationMismatch):
 		m["code"] = "configurationMismatch"
+	case errors.Is(err, tailscale.ErrStartupAbandoned):
+		m["code"] = "startupAbandoned"
+	case errors.Is(err, tailscale.ErrRuntimeStale):
+		m["code"] = "staleRuntime"
 	}
 	b, _ := json.Marshal(m)
-	return C.CString(string(b))
+	return string(b)
+}
+
+func logoutDisposition(result tailscale.LogoutResult) map[string]any {
+	return map[string]any{
+		"token":         result.Token,
+		"started":       result.Started,
+		"noState":       result.NoState,
+		"cleanupFailed": result.CleanupFailed,
+	}
+}
+
+func runtimeCloseDisposition(result tailscale.RuntimeCloseResult) map[string]any {
+	return map[string]any{
+		"token":         result.Token,
+		"operation":     result.Operation,
+		"matched":       result.Matched,
+		"started":       result.Started,
+		"pending":       result.Pending,
+		"noState":       result.NoState,
+		"cleanupFailed": result.CleanupFailed,
+	}
 }
 
 //export DuneStop
-func DuneStop() {
-	tailscale.Stop()
+func DuneStop(requestToken C.ulonglong) *C.char {
+	result, err := tailscale.CloseRuntime(uint64(requestToken))
+	if err != nil {
+		return lifecycleErrorWithFields(err, runtimeCloseDisposition(result))
+	}
+	b, _ := json.Marshal(result)
+	return C.CString(string(b))
 }
 
 //export DuneStatus

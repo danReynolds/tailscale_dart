@@ -159,6 +159,7 @@ sealed class _WorkerCommand {
 
 final class _WorkerStartCommand extends _WorkerCommand {
   const _WorkerStartCommand({
+    required this.requestToken,
     required this.hostname,
     required this.authKey,
     required this.ephemeral,
@@ -166,6 +167,7 @@ final class _WorkerStartCommand extends _WorkerCommand {
     required this.hostNetworkSnapshot,
   }) : super(_WorkerOperation.start);
 
+  final int requestToken;
   final String hostname;
   final String authKey;
   final bool ephemeral;
@@ -297,11 +299,25 @@ final class _WorkerServeClearCommand extends _WorkerCommand {
 }
 
 final class _WorkerDownCommand extends _WorkerCommand {
-  const _WorkerDownCommand() : super(_WorkerOperation.down);
+  const _WorkerDownCommand({
+    required this.runtimeToken,
+    required this.terminateAfterNativeResult,
+  }) : super(_WorkerOperation.down);
+
+  final int runtimeToken;
+  final bool terminateAfterNativeResult;
 }
 
 final class _WorkerLogoutCommand extends _WorkerCommand {
-  const _WorkerLogoutCommand() : super(_WorkerOperation.logout);
+  const _WorkerLogoutCommand({
+    required this.runtimeToken,
+    required this.hostNetworkSnapshot,
+    required this.terminateAfterNativeResult,
+  }) : super(_WorkerOperation.logout);
+
+  final int runtimeToken;
+  final String hostNetworkSnapshot;
+  final bool terminateAfterNativeResult;
 }
 
 sealed class _WorkerMainMessage {
@@ -325,20 +341,26 @@ sealed class _WorkerEvent extends _WorkerMainMessage {
 }
 
 final class _WorkerStateEvent extends _WorkerEvent {
-  const _WorkerStateEvent({required this.state});
+  const _WorkerStateEvent({required this.runtimeToken, required this.state});
 
+  final int runtimeToken;
   final NodeState state;
 }
 
 final class _WorkerRuntimeErrorEvent extends _WorkerEvent {
-  const _WorkerRuntimeErrorEvent(this.error);
+  const _WorkerRuntimeErrorEvent({
+    required this.runtimeToken,
+    required this.error,
+  });
 
+  final int runtimeToken;
   final TailscaleRuntimeError error;
 }
 
 final class _WorkerPeersEvent extends _WorkerEvent {
-  const _WorkerPeersEvent({required this.peers});
+  const _WorkerPeersEvent({required this.runtimeToken, required this.peers});
 
+  final int runtimeToken;
   final List<TailscaleNode> peers;
 }
 
@@ -349,10 +371,13 @@ sealed class _WorkerResponse extends _WorkerMainMessage {
 }
 
 final class _WorkerStartResponse extends _WorkerResponse {
-  const _WorkerStartResponse({required this.alreadyActive})
-    : super(_WorkerOperation.start);
+  const _WorkerStartResponse({
+    required this.alreadyActive,
+    required this.runtimeToken,
+  }) : super(_WorkerOperation.start);
 
   final bool alreadyActive;
+  final int runtimeToken;
 }
 
 final class _WorkerHttpBindResponse extends _WorkerResponse {
@@ -480,7 +505,26 @@ final class _WorkerDiagCheckUpdateResponse extends _WorkerResponse {
 }
 
 final class _WorkerAckResponse extends _WorkerResponse {
-  const _WorkerAckResponse(super.operation);
+  const _WorkerAckResponse(
+    super.operation, {
+    this.runtimeToken = 0,
+    this.matched = false,
+    this.started = false,
+    this.noState = false,
+    this.cleanupFailed = false,
+    this.errorMessage,
+    this.errorCode = TailscaleErrorCode.unknown,
+    this.statusCode,
+  });
+
+  final int runtimeToken;
+  final bool matched;
+  final bool started;
+  final bool noState;
+  final bool cleanupFailed;
+  final String? errorMessage;
+  final TailscaleErrorCode errorCode;
+  final int? statusCode;
 }
 
 final class _WorkerFailureResponse extends _WorkerResponse {

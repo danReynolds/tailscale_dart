@@ -266,14 +266,15 @@ print(res.statusCode);</code></pre>
           <p class="eyebrow">Architecture</p>
           <h2>Upstream semantics, Dart-shaped surface.</h2>
           <p>
-            Control calls cross a worker isolate into Go. High-volume transport
-            I/O uses fd capabilities and a shared POSIX reactor. Forwarding APIs
-            are different by design: they publish a local HTTP server the app
-            already owns. The
+            A caller-isolate supervisor sends token-qualified control calls
+            through a replaceable worker into a per-lifecycle Go runtime and
+            quarantines a failed or timed-out generation before recovery.
+            High-volume transport I/O uses fd capabilities and a shared POSIX
+            reactor. Forwarding APIs are different by design: they publish a
+            local HTTP server the app already owns. The
             <a href="https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md">accepted target plan</a>
-            adds per-lifecycle ownership, fail-safe teardown, and Keybay-custodied
-            encrypted node state; those changes are not all present in the
-            current release.
+            also specifies Keybay-custodied encrypted node state; that secure
+            storage cutover is not yet present in the current release.
           </p>
         </div>
         <div class="architecture-grid">
@@ -350,6 +351,14 @@ print(res.statusCode);</code></pre>
             <article>
               <h3>Dart owns application shape</h3>
               <p>Callers work with package-native clients, listeners, datagrams, streams, node objects, prefs, and diagnostics.</p>
+            </article>
+            <article>
+              <h3>Lifecycle fails safe</h3>
+              <p>Startup timeout or worker death quarantines only the matching native generation, joins its publishers, and rejects stale events before another worker binds.</p>
+            </article>
+            <article>
+              <h3>Encrypted storage is a launch gate</h3>
+              <p>The current permission-protected SQLite StateStore is not encrypted at rest. Client release remains blocked until the Keybay-backed encrypted StateStore cutover removes it.</p>
             </article>
             <article>
               <h3>Owned transports use fds</h3>

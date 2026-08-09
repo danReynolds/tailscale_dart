@@ -56,7 +56,10 @@ jobs:
         id: ndk
         with:
           ndk-version: r28c
-          local-cache: true
+          # The action's repository cache uses one immutable key per NDK and
+          # OS. A prior matrix run populated that key with an archive missing
+          # bin/clang, so prefer a fresh, deterministic pinned-NDK install.
+          local-cache: false
       - name: Build
         working-directory: go
         env:

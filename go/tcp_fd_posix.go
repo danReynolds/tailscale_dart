@@ -52,19 +52,21 @@ func TcpDialFd(host string, port int, timeout time.Duration) (*TcpFdConn, error)
 		return nil, fmt.Errorf("invalid port %d", port)
 	}
 
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
-		return nil, errors.New("TcpDialFd called before Start")
+	runtime := currentRuntime()
+	if runtime == nil {
+		return nil, fmt.Errorf("%w: TcpDialFd called before Start", ErrRuntimeStale)
 	}
 
 	// Bounded even with no caller timeout — see defaultNativeCallTimeout.
-	ctx, cancel := boundedCallCtx(timeout)
+	ctx, cancel := boundedCallCtxFrom(runtime.ctx, timeout)
 	defer cancel()
 
-	tailConn, err := s.Dial(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	tailConn, err := runtime.server.Dial(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	err = runtime.resultError(err)
 	if err != nil {
+		if tailConn != nil {
+			_ = tailConn.Close()
+		}
 		return nil, fmt.Errorf("tailnet dial %s:%d: %w", host, port, err)
 	}
 

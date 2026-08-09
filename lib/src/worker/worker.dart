@@ -79,6 +79,32 @@ bool _isUsableHostAddress(io.InternetAddress address) {
   return false;
 }
 
+/// Reserves lifecycle call order synchronously, before an operation reaches
+/// its first asynchronous preparation step.
+@visibleForTesting
+final class WorkerLifecycleQueue {
+  Future<void> _tail = Future<void>.value();
+
+  Future<T> run<T>(Future<T> Function() operation) {
+    final result = Completer<T>();
+    final previous = _tail;
+    final done = Completer<void>();
+    _tail = done.future;
+
+    unawaited(() async {
+      try {
+        await previous;
+        result.complete(await operation());
+      } catch (error, stackTrace) {
+        result.completeError(error, stackTrace);
+      } finally {
+        done.complete();
+      }
+    }());
+    return result.future;
+  }
+}
+
 /// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
 final class Worker {
   Worker({
@@ -98,6 +124,7 @@ final class Worker {
   // sufficient for matching RPC responses without request IDs.
   final Queue<Completer<_WorkerResponse>> _pendingRequests =
       Queue<Completer<_WorkerResponse>>();
+  final WorkerLifecycleQueue _lifecycle = WorkerLifecycleQueue();
 
   final _sendPortCompleter = Completer<SendPort>();
   final _receivePort = ReceivePort();
@@ -203,24 +230,25 @@ final class Worker {
     }
   }
 
-  Future<void> start({
+  Future<bool> start({
     required String hostname,
     required String authKey,
     required bool ephemeral,
     required String controlUrl,
-    required String stateDir,
-  }) async {
-    final hostNetworkSnapshot = await _loadHostNetworkSnapshot();
-    await _request<_WorkerStartResponse>(
-      _WorkerStartCommand(
-        hostname: hostname,
-        authKey: authKey,
-        ephemeral: ephemeral,
-        controlUrl: controlUrl,
-        stateDir: stateDir,
-        hostNetworkSnapshot: hostNetworkSnapshot,
-      ),
-    );
+  }) {
+    return _lifecycle.run(() async {
+      final hostNetworkSnapshot = await _loadHostNetworkSnapshot();
+      final response = await _request<_WorkerStartResponse>(
+        _WorkerStartCommand(
+          hostname: hostname,
+          authKey: authKey,
+          ephemeral: ephemeral,
+          controlUrl: controlUrl,
+          hostNetworkSnapshot: hostNetworkSnapshot,
+        ),
+      );
+      return response.alreadyActive;
+    });
   }
 
   Future<({int bindingId, TailscaleEndpoint tailnet})> httpBind({
@@ -353,9 +381,9 @@ final class Worker {
     return response.snapshot;
   }
 
-  Future<TailscaleStatus> status({required String stateDir}) async {
+  Future<TailscaleStatus> status() async {
     final response = await _request<_WorkerStatusResponse>(
-      _WorkerStatusCommand(stateDir: stateDir),
+      const _WorkerStatusCommand(),
     );
     return response.status;
   }
@@ -407,13 +435,15 @@ final class Worker {
     );
   }
 
-  Future<void> down() async {
-    await _request<_WorkerAckResponse>(const _WorkerDownCommand());
+  Future<void> down() {
+    return _lifecycle.run(() async {
+      await _request<_WorkerAckResponse>(const _WorkerDownCommand());
+    });
   }
 
-  Future<void> logout(String stateDir) async {
-    await _request<_WorkerAckResponse>(
-      _WorkerLogoutCommand(stateDir: stateDir),
-    );
+  Future<void> logout() {
+    return _lifecycle.run(() async {
+      await _request<_WorkerAckResponse>(const _WorkerLogoutCommand());
+    });
   }
 }

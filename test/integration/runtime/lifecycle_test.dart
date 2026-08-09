@@ -16,6 +16,8 @@ import 'package:test/test.dart';
 import 'package:tailscale/tailscale.dart';
 import 'package:tailscale/src/ffi_bindings.dart' as native;
 
+import '../support/process_state_root.dart';
+
 void main() {
   // ─── Pure-Dart value-type parsing ─────────────────────────────────
   // Doesn't touch FFI; the @TestOn at the top is for the integration
@@ -279,17 +281,13 @@ void main() {
   late Directory configuredStateBaseDir;
 
   setUpAll(() {
-    native.duneSetLogLevel(0);
-    configuredStateBaseDir = Directory.systemTemp.createTempSync(
-      'tailscale_lifecycle_',
-    );
+    configuredStateBaseDir = processIntegrationStateRoot();
+    clearProcessIntegrationState(configuredStateBaseDir);
     Tailscale.init(stateDir: configuredStateBaseDir.path);
   });
 
   tearDownAll(() {
-    if (configuredStateBaseDir.existsSync()) {
-      configuredStateBaseDir.deleteSync(recursive: true);
-    }
+    clearProcessIntegrationState(configuredStateBaseDir);
   });
 
   group('init validation', () {
@@ -311,6 +309,36 @@ void main() {
           timeout: Duration.zero,
         ),
         throwsA(isA<TailscaleUsageException>()),
+      );
+    });
+
+    test('repeated init is idempotent only for the same native identity', () {
+      Tailscale.init(stateDir: configuredStateBaseDir.path);
+
+      final alias = Link('${configuredStateBaseDir.path}-alias');
+      if (alias.existsSync()) alias.deleteSync();
+      alias.createSync(configuredStateBaseDir.path);
+      addTearDown(() {
+        if (alias.existsSync()) alias.deleteSync();
+      });
+      Tailscale.init(stateDir: alias.path);
+
+      expect(
+        () => Tailscale.init(
+          stateDir: configuredStateBaseDir.path,
+          logLevel: TailscaleLogLevel.error,
+        ),
+        throwsA(isA<TailscaleConfigurationException>()),
+      );
+      final otherRoot = Directory.systemTemp.createTempSync(
+        'tailscale_other_root_',
+      );
+      addTearDown(() {
+        if (otherRoot.existsSync()) otherRoot.deleteSync(recursive: true);
+      });
+      expect(
+        () => Tailscale.init(stateDir: otherRoot.path),
+        throwsA(isA<TailscaleConfigurationException>()),
       );
     });
   });
@@ -366,7 +394,7 @@ void main() {
   });
 
   group('up() without auth key', () {
-    test('throws TailscaleUpException when no persisted state', () async {
+    test('defers fresh enrollment truth to upstream', () async {
       final ownedStateDir = Directory(
         p.join(configuredStateBaseDir.path, 'tailscale'),
       );
@@ -374,13 +402,12 @@ void main() {
         ownedStateDir.deleteSync(recursive: true);
       }
 
-      await expectLater(
-        Tailscale.instance.up(
-          hostname: 'no-auth-test',
-          controlUrl: Uri.parse('http://127.0.0.1:1/'),
-        ),
-        throwsA(isA<TailscaleUpException>()),
+      final status = await Tailscale.instance.up(
+        hostname: 'no-auth-test',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
       );
+      expect(status.state, NodeState.needsLogin);
+      await Tailscale.instance.down();
     });
   });
 
@@ -433,28 +460,119 @@ void main() {
       await Tailscale.instance.down();
     });
 
-    test('up() twice without down() replaces the node', () async {
+    test(
+      'same-config up ignores a new auth key and preserves generation',
+      () async {
+        addTearDown(() async {
+          try {
+            await Tailscale.instance.down();
+          } catch (_) {}
+          native.duneStop();
+        });
+
+        await Tailscale.instance.up(
+          hostname: 'double-up',
+          authKey: 'tskey-fake-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+        );
+        final before = await Tailscale.instance.diag.nodeState();
+
+        await Tailscale.instance.up(
+          hostname: 'double-up',
+          authKey: 'tskey-a-different-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+        );
+
+        final status = await Tailscale.instance.status();
+        expect(status.state, isNot(NodeState.noState));
+        final after = await Tailscale.instance.diag.nodeState();
+        expect(after.epoch, before.epoch);
+      },
+    );
+
+    test('active config mismatch is typed and does not tear down', () async {
       addTearDown(() async {
         try {
           await Tailscale.instance.down();
         } catch (_) {}
         native.duneStop();
       });
-
       await Tailscale.instance.up(
-        hostname: 'double-up-1',
+        hostname: 'mismatch-base',
         authKey: 'tskey-fake-key',
         controlUrl: Uri.parse('http://127.0.0.1:1/'),
       );
+      final before = await Tailscale.instance.diag.nodeState();
 
-      await Tailscale.instance.up(
-        hostname: 'double-up-2',
+      await expectLater(
+        Tailscale.instance.up(
+          hostname: 'different-hostname',
+          authKey: 'tskey-fake-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+        ),
+        throwsA(
+          isA<TailscaleUpException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.configurationMismatch,
+          ),
+        ),
+      );
+
+      final after = await Tailscale.instance.diag.nodeState();
+      expect(after.epoch, before.epoch);
+      expect(
+        (await Tailscale.instance.status()).state,
+        isNot(NodeState.noState),
+      );
+
+      await Tailscale.instance.down();
+    });
+
+    test('concurrent up returns lifecycleBusy', () async {
+      final first = Tailscale.instance.up(
+        hostname: 'busy-start',
         authKey: 'tskey-fake-key',
         controlUrl: Uri.parse('http://127.0.0.1:1/'),
       );
+      await expectLater(
+        Tailscale.instance.up(
+          hostname: 'busy-start',
+          authKey: 'tskey-other-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+        ),
+        throwsA(
+          isA<TailscaleUpException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.lifecycleBusy,
+          ),
+        ),
+      );
 
-      final status = await Tailscale.instance.status();
-      expect(status.state, isNot(NodeState.noState));
+      await first;
+      await Tailscale.instance.down();
+    });
+
+    test('down called during up is ordered after start', () async {
+      final starting = Tailscale.instance.up(
+        hostname: 'ordered-up-down',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+      final stopping = Tailscale.instance.down();
+
+      await starting;
+      await stopping;
+
+      expect((await Tailscale.instance.status()).state, NodeState.stopped);
+      final census = await Tailscale.instance.diag.nodeState();
+      expect(census.servePublications, 0);
+      expect(census.funnelForwarders, 0);
+      expect(census.httpBindings, 0);
+      expect(census.tcpListeners, 0);
+      expect(census.udpBridges, 0);
+      expect(census.transportCached, isFalse);
     });
   });
 

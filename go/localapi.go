@@ -34,17 +34,32 @@ import (
 	"tailscale.com/types/opt"
 )
 
-// lcOr returns the current LocalClient or an error if the embedded
-// engine hasn't been Started yet. Every wrapper in this file opens
-// with this call — factoring keeps each wrapper short.
-func lcOr(op string) (*local.Client, error) {
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
-		return nil, fmt.Errorf("%s called before Start", op)
+type runtimeLocalClient struct {
+	*local.Client
+	runtime *nodeRuntime
+}
+
+func (a *runtimeLocalClient) callContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return boundedCallCtxFrom(a.runtime.ctx, timeout)
+}
+
+func (a *runtimeLocalClient) validateCurrent() error {
+	return a.runtime.validateCurrent()
+}
+
+func (a *runtimeLocalClient) resultError(err error) error {
+	return a.runtime.resultError(err)
+}
+
+// lcOr returns the LocalClient and runtime generation captured together, or an
+// error if the embedded engine has not been started. Callers derive their
+// contexts from this runtime and validate it before committing a result.
+func lcOr(op string) (*runtimeLocalClient, error) {
+	runtime := currentRuntime()
+	if runtime == nil {
+		return nil, fmt.Errorf("%w: %s called before Start", ErrRuntimeStale, op)
 	}
-	return s.LocalClient()
+	return &runtimeLocalClient{Client: runtime.localClient, runtime: runtime}, nil
 }
 
 // WhoIs resolves a tailnet IP to node identity. Returns a JSON object
@@ -58,12 +73,13 @@ func WhoIs(ip string) string {
 	}
 	lc, err := lcOr("WhoIs")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	resp, err := lc.WhoIs(ctx, addr.String())
+	err = lc.resultError(err)
 	if err != nil {
 		// 404 on an unknown IP is expected; translate to not-found.
 		if isNotFound(err) {
@@ -192,9 +208,10 @@ func lookupNodeIdentityViaLocalAPI(addr netip.Addr) *nodeIdentity {
 	if err != nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), identityLookupTimeout)
+	ctx, cancel := lc.callContext(identityLookupTimeout)
 	defer cancel()
 	resp, err := lc.WhoIs(ctx, addr.String())
+	err = lc.resultError(err)
 	if err != nil {
 		return nil
 	}
@@ -235,6 +252,9 @@ func isTransientNoSuggestion(err error) bool {
 // available, zero otherwise. Used as a secondary signal for the
 // Dart side.
 func classifyLocalAPIError(err error) (code string, status int) {
+	if errors.Is(err, ErrRuntimeStale) {
+		return "staleRuntime", 0
+	}
 	var herr interface{ Status() int }
 	if errors.As(err, &herr) {
 		status = herr.Status()
@@ -309,11 +329,12 @@ func ErrorJSON(err error) string {
 func TlsDomains() string {
 	lc, err := lcOr("TlsDomains")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	status, err := lc.Status(ctx)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -344,11 +365,12 @@ type prefsUpdatePayload struct {
 func PrefsGet() string {
 	lc, err := lcOr("PrefsGet")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	prefs, err := lc.GetPrefs(ctx)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -378,11 +400,12 @@ func PrefsUpdate(updateJSON string) string {
 
 	lc, err := lcOr("PrefsUpdate")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	prefs, err := lc.EditPrefs(ctx, masked)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -394,11 +417,12 @@ func PrefsUpdate(updateJSON string) string {
 func ExitNodeSuggest() string {
 	lc, err := lcOr("ExitNodeSuggest")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	suggestion, err := lc.SuggestExitNode(ctx)
+	err = lc.resultError(err)
 	return exitNodeSuggestResult(suggestion, err)
 }
 
@@ -432,11 +456,12 @@ func ExitNodeUseAuto() string {
 
 	lc, err := lcOr("ExitNodeUseAuto")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	prefs, err := lc.EditPrefs(ctx, &masked)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -521,11 +546,7 @@ func ServeForward(payloadJSON string) string {
 	if !ok {
 		return jsonError(errors.New("ServeForward called before Start"))
 	}
-	lc, err := gate.s.LocalClient()
-	if err != nil {
-		return jsonError(err)
-	}
-	return serveForwardLocked(gate, lc, payload)
+	return serveForwardLocked(gate, gate.runtime.localClient, payload)
 }
 
 // serveForwardLocked is the Serve path's commit section: the ServeConfig
@@ -549,13 +570,15 @@ func serveForwardLocked(gate nodeGate, lc *local.Client, payload serveForwardPay
 	}
 	// Bounded LocalAPI round trips — see defaultNativeCallTimeout. Held under
 	// serveConfigMu, so a wedged tailscaled must not pin the lock forever.
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := boundedCallCtxFrom(gate.runtime.ctx, 0)
 	defer cancel()
 	st, err := lc.StatusWithoutPeers(ctx)
+	err = gate.runtime.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
 	sc, err := lc.GetServeConfig(ctx)
+	err = gate.runtime.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -567,7 +590,7 @@ func serveForwardLocked(gate nodeGate, lc *local.Client, payload serveForwardPay
 	if err != nil {
 		return localAPIError(err)
 	}
-	if err := lc.SetServeConfig(ctx, sc); err != nil {
+	if err := gate.runtime.resultError(lc.SetServeConfig(ctx, sc)); err != nil {
 		return localAPIError(err)
 	}
 	trackServePublication(publication.hostKey())
@@ -598,7 +621,7 @@ func ServeClear(payloadJSON string) string {
 
 	lc, err := lcOr("ServeClear")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 	if payload.Funnel {
 		if err := clearFunnelForward(payload); err != nil {
@@ -609,13 +632,15 @@ func ServeClear(payloadJSON string) string {
 	serveConfigMu.Lock()
 	defer serveConfigMu.Unlock()
 	// Bounded LocalAPI round trips — see defaultNativeCallTimeout.
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	sc, err := lc.GetServeConfig(ctx)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
 	st, err := lc.StatusWithoutPeers(ctx)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -623,7 +648,7 @@ func ServeClear(payloadJSON string) string {
 	if err := applyServeClear(sc, st, payload); err != nil {
 		return localAPIError(err)
 	}
-	if err := lc.SetServeConfig(ctx, sc); err != nil {
+	if err := lc.resultError(lc.SetServeConfig(ctx, sc)); err != nil {
 		return localAPIError(err)
 	}
 	untrackServePublicationFromStatus(st, payload)
@@ -679,15 +704,15 @@ func closeAllServePublications(lc *local.Client) {
 	defer serveConfigMu.Unlock()
 	// Snapshot the keys under the same lock ServeForward's commit holds, so a
 	// concurrent forward either committed before us (its key is in the
-	// snapshot and gets removed) or observes the bumped node epoch (stopLocked
-	// bumps it before calling here) and refuses.
+	// snapshot and gets removed) or observes the bumped node epoch (the runtime
+	// controller bumps it before calling here) and refuses.
 	keys := takeServePublications()
 	if lc == nil || len(keys) == 0 {
 		return
 	}
-	// Bounded: this runs from stopLocked while the package-global mu is held,
-	// so an unbounded LocalAPI round trip to a wedged tailscaled would freeze
-	// Stop/Start/Logout and every other mu-guarded entry point.
+	// Bounded: this runs during runtime drain. The controller lock is already
+	// released, but an unbounded LocalAPI round trip would still prevent the
+	// drain from completing and keep subsequent startup quarantined.
 	ctx, cancel := boundedCallCtx(0)
 	defer cancel()
 	sc, err := lc.GetServeConfig(ctx)
@@ -1055,19 +1080,21 @@ func DiagPing(ip string, timeoutMillis int, pingType string) string {
 
 	lc, err := lcOr("DiagPing")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 
 	// Bounded even with no caller timeout — see defaultNativeCallTimeout.
-	ctx, cancel := boundedCallCtx(time.Duration(timeoutMillis) * time.Millisecond)
+	ctx, cancel := lc.callContext(time.Duration(timeoutMillis) * time.Millisecond)
 	defer cancel()
 
-	addr, err := resolvePingAddr(ctx, lc, ip)
+	addr, err := resolvePingAddr(ctx, lc.Client, ip)
+	err = lc.resultError(err)
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
 
 	pr, err := lc.Ping(ctx, addr, pt)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -1151,11 +1178,12 @@ func pingPath(pr *ipnstate.PingResult) string {
 func DiagMetrics() string {
 	lc, err := lcOr("DiagMetrics")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	body, err := lc.UserMetrics(ctx)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -1167,11 +1195,12 @@ func DiagMetrics() string {
 func DiagDERPMap() string {
 	lc, err := lcOr("DiagDERPMap")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	m, err := lc.CurrentDERPMap(ctx)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -1231,11 +1260,12 @@ func DiagDERPMap() string {
 func DiagCheckUpdate() string {
 	lc, err := lcOr("DiagCheckUpdate")
 	if err != nil {
-		return jsonError(err)
+		return localAPIError(err)
 	}
-	ctx, cancel := boundedCallCtx(0)
+	ctx, cancel := lc.callContext(0)
 	defer cancel()
 	cv, err := lc.CheckUpdate(ctx)
+	err = lc.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}

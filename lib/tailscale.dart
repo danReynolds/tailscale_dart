@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:ffi/ffi.dart';
 import 'package:http/http.dart' as pkg_http;
-import 'package:path/path.dart' as p;
 import 'src/api/diag.dart';
 import 'src/api/exit_node.dart';
 import 'src/api/funnel.dart';
@@ -18,6 +19,7 @@ import 'src/errors.dart';
 import 'src/fd_transport.dart' show ensurePosixFdTransportAvailable;
 import 'src/ffi_bindings.dart' as native;
 import 'src/http_fd_client.dart';
+import 'src/runtime_config.dart';
 import 'src/status.dart';
 import 'src/worker/worker.dart';
 
@@ -58,9 +60,6 @@ export 'src/api/udp.dart'
     hide createUdp, createFdTailscaleDatagramBinding, UdpBindFn;
 export 'src/errors.dart';
 export 'src/status.dart';
-
-const _ownedStateSubdirectory = 'tailscale';
-final Uri _defaultControlUrl = Uri.parse('https://controlplane.tailscale.com');
 
 /// Native log verbosity for the embedded Tailscale runtime — controls
 /// what the Go side writes to stderr. Dart-side logging (e.g.
@@ -150,6 +149,7 @@ class Tailscale implements TailscaleClient {
 
   pkg_http.Client? _http;
   List<TailscaleNode>? _latestNodes;
+  bool _nativeStartInFlight = false;
 
   late final _worker = Worker(
     publishState: _stateController.add,
@@ -168,9 +168,6 @@ class Tailscale implements TailscaleClient {
   // ignore: close_sinks
   final StreamController<List<TailscaleNode>> _nodesController =
       StreamController<List<TailscaleNode>>.broadcast();
-
-  static String get _stateDir =>
-      p.join(_requireStateBaseDir(), _ownedStateSubdirectory);
 
   static String _requireStateBaseDir() {
     final stateBaseDir = _stateBaseDir;
@@ -400,8 +397,6 @@ class Tailscale implements TailscaleClient {
     if (stateDir.trim().isEmpty) {
       throw const TailscaleUsageException('stateDir must not be empty.');
     }
-    final normalizedStateDir = p.normalize(p.absolute(stateDir));
-
     try {
       ensurePosixFdTransportAvailable();
     } catch (error) {
@@ -411,8 +406,37 @@ class Tailscale implements TailscaleClient {
       );
     }
 
-    _stateBaseDir = normalizedStateDir;
-    native.duneSetLogLevel(logLevel.nativeValue);
+    final stateDirPtr = stateDir.toNativeUtf8();
+    final resultPtr = native.duneConfigure(stateDirPtr, logLevel.nativeValue);
+    try {
+      final decoded = jsonDecode(resultPtr.toDartString());
+      if (decoded is! Map<String, dynamic>) {
+        throw const TailscaleConfigurationException(
+          'Native runtime returned an invalid initialization response.',
+        );
+      }
+      final error = decoded['error'] as String?;
+      if (error != null) {
+        throw TailscaleConfigurationException(error);
+      }
+      final canonicalStateDir = decoded['stateDir'] as String?;
+      if (canonicalStateDir == null || canonicalStateDir.isEmpty) {
+        throw const TailscaleConfigurationException(
+          'Native runtime did not return a canonical state directory.',
+        );
+      }
+      _stateBaseDir = canonicalStateDir;
+    } on TailscaleConfigurationException {
+      rethrow;
+    } catch (error) {
+      throw TailscaleConfigurationException(
+        'Failed to configure the native Tailscale runtime.',
+        cause: error,
+      );
+    } finally {
+      native.duneFree(resultPtr);
+      calloc.free(stateDirPtr);
+    }
   }
 
   /// Brings the embedded Tailscale node up and connects to the control
@@ -465,15 +489,17 @@ class Tailscale implements TailscaleClient {
   /// - If creds are expired: `stopped → starting → needsLogin` (with
   ///   [TailscaleStatus.authUrl] populated)
   ///
-  /// No-op if already running (without a new authKey).
+  /// No-op when a runtime is already active with the same hostname, effective
+  /// control URL, and ephemeral mode. An auth key never replaces an active
+  /// identity; call [down] before changing runtime configuration.
   ///
   /// [timeout] bounds how long [up] waits for the node to reach a stable state
   /// after the native runtime starts. Increase it for slow mobile networks or
   /// self-hosted control planes.
   ///
-  /// Throws [TailscaleUpException] if no [authKey] is provided and no
-  /// persisted session state exists, or if the node fails to reach a
-  /// stable state before [timeout] (e.g. control plane unreachable).
+  /// Throws [TailscaleUpException] if the node fails to start or reach a stable
+  /// state before [timeout] (e.g. control plane unreachable). When no auth key
+  /// or usable profile exists, upstream normally returns `needsLogin`.
   @override
   Future<TailscaleStatus> up({
     String hostname = '',
@@ -486,12 +512,17 @@ class Tailscale implements TailscaleClient {
     if (timeout <= Duration.zero) {
       throw const TailscaleUsageException('up timeout must be positive.');
     }
-    final resolvedControlUrl = controlUrl ?? _defaultControlUrl;
+    final validatedHostname = validateRuntimeHostname(hostname);
+    final canonicalControlUrl = canonicalizeControlUrl(controlUrl);
+    if (_nativeStartInFlight) {
+      throw const TailscaleUpException(
+        'Another node start is already in progress.',
+        code: TailscaleErrorCode.lifecycleBusy,
+      );
+    }
 
-    // Only count stable states that arrive AFTER start() returns. If up()
-    // is called on an already-running node (with a new authKey), the old
-    // engine's lingering `running` emission would otherwise satisfy the
-    // "first stable state" check before the restart completes.
+    // Only count stable states that arrive AFTER start() returns. A prior
+    // runtime's lingering emission must not satisfy a new construction.
     final stable = Completer<void>();
     var startReturned = false;
     final sub = onStateChange.listen((state) {
@@ -502,32 +533,42 @@ class Tailscale implements TailscaleClient {
     });
 
     // `timeout` must bound the whole operation, not just the wait for a stable
-    // state. `_worker.start` runs the native bring-up (which on the re-auth path
-    // includes a 10s Logout plus a tsnet start) and has no timeout of its own,
-    // so without bounding it here `up(timeout:)` could block far past its
+    // state. `_worker.start` runs the native bring-up and has no timeout of its
+    // own, so without bounding it here `up(timeout:)` could block far past its
     // budget or hang if the native call wedges.
     final elapsed = Stopwatch()..start();
     try {
+      _nativeStartInFlight = true;
+      final startFuture = _worker.start(
+        hostname: validatedHostname,
+        authKey: authKey ?? '',
+        ephemeral: ephemeral,
+        controlUrl: canonicalControlUrl,
+      );
+      unawaited(
+        startFuture.then<void>(
+          (_) {
+            _nativeStartInFlight = false;
+          },
+          onError: (Object _, StackTrace _) {
+            _nativeStartInFlight = false;
+          },
+        ),
+      );
+
+      bool alreadyActive;
       try {
-        await _worker
-            .start(
-              hostname: hostname,
-              authKey: authKey ?? '',
-              ephemeral: ephemeral,
-              controlUrl: resolvedControlUrl.toString(),
-              stateDir: _stateDir,
-            )
-            .timeout(timeout);
+        alreadyActive = await startFuture.timeout(timeout);
       } on TimeoutException {
         throw TailscaleUpException(
           'Node did not start within $timeout. The native runtime may be '
           'wedged or the control plane unreachable.',
         );
       }
-      // Close any client from a prior up() before replacing it so repeated
-      // up() calls don't leak the previous instance.
-      _http?.close();
-      _http = TailscaleHttpClient();
+      if (!alreadyActive || _http == null) {
+        _http?.close();
+        _http = TailscaleHttpClient();
+      }
       startReturned = true;
 
       // No-op up() case: the engine is already at a stable state and
@@ -573,7 +614,7 @@ class Tailscale implements TailscaleClient {
   @override
   Future<TailscaleStatus> status() async {
     _requireInitialized();
-    return _worker.status(stateDir: _stateDir);
+    return _worker.status();
   }
 
   /// Returns the current node inventory — every node on the tailnet
@@ -666,7 +707,13 @@ class Tailscale implements TailscaleClient {
   Future<void> down() async {
     _requireInitialized();
     _reset();
-    await _worker.down();
+    try {
+      await _worker.down();
+    } finally {
+      // A preceding queued up() may have completed after the eager reset and
+      // constructed Dart-side capabilities before this down reached native.
+      _reset();
+    }
   }
 
   /// Logs out and clears persisted credentials.
@@ -674,6 +721,10 @@ class Tailscale implements TailscaleClient {
   Future<void> logout() async {
     _requireInitialized();
     _reset();
-    await _worker.logout(_stateDir);
+    try {
+      await _worker.logout();
+    } finally {
+      _reset();
+    }
   }
 }

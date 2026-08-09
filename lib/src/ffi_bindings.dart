@@ -11,23 +11,33 @@ import 'package:ffi/ffi.dart';
 
 /// Starts the Tailscale node.
 /// Returns JSON:
-///   {"ok": true} on success
-///   {"error": "..."} on failure.
+///   {"ok": true, "alreadyActive": bool} on success
+///   {"error": "...", "code": "..."?} on failure.
 @ffi.Native<
   ffi.Pointer<Utf8> Function(
     ffi.Pointer<Utf8>,
     ffi.Pointer<Utf8>,
     ffi.Pointer<Utf8>,
-    ffi.Pointer<Utf8>,
     ffi.Int32,
+    ffi.Pointer<Utf8>,
   )
 >(symbol: 'DuneStart')
 external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> hostname,
   ffi.Pointer<Utf8> authKey,
   ffi.Pointer<Utf8> controlURL,
-  ffi.Pointer<Utf8> stateDir,
   int ephemeral,
+  ffi.Pointer<Utf8> hostNetworkSnapshot,
+);
+
+/// Freezes the process-wide state-root and log-level configuration.
+/// Returns `{"stateDir": "<canonical-native-path>"}` on success.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32)>(
+  symbol: 'DuneConfigure',
+)
+external ffi.Pointer<Utf8> duneConfigure(
+  ffi.Pointer<Utf8> stateRoot,
+  int logLevel,
 );
 
 /// Starts one outgoing tailnet HTTP request.
@@ -53,15 +63,6 @@ external ffi.Pointer<Utf8> duneHttpStart(
   int followRedirects,
   int maxRedirects,
 );
-
-/// Provides a host network-interface snapshot to the native runtime.
-///
-/// This is currently used on Android before startup because Go's standard
-/// netlink-based interface discovery can be denied by the app sandbox.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
-  symbol: 'DuneSetNetworkInterfaces',
-)
-external ffi.Pointer<Utf8> duneSetNetworkInterfaces(ffi.Pointer<Utf8> snapshot);
 
 /// Starts an fd-backed inbound HTTP binding.
 /// Returns JSON:
@@ -266,14 +267,15 @@ external ffi.Pointer<Utf8> duneDiagDERPMap();
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneDiagCheckUpdate')
 external ffi.Pointer<Utf8> duneDiagCheckUpdate();
 
-/// Returns 1 if the state directory has a valid machine key, 0 otherwise.
-@ffi.Native<ffi.Int32 Function(ffi.Pointer<Utf8>)>(symbol: 'DuneHasState')
-external int duneHasState(ffi.Pointer<Utf8> stateDir);
+/// Classifies idle storage without opening or creating a StateStore.
+/// Returns `{"state": "absent"|"legacy"}` or `{"error": "..."}`.
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneClassifyState')
+external ffi.Pointer<Utf8> duneClassifyState();
 
-/// Stops the server and removes the state directory.
+/// Stops the server and removes the configured package-owned state directory.
 /// Returns JSON: {"ok": true} on success, {"error": "..."} on failure.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(symbol: 'DuneLogout')
-external ffi.Pointer<Utf8> duneLogout(ffi.Pointer<Utf8> stateDir);
+@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneLogout')
+external ffi.Pointer<Utf8> duneLogout();
 
 /// Stops the server, preserving state.
 @ffi.Native<ffi.Void Function()>(symbol: 'DuneStop')
@@ -320,10 +322,6 @@ external ffi.Pointer<Utf8> duneServeClear(ffi.Pointer<Utf8> payloadJson);
 /// Frees a pointer allocated by the Go layer.
 @ffi.Native<ffi.Void Function(ffi.Pointer<Utf8>)>(symbol: 'DuneFree')
 external void duneFree(ffi.Pointer<Utf8> ptr);
-
-/// Sets the Go log level. 0=silent (default), 1=errors, 2=info.
-@ffi.Native<ffi.Void Function(ffi.Int32)>(symbol: 'DuneSetLogLevel')
-external void duneSetLogLevel(int level);
 
 /// Initializes the Dart DL API for native push notifications.
 /// Must be called once with NativeApi.initializeApiDLData.

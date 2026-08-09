@@ -18,18 +18,30 @@ import (
 
 func newFakeTransport() *http.Transport { return &http.Transport{} }
 
-// withLiveServer publishes [s] as the process-global live server for the test
-// and restores the prior value afterward. Unit tests run with srv == nil.
-func withLiveServer(t *testing.T, s *tsnet.Server) {
+// withLiveServer publishes a runtime around [s] for the test and restores the
+// prior controller state afterward.
+func withLiveServer(t *testing.T, s *tsnet.Server, configs ...runtimeConfig) {
 	t.Helper()
-	mu.Lock()
-	prev := srv
-	srv = s
-	mu.Unlock()
+	config := runtimeConfig{}
+	if len(configs) != 0 {
+		config = configs[0]
+	}
+	runtime := newNodeRuntime(nodeEpoch.Load(), config)
+	runtime.server = s
+	runtimes.mu.Lock()
+	prev := runtimes.current
+	if runtimes.candidate != nil || runtimes.draining != nil {
+		runtimes.mu.Unlock()
+		t.Fatal("test cannot publish a runtime during a lifecycle transition")
+	}
+	runtimes.current = runtime
+	runtimes.mu.Unlock()
 	t.Cleanup(func() {
-		mu.Lock()
-		srv = prev
-		mu.Unlock()
+		runtimes.mu.Lock()
+		runtimes.current = prev
+		runtimes.mu.Unlock()
+		runtime.cancel()
+		runtime.finishPreparation()
 	})
 }
 
@@ -44,7 +56,7 @@ func liveGate(t *testing.T) nodeGate {
 	return gate
 }
 
-// bumpEpoch simulates the lifecycle transition stopLocked performs, without a
+// bumpEpoch simulates the lifecycle transition runtimeController performs, without a
 // full teardown (the per-registry sweeps are exercised separately).
 func bumpEpoch() { nodeEpoch.Add(1) }
 
@@ -77,8 +89,8 @@ func TestNodeGate_StaleAcrossTwoLifecycles(t *testing.T) {
 	withLiveServer(t, &tsnet.Server{})
 	gate := liveGate(t)
 
-	bumpEpoch()                          // node N stops
-	withLiveServer(t, &tsnet.Server{})   // node N+1 starts (no epoch change)
+	bumpEpoch()                        // node N stops
+	withLiveServer(t, &tsnet.Server{}) // node N+1 starts (no epoch change)
 	if fresh := liveGate(t); !fresh.stillCurrent() {
 		t.Fatal("a gate acquired under the new lifecycle must be current")
 	}
@@ -100,7 +112,7 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 		register func(t *testing.T, gate nodeGate) bool
 		// count reports the registry's live entries.
 		count func() int
-		// sweep runs the subsystem's real stopLocked teardown sweep.
+		// sweep runs the subsystem's real nodeRuntime.close teardown sweep.
 		sweep func()
 	}{
 		{
@@ -222,6 +234,16 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// The preceding row simulated a teardown. Publish a fresh runtime
+			// generation for this row's live-path assertion.
+			runtimes.mu.Lock()
+			if previous := runtimes.current; previous != nil && previous.generation != nodeEpoch.Load() {
+				next := newNodeRuntime(nodeEpoch.Load(), previous.config)
+				next.server = previous.server
+				runtimes.current = next
+			}
+			runtimes.mu.Unlock()
+
 			t.Cleanup(tc.sweep)
 			if base := tc.count(); base != 0 {
 				t.Fatalf("registry not empty at test start: %d", base)
@@ -235,7 +257,7 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 				t.Fatalf("live registration must land in the registry: count=%d", got)
 			}
 
-			// Teardown, in stopLocked's real order: an op is in flight (its
+			// Teardown, in nodeRuntime.close's real order: an op is in flight (its
 			// gate acquired), the epoch bumps, this registry is swept.
 			gate := liveGate(t)
 			bumpEpoch()
@@ -335,10 +357,10 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 		current := serverA
 		next := serverB
 		for i := 0; i < 400; i++ {
-			mu.Lock()
+			runtimes.mu.Lock()
 			nodeEpoch.Add(1)
-			srv = nil
-			mu.Unlock()
+			runtimes.current = nil
+			runtimes.mu.Unlock()
 			tailnetHTTPTransports.mu.Lock()
 			if o := tailnetHTTPTransports.owner; o != nil && o != any(current) {
 				leaks.Add(1) // cross-lifecycle commit (check 1)
@@ -350,9 +372,11 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 				leaks.Add(1) // landed behind the sweep (check 2)
 			}
 			tailnetHTTPTransports.mu.Unlock()
-			mu.Lock()
-			srv = next
-			mu.Unlock()
+			runtimes.mu.Lock()
+			nextRuntime := newNodeRuntime(nodeEpoch.Load(), runtimeConfig{})
+			nextRuntime.server = next
+			runtimes.current = nextRuntime
+			runtimes.mu.Unlock()
 			current, next = next, current
 		}
 		close(stop)
@@ -364,10 +388,10 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 	}
 
 	// Final teardown: after this, nothing may remain cached.
-	mu.Lock()
+	runtimes.mu.Lock()
 	nodeEpoch.Add(1)
-	srv = nil
-	mu.Unlock()
+	runtimes.current = nil
+	runtimes.mu.Unlock()
 	tailnetHTTPTransports.reset()
 
 	tailnetHTTPTransports.mu.Lock()

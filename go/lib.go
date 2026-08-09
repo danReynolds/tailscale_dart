@@ -3,11 +3,12 @@ package tailscale
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
-	"strings"
-	"sync"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -21,13 +22,6 @@ import (
 // Accessed atomically — safe to change at any time from any goroutine.
 var LogLevel int32 // default 0 (silent)
 
-var (
-	mu sync.Mutex // protects srv and store
-
-	srv   *tsnet.Server
-	store *SQLiteStore // package-owned; tsnet.Server doesn't close its Store, so we do in stopLocked
-)
-
 // defaultNativeCallTimeout bounds native calls whose caller supplied no
 // timeout. NO native call runs on an unbounded context: each in-flight call
 // pins a helper isolate, an OS thread, an offload-gate permit, and a Go
@@ -39,29 +33,38 @@ var (
 // unbounded inside tsnet; its outer Up is bounded by funnelUpTimeout.)
 const defaultNativeCallTimeout = 30 * time.Second
 
+type runtimeStartDependencies struct {
+	openStore            func(path string) (ipn.StateStore, io.Closer, error)
+	configureHostNetwork func(snapshot string) error
+	startServer          func(server *tsnet.Server) error
+	localClient          func(server *tsnet.Server) (*local.Client, error)
+	closeServer          func(server *tsnet.Server) error
+}
+
+var productionRuntimeStartDependencies = runtimeStartDependencies{
+	openStore: func(path string) (ipn.StateStore, io.Closer, error) {
+		store, err := NewSQLiteStore(path)
+		return store, store, err
+	},
+	configureHostNetwork: ConfigureHostNetworkSnapshot,
+	startServer:          func(server *tsnet.Server) error { return server.Start() },
+	localClient: func(server *tsnet.Server) (*local.Client, error) {
+		return server.LocalClient()
+	},
+	closeServer: func(server *tsnet.Server) error { return server.Close() },
+}
+
 // boundedCallCtx returns a context bounded by [timeout] when positive, else by
 // defaultNativeCallTimeout. Callers must defer cancel.
 func boundedCallCtx(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return boundedCallCtxFrom(context.Background(), timeout)
+}
+
+func boundedCallCtxFrom(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
 		timeout = defaultNativeCallTimeout
 	}
-	return context.WithTimeout(context.Background(), timeout)
-}
-
-// HasState checks if the state directory contains a valid machine key.
-func HasState(stateDir string) bool {
-	statePath := stateDir + "/state.db"
-	store, err := NewSQLiteStore(statePath)
-	if err != nil {
-		return false
-	}
-	defer store.Close()
-
-	val, err := store.ReadState(ipn.MachineKeyStateKey)
-	if err != nil {
-		return false
-	}
-	return len(val) > 0
+	return context.WithTimeout(parent, timeout)
 }
 
 // Logout revokes the node key with the control plane (best-effort), then stops
@@ -74,21 +77,27 @@ func HasState(stateDir string) bool {
 // the server is still running, and is best-effort: if the control plane is
 // unreachable we still tear down and wipe local state so a "logout" never
 // leaves the node running or its on-disk credential intact.
-func Logout(stateDir string) error {
-	if strings.TrimSpace(stateDir) == "" {
-		return fmt.Errorf("state dir is empty")
+func Logout() error {
+	stateDir, err := configuredStateDir()
+	if err != nil {
+		return err
 	}
 
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s != nil {
-		revokeNodeKey(s)
+	runtime := currentRuntime()
+	if runtime != nil {
+		revokeNodeKey(runtime.localClient)
 	}
 
-	Stop()
-	if err := os.RemoveAll(stateDir); err != nil {
-		return fmt.Errorf("failed to remove state dir: %w", err)
+	wasRunning, closeErr := closeCurrentRuntime()
+	if wasRunning {
+		publishState("Stopped")
+	}
+	removeErr := os.RemoveAll(stateDir)
+	if removeErr != nil {
+		closeErr = errors.Join(closeErr, fmt.Errorf("failed to remove state dir: %w", removeErr))
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 	// Post-logout the node has no credentials and — per NodeState.parse on
 	// the Dart side — should report NoState. Publish that explicitly so
@@ -109,112 +118,110 @@ func Logout(stateDir string) error {
 // stopped, to avoid phantom emits for callers that subscribe across
 // lifecycle boundaries.
 func Stop() {
-	mu.Lock()
-	wasRunning := srv != nil
-	stopLocked()
-	mu.Unlock()
-	// Publish after releasing the lock to keep the hold time minimal and
-	// avoid any reentrancy surprise from the native bridge.
+	wasRunning, err := closeCurrentRuntime()
+	if err != nil {
+		logInfo("Stop: runtime cleanup failed: %v", err)
+	}
 	if wasRunning {
 		publishState("Stopped")
 	}
 }
 
-// stopLocked tears down the server and all listeners. Caller must hold mu.
-func stopLocked() {
-	// Enter a new lifecycle BEFORE any registry sweep. Every in-flight op
-	// gated on the old epoch (see nodeGate) is refused at its commit point
-	// from here on, so nothing can repopulate a registry behind its sweep.
-	nodeEpoch.Add(1)
-
-	var lc *local.Client
-	if srv != nil {
-		lc, _ = srv.LocalClient()
-	}
-	closeAllServePublications(lc)
-	closeAllTcpFdListeners()
-	closeAllHttpBindings()
-	closeAllFunnelForwarders()
-	closeAllUdpBindings()
-	// Drop the cached HTTP client transport so no pooled connection (dialed and
-	// authenticated as this node's identity) survives into a later node with a
-	// different identity.
-	resetTailnetHTTPTransport()
-
-	// Stop the state watcher and drop cached identities together. StopWatch
-	// cancels the watcher's ctx and invalidates the cache under watchMu, and
-	// the watcher gates its cache mirror on that same ctx — so no in-flight
-	// netmap tick can re-warm a torn-down cache. Idempotent, so it's safe even
-	// when Dart already called StopWatch on its own teardown path.
-	StopWatch()
-
-	if srv != nil {
-		srv.Close()
-		srv = nil
-	}
-
-	// tsnet.Server doesn't own the Store — the caller does — so Close()
-	// on srv doesn't close our SQLiteStore. Without this, every up/down
-	// cycle leaks a *sql.DB connection pool.
-	if store != nil {
-		store.Close()
-		store = nil
-	}
+// Start initializes the Tailscale node.
+func Start(hostname, authKey, controlURL string, ephemeral bool) error {
+	_, err := StartRuntime(hostname, authKey, controlURL, ephemeral)
+	return err
 }
 
-// Start initializes the Tailscale node.
-func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err error) {
-	mu.Lock()
-	defer mu.Unlock()
+// StartRuntime constructs and atomically publishes one runtime. alreadyActive
+// is true only for an idempotent active-runtime call with the same immutable
+// configuration; authKey is enrollment input and never forces replacement.
+func StartRuntime(hostname, authKey, controlURL string, ephemeral bool) (alreadyActive bool, err error) {
+	return StartRuntimeWithHostNetwork(hostname, authKey, controlURL, ephemeral, "")
+}
 
-	if srv != nil {
-		if authKey == "" {
-			return nil
-		}
-		// Auth key provided on an already-running server — tear down
-		// and restart so the new key is applied. Clear persisted state
-		// so tsnet treats it as a fresh node; otherwise the existing
-		// NeedsLogin state causes tsnet to call StartLoginInteractive
-		// and ignore the auth key.
-		if strings.TrimSpace(stateDir) == "" {
-			return fmt.Errorf("state dir is empty")
-		}
-		// Best-effort revoke the current node key before wiping its state, so
-		// the old identity doesn't linger registered in the tailnet until key
-		// expiry. Done while the server is still up; failures are non-fatal.
-		revokeNodeKey(srv)
-		stopLocked()
-		if err := os.RemoveAll(stateDir); err != nil {
-			return fmt.Errorf("failed to clear state dir for re-auth: %w", err)
-		}
-	}
-
-	os.Setenv("TS_ENABLE_RAW_DISCO", "false")
-
-	if err := os.MkdirAll(stateDir, 0700); err != nil {
-		return fmt.Errorf("failed to create state dir: %v", err)
-	}
-	// MkdirAll is a no-op on an existing directory and never tightens its
-	// permissions, so enforce 0700 explicitly — this dir holds the node's
-	// private keys and must not be traversable by other local users. Best
-	// effort: don't fail startup on platforms/filesystems without chmod.
-	if err := os.Chmod(stateDir, 0700); err != nil {
-		logInfo("Start: could not enforce 0700 on state dir %q: %v", stateDir, err)
-	}
-	logDir := stateDir + "/logs"
-	if err := os.MkdirAll(logDir, 0700); err != nil {
-		return fmt.Errorf("failed to create log dir: %v", err)
-	}
-	// Android apps do not have the desktop/server filesystem locations that
-	// Tailscale's log policy probes by default. Point it at app-owned storage
-	// before tsnet starts so internal logging never falls through to panic.
-	os.Setenv("TS_LOGS_DIR", logDir)
-
-	statePath := stateDir + "/state.db"
-	newStore, err := NewSQLiteStore(statePath)
+// StartRuntimeWithHostNetwork applies the Android host-network snapshot only
+// after reserving a fresh candidate. Active no-ops and configuration mismatches
+// therefore cannot mutate the current runtime before their config is checked.
+func StartRuntimeWithHostNetwork(hostname, authKey, controlURL string, ephemeral bool, hostNetworkSnapshot string) (alreadyActive bool, err error) {
+	stateDir, err := configuredStateDir()
 	if err != nil {
-		return fmt.Errorf("failed to create sqlite store: %v", err)
+		return false, err
 	}
+	return startRuntimeWithDependencies(
+		hostname,
+		authKey,
+		controlURL,
+		stateDir,
+		ephemeral,
+		hostNetworkSnapshot,
+		productionRuntimeStartDependencies,
+	)
+}
+
+func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string, ephemeral bool, hostNetworkSnapshot string, dependencies runtimeStartDependencies) (alreadyActive bool, err error) {
+	config := runtimeConfig{
+		hostname:   hostname,
+		controlURL: controlURL,
+		ephemeral:  ephemeral,
+	}
+	candidate, active, err := runtimes.reserve(config)
+	if err != nil {
+		return false, err
+	}
+	if active != nil {
+		// Repeated same-config up() calls are identity no-ops, but Android's
+		// host interface snapshot is live process input and must still refresh.
+		// reserve validated the immutable runtime tuple before this mutation, so
+		// a configuration mismatch cannot alter the active runtime's snapshot.
+		if err := applyHostNetworkSnapshot(hostNetworkSnapshot, dependencies); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	serverStarted := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		if serverStarted {
+			err = errors.Join(err, candidate.close())
+		} else {
+			// Server.Start owns and unwinds its partial initialization on error.
+			// Calling Server.Close concurrently or after that error violates the
+			// upstream lifecycle contract; only caller-owned resources close here.
+			candidate.cancel()
+			if candidate.storeCloser != nil {
+				err = errors.Join(err, candidate.storeCloser.Close())
+			}
+		}
+		runtimes.release(candidate)
+	}()
+
+	if err := setRawDiscoCompatibility(); err != nil {
+		return false, err
+	}
+	if err := applyHostNetworkSnapshot(hostNetworkSnapshot, dependencies); err != nil {
+		return false, err
+	}
+
+	if err := ensurePrivateDirectory(stateDir); err != nil {
+		return false, fmt.Errorf("prepare state dir: %w", err)
+	}
+	logDir := filepath.Join(stateDir, "logs")
+	if err := ensurePrivateDirectory(logDir); err != nil {
+		return false, fmt.Errorf("prepare log dir: %w", err)
+	}
+
+	statePath := filepath.Join(stateDir, "state.db")
+	newStore, newStoreCloser, err := dependencies.openStore(statePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to create sqlite store: %w", err)
+	}
+	candidate.store = newStore
+	candidate.storeCloser = newStoreCloser
+	candidate.closeServer = dependencies.closeServer
 
 	newSrv := &tsnet.Server{
 		Hostname:   hostname,
@@ -229,20 +236,17 @@ func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err 
 			}
 		},
 	}
+	candidate.server = newSrv
 
-	// If we fail before committing newSrv/newStore to package state,
-	// release their resources. The named return `err` is the signal — any
-	// `return ..., err` with a non-nil error triggers cleanup.
-	defer func() {
-		if err == nil {
-			return
-		}
-		newSrv.Close()
-		newStore.Close()
-	}()
-
-	if startErr := newSrv.Start(); startErr != nil {
-		return fmt.Errorf("failed to start tsnet: %v", startErr)
+	// Android apps do not have the desktop/server filesystem locations that
+	// Tailscale's log policy probes by default. Scope this process-global input
+	// to Server.Start and restore the embedding application's prior value.
+	serverStarted, startErr := startServerWithScopedLogs(
+		logDir,
+		func() error { return dependencies.startServer(newSrv) },
+	)
+	if startErr != nil {
+		return false, fmt.Errorf("failed to start tsnet: %w", startErr)
 	}
 
 	// tsnet's LocalClient reaches the LocalAPI over an in-process memory pipe,
@@ -252,37 +256,71 @@ func Start(hostname, authKey, controlURL, stateDir string, ephemeral bool) (err 
 	// process — costing ~40ms per call and taxing every LocalAPI op
 	// (WhoIs/Status/Prefs/Ping) on the shared DoLocalRequest path. The
 	// in-process pipe is already a trust boundary we own, so opt out of the
-	// token dance once: each call drops from ~40ms to ~0.1ms. Done under mu
-	// before srv is published, so no in-flight call races the write. See
+	// token dance once: each call drops from ~40ms to ~0.1ms. Done before the
+	// runtime is published, so no in-flight call races the write. See
 	// loopback_latency_diag_test.go for the bisection.
-	if lc, lcErr := newSrv.LocalClient(); lcErr == nil {
-		lc.OmitAuth = true
+	lc, err := dependencies.localClient(newSrv)
+	if err != nil {
+		return false, fmt.Errorf("get local client after start: %w", err)
+	}
+	lc.OmitAuth = true
+	candidate.localClient = lc
+
+	// Commit to controller state only after every allocation succeeded. No
+	// per-subsystem re-arming is needed: ops gate on the node epoch (bumped by
+	// closeCurrentRuntime), and a gate acquired after this point is current by
+	// construction.
+	if err := runtimes.commit(candidate); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func applyHostNetworkSnapshot(snapshot string, dependencies runtimeStartDependencies) error {
+	if snapshot == "" {
+		return nil
+	}
+	configure := dependencies.configureHostNetwork
+	if configure == nil {
+		configure = ConfigureHostNetworkSnapshot
+	}
+	if err := configure(snapshot); err != nil {
+		return fmt.Errorf("configure host network snapshot: %w", err)
+	}
+	return nil
+}
+
+func startServerWithScopedLogs(logDir string, start func() error) (started bool, err error) {
+	previousLogDir, hadLogDir := os.LookupEnv("TS_LOGS_DIR")
+	if err := os.Setenv("TS_LOGS_DIR", logDir); err != nil {
+		return false, fmt.Errorf("configure TS_LOGS_DIR: %w", err)
 	}
 
-	// Commit to package state only after every allocation succeeded. No
-	// per-subsystem re-arming is needed: ops gate on the node epoch (bumped by
-	// stopLocked), and a gate acquired after this point is current by
-	// construction.
-	srv = newSrv
-	store = newStore
-	return nil
+	startErr := start()
+	started = startErr == nil
+	var restoreErr error
+	if hadLogDir {
+		restoreErr = os.Setenv("TS_LOGS_DIR", previousLogDir)
+	} else {
+		restoreErr = os.Unsetenv("TS_LOGS_DIR")
+	}
+	if restoreErr != nil {
+		restoreErr = fmt.Errorf("restore TS_LOGS_DIR: %w", restoreErr)
+	}
+	return started, errors.Join(startErr, restoreErr)
 }
 
 // DuneStatus returns the local-node status JSON from the LocalAPI.
 func DuneStatus() string {
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
+	runtime := currentRuntime()
+	if runtime == nil {
 		return "{}"
 	}
-	lc, err := s.LocalClient()
-	if err != nil {
-		return jsonError(err)
-	}
-	ctx, cancel := boundedCallCtx(0)
+	lc := runtime.localClient
+	ctx, cancel := boundedCallCtxFrom(runtime.ctx, 0)
 	defer cancel()
 	status, err := lc.StatusWithoutPeers(ctx)
+	err = runtime.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -295,19 +333,15 @@ func DuneStatus() string {
 
 // DunePeers returns the current peer list as JSON.
 func DunePeers() string {
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
+	runtime := currentRuntime()
+	if runtime == nil {
 		return "[]"
 	}
-	lc, err := s.LocalClient()
-	if err != nil {
-		return jsonError(err)
-	}
-	ctx, cancel := boundedCallCtx(0)
+	lc := runtime.localClient
+	ctx, cancel := boundedCallCtxFrom(runtime.ctx, 0)
 	defer cancel()
 	status, err := lc.Status(ctx)
+	err = runtime.resultError(err)
 	if err != nil {
 		return localAPIError(err)
 	}
@@ -329,10 +363,9 @@ func DunePeers() string {
 // the LocalAPI Logout, bounded by a timeout. Callers invoke this while the
 // server is still running and before wiping local state; failures are logged
 // and swallowed so local teardown always proceeds.
-func revokeNodeKey(s *tsnet.Server) {
-	lc, err := s.LocalClient()
-	if err != nil {
-		logInfo("logout: LocalClient unavailable, skipping control-plane revoke: %v", err)
+func revokeNodeKey(lc *local.Client) {
+	if lc == nil {
+		logInfo("logout: LocalClient unavailable, skipping control-plane revoke")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

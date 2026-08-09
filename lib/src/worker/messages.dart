@@ -163,7 +163,6 @@ final class _WorkerStartCommand extends _WorkerCommand {
     required this.authKey,
     required this.ephemeral,
     required this.controlUrl,
-    required this.stateDir,
     required this.hostNetworkSnapshot,
   }) : super(_WorkerOperation.start);
 
@@ -171,7 +170,6 @@ final class _WorkerStartCommand extends _WorkerCommand {
   final String authKey;
   final bool ephemeral;
   final String controlUrl;
-  final String stateDir;
   final String hostNetworkSnapshot;
 }
 
@@ -255,15 +253,11 @@ final class _WorkerDiagCheckUpdateCommand extends _WorkerCommand {
 }
 
 final class _WorkerDebugNodeStateCommand extends _WorkerCommand {
-  const _WorkerDebugNodeStateCommand()
-    : super(_WorkerOperation.debugNodeState);
+  const _WorkerDebugNodeStateCommand() : super(_WorkerOperation.debugNodeState);
 }
 
 final class _WorkerStatusCommand extends _WorkerCommand {
-  const _WorkerStatusCommand({required this.stateDir})
-    : super(_WorkerOperation.status);
-
-  final String stateDir;
+  const _WorkerStatusCommand() : super(_WorkerOperation.status);
 }
 
 final class _WorkerPeersCommand extends _WorkerCommand {
@@ -307,10 +301,7 @@ final class _WorkerDownCommand extends _WorkerCommand {
 }
 
 final class _WorkerLogoutCommand extends _WorkerCommand {
-  const _WorkerLogoutCommand({required this.stateDir})
-    : super(_WorkerOperation.logout);
-
-  final String stateDir;
+  const _WorkerLogoutCommand() : super(_WorkerOperation.logout);
 }
 
 sealed class _WorkerMainMessage {
@@ -358,7 +349,10 @@ sealed class _WorkerResponse extends _WorkerMainMessage {
 }
 
 final class _WorkerStartResponse extends _WorkerResponse {
-  const _WorkerStartResponse() : super(_WorkerOperation.start);
+  const _WorkerStartResponse({required this.alreadyActive})
+    : super(_WorkerOperation.start);
+
+  final bool alreadyActive;
 }
 
 final class _WorkerHttpBindResponse extends _WorkerResponse {

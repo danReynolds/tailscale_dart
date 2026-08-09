@@ -7,10 +7,9 @@ import (
 	"tailscale.com/tsnet"
 )
 
-// nodeEpoch identifies the current node lifecycle. stopLocked increments it —
-// under mu, BEFORE sweeping any registry — every time a node is torn down, so
-// each Start..Stop span has a distinct value. Written only while holding mu;
-// read lock-free anywhere via atomic load.
+// nodeEpoch identifies the current node lifecycle. runtimeController increments
+// it, under its lock and before sweeping any registry, every time a node is
+// detached. Each Start..Stop span therefore has a distinct value.
 //
 // This is the process-wide guard against the teardown registration race: since
 // slow operations (serve/funnel forward, dial, HTTP requests) moved off the
@@ -32,18 +31,17 @@ import (
 //	register(...)
 //	registryMu.Unlock()
 //
-// Why it's airtight: stopLocked bumps the epoch and then sweeps each registry
-// under that registry's lock, and the commit checks the epoch under the same
-// lock — so for any one registry the commit and the sweep are totally ordered.
+// Why it's airtight: runtimeController bumps the epoch and nodeRuntime.close
+// then sweeps each registry under that registry's lock. The commit checks the
+// epoch under the same lock, so commit and sweep are totally ordered.
 // Commit first: the sweep sees the entry and removes it. Sweep first: the
 // bump happened-before the sweep's lock release, so the commit's lock acquire
 // observes the bumped epoch and refuses. There is no third interleaving.
 //
 // Why an epoch and not a pointer compare or a boolean latch:
-//   - `srv == s` requires mu, and taking mu inside a registry lock would invert
-//     the mu → registryMu order — so a pointer check can only run BEFORE the
-//     registry lock, leaving a check-to-commit window (the TOCTOU class fixed
-//     piecemeal in 0.6.0). The atomic epoch is readable under any lock.
+//   - comparing the controller's current pointer requires its lock, and taking
+//     that lock inside a registry lock would invert lock order. The atomic
+//     epoch is readable under any lock.
 //   - A boolean "stopping" latch must be cleared by the next Start, so an op
 //     stuck across TWO lifecycles (gated under node N, N stops, N+1 starts and
 //     clears the latch) would pass the check and commit N-era state into N+1's
@@ -53,20 +51,24 @@ var nodeEpoch atomic.Uint64
 // nodeGate is an operation's entry-time snapshot of the node it is working
 // against: the server to use for the work and the epoch to re-check at commit.
 type nodeGate struct {
-	s     *tsnet.Server
-	epoch uint64
+	runtime *nodeRuntime
+	s       *tsnet.Server
+	epoch   uint64
 }
 
 // acquireNodeGate snapshots the live server and current epoch. Returns ok=false
 // when no node is running (callers keep their existing "called before Start"
 // error text).
 func acquireNodeGate() (nodeGate, bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	if srv == nil {
+	runtime := currentRuntime()
+	if runtime == nil {
 		return nodeGate{}, false
 	}
-	return nodeGate{s: srv, epoch: nodeEpoch.Load()}, true
+	return nodeGate{
+		runtime: runtime,
+		s:       runtime.server,
+		epoch:   runtime.generation,
+	}, true
 }
 
 // stillCurrent reports whether the gated lifecycle is still the live one. Safe

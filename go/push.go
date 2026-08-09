@@ -56,24 +56,12 @@ func SetDartPort(port int64) {
 // StartWatch begins watching tsnet state changes and posting to Dart.
 // Must be called after Start() succeeds.
 func StartWatch() {
-	mu.Lock()
-	s := srv
-	mu.Unlock()
-	if s == nil {
+	runtime := currentRuntime()
+	if runtime == nil {
 		return
 	}
-
-	lc, err := s.LocalClient()
-	if err != nil {
-		postMessage(map[string]any{
-			"type":  "error",
-			"code":  "localClient",
-			"error": err.Error(),
-		})
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
+	lc := runtime.localClient
+	ctx, cancel := context.WithCancel(runtime.ctx)
 
 	// Cancel any previous watcher.
 	watchMu.Lock()

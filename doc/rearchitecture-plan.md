@@ -23,7 +23,9 @@ receipt passed on 2026-08-10, and an Android arm64 emulator runtime receipt
 (API 33 app process: two full init/up/down generations reaching upstream
 NeedsLogin with zero SIGSYS, raw-disco pin as shipped, no tailnet traffic)
 passed the same day after fixing ephemeral scratch to use the Dart-supplied
-platform temp directory. Android/mobile custody and remaining platform receipts,
+platform temp directory; the matching iOS-simulator runtime receipt (iPhone 17
+Pro, two generations to NeedsLogin, tsnet netstack boot logged, no crash)
+passed the same day. Mobile custody and remaining platform receipts,
 R6 permission/backup/sidecar evidence, later ownership work, and the R10
 integrated gate remain authoritative requirements below.
 

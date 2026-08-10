@@ -38,7 +38,11 @@ Future<void> main(List<String> args) async {
     exit(64);
   }
 
-  Tailscale.init(stateDir: stateDir, logLevel: TailscaleLogLevel.error);
+  Tailscale.init(
+    stateDir: stateDir,
+    appId: 'com.example.tailscaleTcpEcho',
+    logLevel: TailscaleLogLevel.error,
+  );
   final tsnet = Tailscale.instance;
 
   final status = await tsnet.up(

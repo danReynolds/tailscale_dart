@@ -163,6 +163,7 @@ import 'package:tailscale/tailscale.dart';
 Future<Tailscale> startNode() async {
   Tailscale.init(
     stateDir: '/path/to/app/state',
+    appId: 'com.example.myapp',
     logLevel: TailscaleLogLevel.info,
   );
 

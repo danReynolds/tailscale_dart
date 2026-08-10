@@ -11,6 +11,8 @@ import (
 	"tailscale.com/tsnet"
 )
 
+const testKeybayNamespace = "dev.tailscale.dart.test.tailscale"
+
 func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	runtimes.mu.Lock()
 	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil {
@@ -20,6 +22,7 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	previousConfigured := runtimes.configured
 	previousRoot := runtimes.stateRoot
 	previousRootInfo := runtimes.stateRootInfo
+	previousKeybayNamespace := runtimes.keybayNamespace
 	previousLogLevel := runtimes.logLevel
 	previousAbandonedTokens := runtimes.abandonedTokens
 	previousCompletedPreparations := runtimes.completedPreparations
@@ -29,6 +32,7 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	runtimes.configured = false
 	runtimes.stateRoot = ""
 	runtimes.stateRootInfo = nil
+	runtimes.keybayNamespace = ""
 	runtimes.logLevel = 0
 	runtimes.abandonedTokens = nil
 	runtimes.completedPreparations = nil
@@ -41,6 +45,7 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 		runtimes.configured = previousConfigured
 		runtimes.stateRoot = previousRoot
 		runtimes.stateRootInfo = previousRootInfo
+		runtimes.keybayNamespace = previousKeybayNamespace
 		runtimes.logLevel = previousLogLevel
 		runtimes.abandonedTokens = previousAbandonedTokens
 		runtimes.completedPreparations = previousCompletedPreparations
@@ -371,6 +376,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 	previousConfigured := runtimes.configured
 	previousRoot := runtimes.stateRoot
 	previousRootInfo := runtimes.stateRootInfo
+	previousKeybayNamespace := runtimes.keybayNamespace
 	previousLogLevel := runtimes.logLevel
 	previousAbandonedTokens := runtimes.abandonedTokens
 	previousCompletedPreparations := runtimes.completedPreparations
@@ -380,6 +386,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 	runtimes.configured = false
 	runtimes.stateRoot = ""
 	runtimes.stateRootInfo = nil
+	runtimes.keybayNamespace = ""
 	runtimes.logLevel = 0
 	runtimes.abandonedTokens = nil
 	runtimes.completedPreparations = nil
@@ -395,6 +402,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 		runtimes.configured = previousConfigured
 		runtimes.stateRoot = previousRoot
 		runtimes.stateRootInfo = previousRootInfo
+		runtimes.keybayNamespace = previousKeybayNamespace
 		runtimes.logLevel = previousLogLevel
 		runtimes.abandonedTokens = previousAbandonedTokens
 		runtimes.completedPreparations = previousCompletedPreparations
@@ -411,7 +419,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 	})
 
 	root := t.TempDir()
-	if _, err := Configure(root, 0); err != nil {
+	if _, err := Configure(root, testKeybayNamespace, 0); err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
 	return filepath.Join(root, ownedStateSubdirectory)
@@ -524,10 +532,12 @@ func TestConfigure_IsIdempotentForNativeAliasesAndRejectsMismatch(t *testing.T) 
 	previousConfigured := runtimes.configured
 	previousRoot := runtimes.stateRoot
 	previousRootInfo := runtimes.stateRootInfo
+	previousKeybayNamespace := runtimes.keybayNamespace
 	previousLogLevel := runtimes.logLevel
 	runtimes.configured = false
 	runtimes.stateRoot = ""
 	runtimes.stateRootInfo = nil
+	runtimes.keybayNamespace = ""
 	runtimes.logLevel = 0
 	runtimes.mu.Unlock()
 	previousNativeLogLevel := atomic.LoadInt32(&LogLevel)
@@ -537,6 +547,7 @@ func TestConfigure_IsIdempotentForNativeAliasesAndRejectsMismatch(t *testing.T) 
 		runtimes.configured = previousConfigured
 		runtimes.stateRoot = previousRoot
 		runtimes.stateRootInfo = previousRootInfo
+		runtimes.keybayNamespace = previousKeybayNamespace
 		runtimes.logLevel = previousLogLevel
 		runtimes.mu.Unlock()
 		atomic.StoreInt32(&LogLevel, previousNativeLogLevel)
@@ -548,8 +559,15 @@ func TestConfigure_IsIdempotentForNativeAliasesAndRejectsMismatch(t *testing.T) 
 	})
 
 	parent := t.TempDir()
+	invalidRoot := filepath.Join(parent, "invalid")
+	if _, err := Configure(invalidRoot, "", 1); err == nil {
+		t.Fatal("Configure accepted an empty Keybay namespace")
+	}
+	if _, err := os.Lstat(invalidRoot); !os.IsNotExist(err) {
+		t.Fatalf("invalid namespace created its proposed root: %v", err)
+	}
 	root := filepath.Join(parent, "root")
-	resolved, err := Configure(root, 1)
+	resolved, err := Configure(root, testKeybayNamespace, 1)
 	if err != nil {
 		t.Fatalf("Configure(root): %v", err)
 	}
@@ -557,21 +575,27 @@ func TestConfigure_IsIdempotentForNativeAliasesAndRejectsMismatch(t *testing.T) 
 	if err := os.Symlink(root, alias); err != nil {
 		t.Fatalf("symlink alias: %v", err)
 	}
-	viaAlias, err := Configure(alias, 1)
+	viaAlias, err := Configure(alias, testKeybayNamespace, 1)
 	if err != nil {
 		t.Fatalf("Configure(alias): %v", err)
 	}
 	if viaAlias != resolved {
 		t.Fatalf("canonical aliases differ: %q != %q", viaAlias, resolved)
 	}
-	if _, err := Configure(alias, 2); !errors.Is(err, ErrConfigurationMismatch) {
+	if _, err := Configure(alias, testKeybayNamespace, 2); !errors.Is(err, ErrConfigurationMismatch) {
 		t.Fatalf("log-level mismatch error = %v", err)
 	}
+	if _, err := Configure(alias, "dev.tailscale.dart.other.tailscale", 1); !errors.Is(err, ErrConfigurationMismatch) {
+		t.Fatalf("Keybay namespace mismatch error = %v", err)
+	}
 	other := filepath.Join(parent, "other")
-	if _, err := Configure(other, 1); !errors.Is(err, ErrConfigurationMismatch) {
+	if _, err := Configure(other, testKeybayNamespace, 1); !errors.Is(err, ErrConfigurationMismatch) {
 		t.Fatalf("root mismatch error = %v", err)
 	}
 	if _, err := os.Lstat(other); !os.IsNotExist(err) {
 		t.Fatalf("mismatched init created or modified its proposed root: %v", err)
+	}
+	if afterMismatch, err := Configure(root, testKeybayNamespace, 1); err != nil || afterMismatch != resolved {
+		t.Fatalf("original configuration after mismatches = %q, %v; want %q, nil", afterMismatch, err, resolved)
 	}
 }

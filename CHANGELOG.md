@@ -4,6 +4,14 @@ This intermediate state is not releaseable: runtime fail-safe work has landed,
 but the plaintext SQLite StateStore remains until the atomic Keybay-backed
 encrypted-state cutover.
 
+**Secure-state foundation:**
+
+- `Tailscale.init` now requires the embedding application's stable `appId` and
+  freezes its dedicated `<appId>.tailscale` Keybay namespace as part of the
+  process-wide native configuration identity. The package pins Keybay 0.1.0,
+  but this R4a slice deliberately performs no secure-storage I/O; custody and
+  the encrypted-StateStore cutover land in later R4 slices.
+
 **Lifecycle hardening:**
 
 - A caller-isolate supervisor now owns replaceable worker instances and exact

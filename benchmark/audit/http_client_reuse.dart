@@ -24,7 +24,10 @@ Future<void> main() async {
   }
 
   final stateDir = Directory.systemTemp.createTempSync('ts_httpreuse_').path;
-  Tailscale.init(stateDir: stateDir);
+  Tailscale.init(
+    stateDir: stateDir,
+    appId: 'dev.tailscale.dart.benchmark.httpClientReuse',
+  );
   final tsnet = Tailscale.instance;
 
   try {

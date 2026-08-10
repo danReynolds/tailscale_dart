@@ -128,6 +128,7 @@ class _SmokeHomeState extends State<SmokeHome> {
       );
       final status = await _demo.up(
         stateDir: stateDir,
+        appId: 'dev.tailscale.dart.demo.smoke',
         hostname: config.hostname,
         authKey: config.authKey,
         controlUrl: Uri.parse(config.controlUrl),

@@ -3,7 +3,10 @@ const examples = {
     title: "quick_start.dart",
     code: `import 'package:tailscale/tailscale.dart';
 
-Tailscale.init(stateDir: '/app/tailscale');
+Tailscale.init(
+  stateDir: '/app/tailscale',
+  appId: 'com.example.myapp',
+);
 final ts = Tailscale.instance;
 
 await ts.up(authKey: 'tskey-auth-...');

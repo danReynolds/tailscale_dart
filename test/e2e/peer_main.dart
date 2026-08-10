@@ -38,6 +38,7 @@ Future<void> main(List<String> args) async {
   }
 
   final stateDir = _requiredEnv('STATE_DIR');
+  final appId = _requiredEnv('APP_ID');
   final controlUrl = Platform.environment['CONTROL_URL'];
   final authKey = Platform.environment['AUTH_KEY'] ?? '';
   final ephemeral = _optionalBoolEnv('EPHEMERAL');
@@ -46,7 +47,7 @@ Future<void> main(List<String> args) async {
   final responseBody =
       Platform.environment['RESPONSE_BODY'] ?? 'hello from peer';
 
-  Tailscale.init(stateDir: stateDir);
+  Tailscale.init(stateDir: stateDir, appId: appId);
   final tsnet = Tailscale.instance;
 
   final running = tsnet.onStateChange.firstWhere((s) => s == NodeState.running);
@@ -152,7 +153,9 @@ Future<void> main(List<String> args) async {
           final resp = await tsnet.http.client
               .get(Uri.parse('http://$host:$port$path'))
               .timeout(const Duration(seconds: 15));
-          stderr.writeln('peer: HTTPGET $host:$port$path -> ${resp.statusCode}');
+          stderr.writeln(
+            'peer: HTTPGET $host:$port$path -> ${resp.statusCode}',
+          );
         } catch (e) {
           stderr.writeln('peer: HTTPGET $host:$port$path failed: $e');
         }

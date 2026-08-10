@@ -46,8 +46,13 @@ Future<void> main() async {
     stderr.writeln('Set HEADSCALE_URL and HEADSCALE_AUTH_KEY (see runner).');
     exit(2);
   }
-  final stateDir = Directory.systemTemp.createTempSync('tailscale_holfix_').path;
-  Tailscale.init(stateDir: stateDir);
+  final stateDir = Directory.systemTemp
+      .createTempSync('tailscale_holfix_')
+      .path;
+  Tailscale.init(
+    stateDir: stateDir,
+    appId: 'dev.tailscale.dart.benchmark.headOfLinePoc',
+  );
   final tsnet = Tailscale.instance;
 
   try {
@@ -67,11 +72,15 @@ Future<void> main() async {
     }
     base.sort();
     final baselineMs = base[base.length ~/ 2] / 1000.0;
-    stdout.writeln('baseline status() p50: ${baselineMs.toStringAsFixed(2)} ms');
+    stdout.writeln(
+      'baseline status() p50: ${baselineMs.toStringAsFixed(2)} ms',
+    );
 
     const blockSeconds = 8;
-    stdout.writeln('firing the SAME blackhole dial, but in a HELPER isolate '
-        '(${blockSeconds}s)…');
+    stdout.writeln(
+      'firing the SAME blackhole dial, but in a HELPER isolate '
+      '(${blockSeconds}s)…',
+    );
     final dial = Isolate.run(
       () => _dialInHelper(<Object>['100.100.100.100', 80, blockSeconds * 1000]),
     ).then((_) => 'failed as expected', onError: (Object e) => 'error: $e');
@@ -90,13 +99,17 @@ Future<void> main() async {
 
     stdout.writeln('dial result: ${await dial}');
     stdout.writeln('');
-    stdout.writeln('=== status() p50 WHILE a helper-isolate dial blocks: '
-        '${duringMs.toStringAsFixed(2)} ms '
-        '(baseline ${baselineMs.toStringAsFixed(2)} ms); '
-        '10 probes took ${probeWall.elapsedMilliseconds} ms total ===');
-    stdout.writeln(duringMs < baselineMs * 20 && probeWall.elapsedMilliseconds < 2000
-        ? 'FIX CONFIRMED: worker stayed responsive (vs 7.75s when the dial ran on the worker).'
-        : 'unexpected: worker was still delayed.');
+    stdout.writeln(
+      '=== status() p50 WHILE a helper-isolate dial blocks: '
+      '${duringMs.toStringAsFixed(2)} ms '
+      '(baseline ${baselineMs.toStringAsFixed(2)} ms); '
+      '10 probes took ${probeWall.elapsedMilliseconds} ms total ===',
+    );
+    stdout.writeln(
+      duringMs < baselineMs * 20 && probeWall.elapsedMilliseconds < 2000
+          ? 'FIX CONFIRMED: worker stayed responsive (vs 7.75s when the dial ran on the worker).'
+          : 'unexpected: worker was still delayed.',
+    );
   } finally {
     try {
       await tsnet.down();

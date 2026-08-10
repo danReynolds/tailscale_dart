@@ -20,6 +20,7 @@ import 'src/errors.dart';
 import 'src/fd_transport.dart' show ensurePosixFdTransportAvailable;
 import 'src/ffi_bindings.dart' as native;
 import 'src/http_fd_client.dart';
+import 'src/keybay_state_custody.dart';
 import 'src/runtime_config.dart';
 import 'src/status.dart';
 import 'src/worker/worker.dart';
@@ -85,6 +86,24 @@ extension on TailscaleLogLevel {
   };
 }
 
+final class _TailscaleInitialization {
+  const _TailscaleInitialization({
+    required this.canonicalStateBaseDir,
+    required this.logLevel,
+    required this.keybay,
+  });
+
+  final String canonicalStateBaseDir;
+  final TailscaleLogLevel logLevel;
+  final KeybayStateCustodyBinding keybay;
+
+  bool hasSameIdentity(_TailscaleInitialization other) =>
+      canonicalStateBaseDir == other.canonicalStateBaseDir &&
+      logLevel == other.logLevel &&
+      keybay.hostAppId == other.keybay.hostAppId &&
+      keybay.keybayNamespace == other.keybay.keybayNamespace;
+}
+
 /// Testable app-facing contract for an embedded Tailscale node.
 ///
 /// Production code usually gets the real implementation from
@@ -146,7 +165,7 @@ class Tailscale implements TailscaleClient {
   Tailscale._();
   static final Tailscale instance = Tailscale._();
 
-  static String? _stateBaseDir;
+  static _TailscaleInitialization? _initialization;
 
   pkg_http.Client? _http;
   List<TailscaleNode>? _latestNodes;
@@ -176,13 +195,14 @@ class Tailscale implements TailscaleClient {
       StreamController<List<TailscaleNode>>.broadcast();
 
   static String _requireStateBaseDir() {
-    final stateBaseDir = _stateBaseDir;
-    if (stateBaseDir == null) {
+    final initialization = _initialization;
+    if (initialization == null) {
       throw const TailscaleUsageException(
-        'Call Tailscale.init(stateDir: ...) before using Tailscale.instance.',
+        'Call Tailscale.init(stateDir: ..., appId: ...) before using '
+        'Tailscale.instance.',
       );
     }
-    return stateBaseDir;
+    return initialization.canonicalStateBaseDir;
   }
 
   static void _requireInitialized() {
@@ -795,6 +815,13 @@ class Tailscale implements TailscaleClient {
   /// Configures the Tailscale library. Call this once at app startup,
   /// alongside other library initializers.
   ///
+  /// [appId] is the embedding application's stable identifier, such as its
+  /// reverse-DNS bundle or application ID. Tailscale reserves the dedicated
+  /// `<appId>.tailscale` Keybay namespace for the StateStore encryption key.
+  /// It must remain unchanged for the lifetime of [stateDir]. Constructing
+  /// this binding does not access Keybay; secure-state lifecycle operations
+  /// will resolve it lazily as part of the R4 cutover.
+  ///
   /// [stateDir] is an app-owned directory where Tailscale persists
   /// its node identity, keys, and profile data under a `tailscale/`
   /// subdirectory. The library creates that subdirectory as `0700` and the
@@ -823,11 +850,13 @@ class Tailscale implements TailscaleClient {
   /// persist identity at all, register an ephemeral node instead.
   static void init({
     required String stateDir,
+    required String appId,
     TailscaleLogLevel logLevel = TailscaleLogLevel.silent,
   }) {
     if (stateDir.trim().isEmpty) {
       throw const TailscaleUsageException('stateDir must not be empty.');
     }
+    final custody = KeybayStateCustodyBinding(hostAppId: appId);
     try {
       ensurePosixFdTransportAvailable();
     } catch (error) {
@@ -838,7 +867,12 @@ class Tailscale implements TailscaleClient {
     }
 
     final stateDirPtr = stateDir.toNativeUtf8();
-    final resultPtr = native.duneConfigure(stateDirPtr, logLevel.nativeValue);
+    final keybayNamespacePtr = custody.keybayNamespace.toNativeUtf8();
+    final resultPtr = native.duneConfigure(
+      stateDirPtr,
+      keybayNamespacePtr,
+      logLevel.nativeValue,
+    );
     try {
       final decoded = jsonDecode(resultPtr.toDartString());
       if (decoded is! Map<String, dynamic>) {
@@ -856,7 +890,19 @@ class Tailscale implements TailscaleClient {
           'Native runtime did not return a canonical state directory.',
         );
       }
-      _stateBaseDir = canonicalStateDir;
+      final candidate = _TailscaleInitialization(
+        canonicalStateBaseDir: canonicalStateDir,
+        logLevel: logLevel,
+        keybay: custody,
+      );
+      final configured = _initialization;
+      if (configured == null) {
+        _initialization = candidate;
+      } else if (!configured.hasSameIdentity(candidate)) {
+        throw const TailscaleConfigurationException(
+          'Native and Dart Tailscale initialization identities diverged.',
+        );
+      }
     } on TailscaleConfigurationException {
       rethrow;
     } catch (error) {
@@ -867,6 +913,7 @@ class Tailscale implements TailscaleClient {
     } finally {
       native.duneFree(resultPtr);
       calloc.free(stateDirPtr);
+      calloc.free(keybayNamespacePtr);
     }
   }
 

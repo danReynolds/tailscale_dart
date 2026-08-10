@@ -12,12 +12,13 @@ import 'package:tailscale/tailscale.dart';
 
 Future<void> main() async {
   final stateDir = _requiredEnv('STATE_DIR');
+  final appId = _requiredEnv('APP_ID');
   final authKey = _requiredEnv('AUTH_KEY');
   final hostname = _requiredEnv('HOSTNAME');
   final url = Uri.parse(_requiredEnv('URL'));
   final controlUrl = Platform.environment['CONTROL_URL'];
 
-  Tailscale.init(stateDir: stateDir);
+  Tailscale.init(stateDir: stateDir, appId: appId);
   final tsnet = Tailscale.instance;
 
   try {

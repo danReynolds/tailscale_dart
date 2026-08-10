@@ -85,7 +85,7 @@ void main() {
       stateDir = processStateRoot.path;
       final authKey = await api!.createAuthKey();
 
-      Tailscale.init(stateDir: stateDir!);
+      Tailscale.init(stateDir: stateDir!, appId: processIntegrationAppId);
       tsnet = Tailscale.instance;
       await recordUntil(
         tsnet!,

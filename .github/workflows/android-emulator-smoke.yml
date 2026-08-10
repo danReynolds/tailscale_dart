@@ -88,6 +88,7 @@ jobs:
           void main() {
             Tailscale.init(
               stateDir: '${Directory.systemTemp.path}/ts-smoke',
+              appId: 'dev.tailscale.dart.ci.androidSmoke',
             );
             print('TAILSCALE_DART_SMOKE_READY');
             runApp(const MaterialApp(home: Scaffold(body: Text('up'))));

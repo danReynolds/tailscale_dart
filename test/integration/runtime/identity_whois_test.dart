@@ -135,7 +135,7 @@ void main() {
     setUpAll(() {
       stateDir = processIntegrationStateRoot();
       clearProcessIntegrationState(stateDir);
-      Tailscale.init(stateDir: stateDir.path);
+      Tailscale.init(stateDir: stateDir.path, appId: processIntegrationAppId);
     });
 
     tearDownAll(() async {

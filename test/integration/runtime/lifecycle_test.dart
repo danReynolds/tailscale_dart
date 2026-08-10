@@ -10,6 +10,7 @@
 library;
 
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -282,7 +283,10 @@ void main() {
   setUpAll(() {
     configuredStateBaseDir = processIntegrationStateRoot();
     clearProcessIntegrationState(configuredStateBaseDir);
-    Tailscale.init(stateDir: configuredStateBaseDir.path);
+    Tailscale.init(
+      stateDir: configuredStateBaseDir.path,
+      appId: processIntegrationAppId,
+    );
   });
 
   tearDownAll(() {
@@ -292,13 +296,32 @@ void main() {
   group('init validation', () {
     test('rejects empty stateDir', () {
       expect(
-        () => Tailscale.init(stateDir: ''),
+        () => Tailscale.init(stateDir: '', appId: processIntegrationAppId),
         throwsA(isA<TailscaleUsageException>()),
       );
       expect(
-        () => Tailscale.init(stateDir: '   '),
+        () => Tailscale.init(stateDir: '   ', appId: processIntegrationAppId),
         throwsA(isA<TailscaleUsageException>()),
       );
+    });
+
+    test('rejects invalid appId before preparing a state root', () {
+      final parent = Directory.systemTemp.createTempSync(
+        'tailscale_invalid_app_id_',
+      );
+      addTearDown(() {
+        if (parent.existsSync()) parent.deleteSync(recursive: true);
+      });
+      final proposedRoot = Directory(p.join(parent.path, 'must-not-exist'));
+
+      expect(
+        () => Tailscale.init(
+          stateDir: proposedRoot.path,
+          appId: 'invalid/app-id',
+        ),
+        throwsA(isA<TailscaleUsageException>()),
+      );
+      expect(proposedRoot.existsSync(), isFalse);
     });
 
     test('up rejects non-positive timeout', () async {
@@ -311,8 +334,11 @@ void main() {
       );
     });
 
-    test('repeated init is idempotent only for the same native identity', () {
-      Tailscale.init(stateDir: configuredStateBaseDir.path);
+    test('repeated init is idempotent only for the same full identity', () {
+      Tailscale.init(
+        stateDir: configuredStateBaseDir.path,
+        appId: processIntegrationAppId,
+      );
 
       final alias = Link('${configuredStateBaseDir.path}-alias');
       if (alias.existsSync()) alias.deleteSync();
@@ -320,11 +346,27 @@ void main() {
       addTearDown(() {
         if (alias.existsSync()) alias.deleteSync();
       });
-      Tailscale.init(stateDir: alias.path);
+      Tailscale.init(stateDir: alias.path, appId: processIntegrationAppId);
 
       expect(
         () => Tailscale.init(
           stateDir: configuredStateBaseDir.path,
+          appId: 'dev.tailscale.dart.test.otherLifecycle',
+        ),
+        throwsA(isA<TailscaleConfigurationException>()),
+      );
+      expect(
+        () => Tailscale.init(
+          stateDir: configuredStateBaseDir.path,
+          appId: 'Dev.Tailscale.Dart.Test.Lifecycle',
+        ),
+        throwsA(isA<TailscaleConfigurationException>()),
+      );
+
+      expect(
+        () => Tailscale.init(
+          stateDir: configuredStateBaseDir.path,
+          appId: processIntegrationAppId,
           logLevel: TailscaleLogLevel.error,
         ),
         throwsA(isA<TailscaleConfigurationException>()),
@@ -336,9 +378,34 @@ void main() {
         if (otherRoot.existsSync()) otherRoot.deleteSync(recursive: true);
       });
       expect(
-        () => Tailscale.init(stateDir: otherRoot.path),
+        () => Tailscale.init(
+          stateDir: otherRoot.path,
+          appId: processIntegrationAppId,
+        ),
         throwsA(isA<TailscaleConfigurationException>()),
       );
+
+      Tailscale.init(
+        stateDir: configuredStateBaseDir.path,
+        appId: processIntegrationAppId,
+      );
+    });
+
+    test('Keybay namespace identity is frozen across Dart isolates', () async {
+      final stateDir = configuredStateBaseDir.path;
+      final outcome = await Isolate.run(() {
+        try {
+          Tailscale.init(
+            stateDir: stateDir,
+            appId: 'dev.tailscale.dart.test.otherIsolate',
+          );
+          return 'accepted';
+        } on TailscaleConfigurationException {
+          return 'configurationMismatch';
+        }
+      });
+
+      expect(outcome, 'configurationMismatch');
     });
   });
 

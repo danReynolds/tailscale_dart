@@ -81,7 +81,10 @@ Prerequisites:
 import 'package:tailscale/tailscale.dart';
 
 Future<void> main() async {
-  Tailscale.init(stateDir: '/app/state');
+  Tailscale.init(
+    stateDir: '/app/state',
+    appId: 'com.example.myapp',
+  );
 
   final tailscale = Tailscale.instance;
   final status = await tailscale.up(
@@ -93,6 +96,12 @@ Future<void> main() async {
   print('ipv4: ${status.ipv4}');
 }
 ```
+
+`appId` is the embedding application's stable identifier (normally its
+reverse-DNS bundle/application ID). Tailscale reserves `<appId>.tailscale` as a
+dedicated Keybay namespace; keep the same `appId` and `stateDir` for the life
+of the installation. `init` validates and freezes that binding but does not
+access secure storage until a persistent runtime needs custody.
 
 Subsequent launches can call `up()` without an auth key. The node identity is persisted in `stateDir`.
 
@@ -155,7 +164,10 @@ A few canonical snippets below. The [developer site](https://danreynolds.github.
 All snippets assume the node has been initialized and started:
 
 ```dart
-Tailscale.init(stateDir: '/app/state');
+Tailscale.init(
+  stateDir: '/app/state',
+  appId: 'com.example.myapp',
+);
 await Tailscale.instance.up(authKey: 'tskey-auth-...');
 ```
 

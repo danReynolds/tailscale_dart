@@ -44,7 +44,10 @@ void main() {
     await warmUpNativeAssetForPeerSubprocesses();
 
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
-    Tailscale.init(stateDir: stateDir);
+    Tailscale.init(
+      stateDir: stateDir,
+      appId: 'dev.tailscale.dart.test.e2e.primary',
+    );
     tsnet = Tailscale.instance;
     await detachLoadedNativeAssetForPeerSubprocesses();
   });
@@ -142,6 +145,7 @@ void main() {
           .path;
       peer = await PeerProcess.spawn(
         stateDir: peerStateDir,
+        appId: 'dev.tailscale.dart.test.e2e.peer',
         controlUrl: controlUrl,
         authKey: authKey,
         ephemeral: true,
@@ -536,6 +540,7 @@ void main() {
     test('first launch registers and persists credentials', () async {
       final peer = await PeerProcess.spawn(
         stateDir: persistStateDir,
+        appId: 'dev.tailscale.dart.test.e2e.persist',
         controlUrl: controlUrl,
         authKey: persistAuthKey,
         hostname: 'dune-e2e-persist',
@@ -552,6 +557,7 @@ void main() {
     test('second launch reconnects without an authKey', () async {
       final peer = await PeerProcess.spawn(
         stateDir: persistStateDir,
+        appId: 'dev.tailscale.dart.test.e2e.persist',
         controlUrl: controlUrl,
         // Deliberately no authKey — must come up from persisted state.
         hostname: 'dune-e2e-persist',

@@ -470,6 +470,10 @@ func configureFreshStateRootForTest(t *testing.T) string {
 	runtimes.mu.Unlock()
 	previousNativeLogLevel := atomic.LoadInt32(&LogLevel)
 	previousRawDisco, hadRawDisco := os.LookupEnv("TS_ENABLE_RAW_DISCO")
+	// Register the TempDir cleanup before the runtime-controller cleanup below.
+	// testing runs cleanups in LIFO order, so any live state lease is released
+	// while its configured root still exists instead of poisoning admission.
+	root := t.TempDir()
 	t.Cleanup(func() {
 		_, _ = closeCurrentRuntime()
 		runtimes.mu.Lock()
@@ -494,7 +498,6 @@ func configureFreshStateRootForTest(t *testing.T) string {
 		}
 	})
 
-	root := t.TempDir()
 	if _, err := Configure(root, testKeybayNamespace, 0); err != nil {
 		t.Fatalf("Configure: %v", err)
 	}

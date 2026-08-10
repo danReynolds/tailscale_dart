@@ -13,7 +13,7 @@ encrypted-state cutover.
 - Completed `down()`/`logout()` results remain token-retained until the caller
   isolate acknowledges them, so worker death between native completion and
   Dart delivery cannot swallow cleanup errors or falsify logout disposition.
-- Failed Server/Store cleanup, startup unwind, or confirmed state removal now
+- Failed Server/Store cleanup, startup unwind, or final logout disposition now
   returns `runtimeCleanupFailed` and keeps lifecycle admission closed until
   process restart. Teardown also publishes an empty peer snapshot so existing
   subscribers cannot retain a stale tailnet inventory.
@@ -22,7 +22,9 @@ encrypted-state cutover.
   an active node behind the failed Future.
 - `logout()` is remote-first. Failed or timed-out revocation closes the
   possibly-mutated runtime, preserves local state, and reports
-  `logoutIndeterminate`; local deletion follows only confirmed success. A
+  `logoutIndeterminate`. Confirmed success lets upstream remove the logical
+  profile but still preserves the lower-level StateStore container; physical
+  deletion is reserved for the later explicit local-forget operation. A
   temporary runtime reconstructed after `down()` remains hidden from public
   state streams, so successful idle logout emits `noState` without a phantom
   second `stopped` transition.

@@ -810,9 +810,10 @@ void main() {
 
         expect(
           status.state,
-          logoutError == null
-              ? NodeState.noState
-              : anyOf(NodeState.stopped, NodeState.noState),
+          NodeState.stopped,
+          reason:
+              'the retained SQLite container is conservatively classified '
+              'as stopped until R4 can authenticate logical state',
         );
         expect(
           incidents.where(
@@ -822,7 +823,13 @@ void main() {
         );
         expect(states.where((state) => state == NodeState.stopped).length, 1);
         expect(states, isNotEmpty);
-        expect(states.last, status.state);
+        expect(
+          states.last,
+          logoutError == null ? NodeState.noState : NodeState.stopped,
+          reason:
+              'confirmed noState is an operation receipt; idle status still '
+              'classifies the retained Store as stopped',
+        );
       },
     );
 
@@ -848,24 +855,31 @@ void main() {
       },
     );
 
-    test('lost confirmed logout response uses its retained receipt', () async {
-      final ownedStateDir = Directory(
-        p.join(configuredStateBaseDir.path, 'tailscale'),
-      );
-      if (ownedStateDir.existsSync()) {
-        ownedStateDir.deleteSync(recursive: true);
-      }
+    test(
+      'lost confirmed logout response for absent state uses its receipt',
+      () async {
+        final ownedStateDir = Directory(
+          p.join(configuredStateBaseDir.path, 'tailscale'),
+        );
+        if (ownedStateDir.existsSync()) {
+          ownedStateDir.deleteSync(recursive: true);
+        }
 
-      final states = <NodeState>[];
-      final stateSub = Tailscale.instance.onStateChange.listen(states.add);
-      addTearDown(stateSub.cancel);
+        final states = <NodeState>[];
+        final stateSub = Tailscale.instance.onStateChange.listen(states.add);
+        addTearDown(stateSub.cancel);
 
-      await Tailscale.instance
-          .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
-      await expectLater(Tailscale.instance.logout(), completes);
-      expect((await Tailscale.instance.status()).state, NodeState.noState);
-      expect(states.where((state) => state == NodeState.noState), hasLength(1));
-    });
+        await Tailscale.instance
+            .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
+        await expectLater(Tailscale.instance.logout(), completes);
+        expect((await Tailscale.instance.status()).state, NodeState.noState);
+        expect(ownedStateDir.existsSync(), isFalse);
+        expect(
+          states.where((state) => state == NodeState.noState),
+          hasLength(1),
+        );
+      },
+    );
 
     test('logout() twice does not throw', () async {
       await expectLater(Tailscale.instance.logout(), completes);

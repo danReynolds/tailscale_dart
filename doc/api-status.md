@@ -10,10 +10,10 @@ example. For the forward-looking phase plan, see
 > `main`. The [accepted rearchitecture plan](rearchitecture-plan.md) and its
 > [runtime](adr-runtime-ownership-and-lifecycle.md) and
 > [encrypted-state](adr-encrypted-node-state.md) ADRs describe target behavior
-> that has not all shipped. Current persistent StateStore paths are created with
-> owner-only modes and existing modes are tightened best-effort, but current
-> startup does not fail closed when chmod verification is unavailable and the
-> data is not yet application-layer encrypted.
+> that has not all shipped. Current persistent StateStore paths are created and
+> revalidated with owner-only modes; startup fails closed when their type,
+> identity, or permissions cannot be established. The data is not yet
+> application-layer encrypted.
 
 The **core mobile public path** is lifecycle + private HTTP/TCP/UDP, identity,
 diagnostics, prefs, and exit-node controls. Platform-qualified TLS and
@@ -85,9 +85,9 @@ returning a transitional state such as `starting`.
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
 | `Tailscale.init({stateDir, logLevel})` | ✅ | Freezes one native path/inode + log-level identity. Repeating the exact tuple is a no-op; a mismatch throws `TailscaleConfigurationException`. Native lifecycle calls derive the owned `tailscale/` subtree from this root. | `Tailscale.init(stateDir: '/app/state');` |
-| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; `ephemeral: true` registers short-lived CI/test nodes. Same-config active calls are idempotent and an auth key never replaces the active identity. Concurrent startup returns `lifecycleBusy`; active tuple mismatch returns `configurationMismatch`. Resolves on the first stable state only. The deadline bounds startup/state waiting, then quarantine must finish before `startupTimeout` returns, so slow safety teardown can extend total wall time. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
+| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; `ephemeral: true` registers short-lived CI/test nodes. Same-config active calls are idempotent and an auth key never replaces the active identity. Concurrent startup returns `lifecycleBusy`; active tuple mismatch returns `configurationMismatch`. Resolves on the first stable state only. The deadline bounds startup/state waiting; `startupTimeout` returns only after token-qualified quarantine is established. Pending native cleanup continues behind the recovery barrier, and later lifecycle work waits for it. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
 | `down()` | ✅ | Stop the exact active generation and keep persisted credentials. A completed native result survives worker-response loss. Cleanup failure returns `runtimeCleanupFailed`, publishes no false clean-state transition, and blocks replacement until process restart. | `await tsnet.down();` |
-| `logout()` | ✅ | Remote-first revocation, then local deletion only after confirmed success. Reconstructs a temporary runtime after `down()` using only a configuration proven by `Server.Start`; that internal runtime stays event-silent, so idle logout emits `noState` without a phantom `stopped`. Missing/stale configuration fails closed. Failure preserves local recovery evidence and returns `logoutIndeterminate`. A confirmed result survives worker-response loss. | `await tsnet.logout();` |
+| `logout()` | ✅ | Remote-first revocation. Confirmed success lets upstream remove the logical profile while preserving the lower-level StateStore container; physical deletion belongs to the later explicit local-forget API. Reconstructs a temporary runtime after `down()` using only a configuration proven by `Server.Start`; that internal runtime stays event-silent, so idle logout emits `noState` without a phantom `stopped`. Missing/stale configuration fails closed. Failure preserves local recovery evidence and returns `logoutIndeterminate`. A confirmed result survives worker-response loss. | `await tsnet.logout();` |
 | `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. Waits for worker recovery; a failed post-incident state classification remains a typed status error rather than guessed state. While idle, `stopped` means recognized local state artifacts exist; it does not prove valid enrollment or reconnectability. | `final s = await tsnet.status();` |
 | `nodes()` → `List<TailscaleNode>` | ✅ | Current node inventory. | `final nodes = await tsnet.nodes();` |
 | `nodeByIp(ip)` → `TailscaleNode?` | ✅ | Lookup a known node by Tailscale IP from the current inventory. | `final node = await tsnet.nodeByIp('100.64.0.5');` |

@@ -160,7 +160,8 @@ type drainingRuntime struct {
 
 // logoutOperation keeps lifecycle admission closed after the matching runtime
 // is detached. Its done channel is closed only after the caller has completed
-// the final state-directory disposition (retained or removed).
+// upstream logout, runtime close, and the final retained-StateStore
+// disposition.
 type logoutOperation struct {
 	token      uint64
 	done       chan struct{}

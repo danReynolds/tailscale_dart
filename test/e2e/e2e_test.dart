@@ -698,9 +698,16 @@ void main() {
     );
 
     test(
-      'logout from running emits [Stopped, NoState] and preserves storage',
+      'lost confirmed logout response preserves storage and emits receipt',
       () async {
         await recordUntil(tsnet, NodeState.running, bringUp);
+
+        // Exercise the combined case: a real authenticated Store is present,
+        // upstream confirms logout, and the worker dies before Dart receives
+        // the response. Supervisor recovery must replay the retained receipt
+        // without converting logical logout into physical state deletion.
+        await tsnet
+            .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
 
         final sequence = await recordUntil(
           tsnet,

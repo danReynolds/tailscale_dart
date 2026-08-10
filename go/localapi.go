@@ -266,11 +266,12 @@ func isNotFound(err error) bool {
 	return errors.As(err, &herr) && herr.Status() == http.StatusNotFound
 }
 
-// errServeFeatureUnavailable marks a serve/funnel precondition this package
-// checked in-process (HTTPS capability, ipn.CheckFunnelAccess) before any
-// LocalAPI submit. Wrapping at the call site gives classifyLocalAPIError a
-// typed featureDisabled signal for the live path, leaving the prose backstop
-// below only for backend-originated errors.
+// errServeFeatureUnavailable marks a serve precondition this package checked
+// in-process and that is unambiguously "the tailnet has this feature off" —
+// currently the HTTPS capability check. Wrapping at the call site gives
+// classifyLocalAPIError a typed featureDisabled signal instead of matching
+// prose. It is deliberately NOT applied to errors whose upstream text encodes
+// more than one outcome; see the CheckFunnelAccess call site.
 var errServeFeatureUnavailable = errors.New("serve feature unavailable")
 
 // isTransientNoSuggestion reports whether err is one of upstream's transient
@@ -756,7 +757,13 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 	}
 	if payload.Funnel {
 		if err := ipn.CheckFunnelAccess(port, st.Self); err != nil {
-			return servePublication{}, fmt.Errorf("%w: %w", errServeFeatureUnavailable, err)
+			// Deliberately NOT wrapped in errServeFeatureUnavailable: upstream
+			// conflates two outcomes in one untyped error — a disallowed port
+			// (forbidden) and a missing node attribute (featureDisabled) — and
+			// only its prose distinguishes them. Wrapping would collapse both
+			// to featureDisabled and silently change the code Dart callers
+			// branch on for the port-policy case.
+			return servePublication{}, err
 		}
 	}
 	if sc.IsTCPForwardingOnPort(port, "") {

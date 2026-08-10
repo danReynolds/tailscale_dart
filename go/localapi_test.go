@@ -213,22 +213,55 @@ func TestClassifyLocalAPIError_TypedServeFeatureUnavailable(t *testing.T) {
 	}
 }
 
-func TestApplyServeForwardFeatureErrorsAreTyped(t *testing.T) {
-	st := serveTestStatus()
-	st.Self.CapMap = nil // drop CapabilityHTTPS
-	_, err := applyServeForward(new(ipn.ServeConfig), st, serveForwardPayload{
-		TailnetPort:  443,
-		LocalAddress: "127.0.0.1",
-		LocalPort:    3000,
-		Path:         "/",
-		HTTPS:        true,
+// Classification is asserted through applyServeForward, not by handing
+// classifyLocalAPIError a synthetic error: wrapping happens at these call
+// sites, so only the real path proves the code a Dart caller actually sees.
+func TestApplyServeForwardFeatureErrorCodes(t *testing.T) {
+	t.Run("HTTPS capability off is typed featureDisabled", func(t *testing.T) {
+		st := serveTestStatus()
+		st.Self.CapMap = nil
+		_, err := applyServeForward(new(ipn.ServeConfig), st, serveForwardPayload{
+			TailnetPort:  443,
+			LocalAddress: "127.0.0.1",
+			LocalPort:    3000,
+			Path:         "/",
+			HTTPS:        true,
+		})
+		if !errors.Is(err, errServeFeatureUnavailable) {
+			t.Fatalf("HTTPS-capability failure must wrap the typed sentinel; got %v", err)
+		}
+		if code, _ := classifyLocalAPIError(err); code != "featureDisabled" {
+			t.Fatalf("HTTPS-capability failure code = %q, want featureDisabled", code)
+		}
 	})
-	if !errors.Is(err, errServeFeatureUnavailable) {
-		t.Fatalf("HTTPS-capability failure must wrap the typed sentinel; got %v", err)
-	}
-	if code, _ := classifyLocalAPIError(err); code != "featureDisabled" {
-		t.Fatalf("HTTPS-capability failure code = %q, want featureDisabled", code)
-	}
+
+	// Upstream returns one untyped error for both funnel refusals. A
+	// disallowed port must stay forbidden: collapsing it into the typed
+	// featureDisabled sentinel would change the code callers branch on.
+	t.Run("disallowed funnel port stays forbidden", func(t *testing.T) {
+		st := serveTestStatus()
+		st.Self.CapMap = tailcfg.NodeCapMap{
+			tailcfg.CapabilityHTTPS: nil,
+			tailcfg.NodeAttrFunnel:  nil,
+		}
+		_, err := applyServeForward(new(ipn.ServeConfig), st, serveForwardPayload{
+			TailnetPort:  8080,
+			LocalAddress: "127.0.0.1",
+			LocalPort:    3000,
+			Path:         "/",
+			HTTPS:        true,
+			Funnel:       true,
+		})
+		if err == nil {
+			t.Fatal("port 8080 must be refused for Funnel")
+		}
+		if errors.Is(err, errServeFeatureUnavailable) {
+			t.Fatalf("funnel port policy must not be typed featureDisabled; got %v", err)
+		}
+		if code, _ := classifyLocalAPIError(err); code != "forbidden" {
+			t.Fatalf("funnel port-policy code = %q, want forbidden", code)
+		}
+	})
 }
 
 func TestClassifyLocalAPIError_FeatureDisabledFromMessage(t *testing.T) {

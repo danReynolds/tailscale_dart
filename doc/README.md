@@ -10,7 +10,7 @@ the checked-in code until their workstream lands.
 | --- | --- | --- |
 | [Rearchitecture plan](rearchitecture-plan.md) | Accepted target | North Star, decisions, live PR disposition, implementation order, and release gates. |
 | [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | Accepted target | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
-| [Encrypted node state ADR](adr-encrypted-node-state.md) | Accepted target | Keybay custody seam, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
+| [Encrypted node state ADR](adr-encrypted-node-state.md) | Accepted target | Direct Keybay custody binding, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
 | [Current architecture and API feedback](current-architecture-and-api-feedback.md) | Current implementation | Existing Go/Dart/fd ownership and public API shape. |
 | [Concurrency model](concurrency.md) | Current implementation | Existing epoch, registries, lock order, and teardown commit protocol. |
 | [API status](api-status.md) | Current public surface | Namespace-by-namespace callable API and platform qualifications. |

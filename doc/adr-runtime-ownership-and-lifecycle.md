@@ -133,8 +133,12 @@ configuring -- client/config error -----------> closing ----> idle
 active -------- stop / timeout / worker exit -> closing ----> idle
   |
   | identity never changes in place
-  +-------- explicit logout/reset ------------> closing ----> idle
+  +-------- logout / explicit local forget ---> closing ----> idle
 ```
+
+Both identity operations close the runtime, but only
+`forgetLocalIdentity()` continues into the secure reset transaction after
+close. Confirmed logout preserves the storage container and its custodied DEK.
 
 An abandonment request can arrive in `preparing`, `starting`, or `configuring`.
 It marks the candidate stale immediately. It calls `Server.Close` only if and
@@ -465,16 +469,18 @@ auth key through upstream.
 `Tailscale.init` creates/verifies the app-owned base coordination directory and
 uses the same canonical native path/inode identity as the state lease. Absolute
 lexical, symlink, case, and same-inode aliases therefore compare as one root;
-different canonical roots do not. It is idempotent only when that root identity,
-the exact `logLevel`, and, after R4a, the identical Dart custodian object match
-the first call. Custodian comparison is object identity, not value equality. A
-mismatch returns a typed configuration error and never overwrites singleton
-state while a worker/runtime may still refer to it. Applications that need a
-new configuration must do so in a new process generation.
+different canonical roots do not. R2 is idempotent only when that root identity
+and the exact `logLevel` match the first call. After R4a, the caller-supplied
+stable host `appId` and its derived Keybay namespace join that exact immutable
+configuration tuple. A mismatch returns a typed configuration error and never
+overwrites singleton state while a worker/runtime may still refer to it.
+Applications that need a new configuration must do so in a new process
+generation.
 
-That is the final R4a contract. R2 compares the canonical root plus `logLevel`;
-R4a adds custodian object identity when it introduces the interface and
-initialization parameter.
+Core imports Keybay directly and lazily creates the package-owned
+`SecretStorage` binding on the caller isolate. Callers supply `appId`; they do
+not supply or compare a custodian object, and production exposes no alternate
+custody interface.
 
 ### `down()`
 
@@ -493,8 +499,9 @@ same identity.
    generation while preserving the DEK/files, then return an indeterminate
    logout error; a later fresh runtime reconciles because the remote operation
    may nevertheless have succeeded;
-4. on confirmed success, drain the runtime in reset mode and complete the
-   secure local-reset transaction while retaining its state lease.
+4. on confirmed success, detach and close the runtime normally, wipe its
+   in-memory DEK copy, release the state lease, preserve the Keybay DEK and
+   encrypted storage container, and publish confirmed `noState`.
 
 When the secure probe proves a genuinely fresh absent-state/absent-key root,
 `logout()` is an idempotent no-op: it does not construct a runtime or contact the
@@ -525,9 +532,9 @@ Neither `down`, worker death, timeout, nor process exit calls logout.
 
 ## Detach-then-close protocol
 
-Every close cause calls one controller operation with an exact generation token,
-a cause code, and either `releaseState` or `retainStateForReset`. Under the
-controller lock it:
+Every close cause calls one controller operation with an exact generation token
+and a cause code. An explicit local-forget cause additionally requests transfer
+of the state lease into a reset transaction. Under the controller lock it:
 
 1. marks a matching candidate abandoned;
 2. detaches the matching current runtime;
@@ -546,23 +553,26 @@ Outside the controller lock, `nodeRuntime.close(mode)` executes once:
 6. call `Server.Close` once;
 7. close the caller-owned StateStore;
 8. wipe in-memory key copies best-effort;
-9. for ordinary close, release the persistent-state lease; for confirmed
-   logout/local forget, transfer it into a generation-bound `resetTransaction`;
+9. for ordinary close, including confirmed logout, release the persistent-state
+   lease; only for explicit local forget, transfer it into a generation-bound
+   `resetTransaction`;
 10. remove only explicitly runtime-scoped scratch artifacts;
 11. for ordinary close, signal draining complete. Reset mode keeps the
    controller draining until the transaction deletes/preserves state, releases
    the lease, and explicitly completes.
 
 `resetTransaction` is the only owner allowed to span Server close, caller-side
-custodian deletion, and native filesystem removal. This prevents a new runtime
-from starting between key deletion and directory disposition. Before custody
-deletion it durably installs the external reset-intent marker defined by the
-encrypted-state ADR; failure to establish that intent mutates neither key nor
-subtree. If key deletion later fails, it preserves the marker and filesystem,
-releases the lease, completes draining, and returns `localResetIncomplete`. It
-is generation-token conditional and cannot reset a newer runtime.
+Keybay deletion, and native filesystem removal, and only explicit local forget
+can create or resume one. This prevents a new runtime from starting between key
+deletion and directory disposition. Before Keybay deletion it durably installs
+the external reset-intent marker defined by the encrypted-state ADR; failure to
+establish that intent mutates neither key nor subtree. If key deletion later
+fails, it preserves the marker and filesystem, releases the lease, completes
+draining, and returns `localResetIncomplete`. It is generation-token
+conditional and cannot reset a newer runtime. Confirmed logout never creates a
+reset marker or calls Keybay `delete`.
 
-Custodian deletion is a non-cancellable Future. Before awaiting it, native state
+Keybay deletion is a non-cancellable Future. Before awaiting it, native state
 marks that token `resetCustodyActive`. Timeout or worker exit leaves the
 controller draining and the lease quarantined until the Future settles. A late
 success proceeds to exact subtree removal and marker cleanup; a late error
@@ -802,8 +812,8 @@ private paths unnecessarily.
 
 - At R2, absolute/lexical, symlink, case-variant where applicable, and same-inode
   aliases resolve to the same native root identity; a different root or
-  `logLevel` mismatches. At R4a, the identical custodian object joins that tuple
-  and a distinct but value-equal object mismatches.
+  `logLevel` mismatches. At R4a, the exact validated host `appId` and derived
+  Keybay namespace join that tuple; callers do not provide a custodian object.
 - Every concurrent `up()` during startup returns `lifecycleBusy`, including a
   request with a different auth key; active same-config `up()` remains
   idempotent.
@@ -825,7 +835,9 @@ private paths unnecessarily.
 
 - Reconnect without an auth key keeps the stable node ID.
 - Supplying a new auth key with enrolled state does not wipe or replace it.
-- Remote logout success revokes then destroys local state.
+- Remote logout success lets upstream remove the current logical profile,
+  closes the runtime, and reports confirmed `noState`; it preserves the Keybay
+  DEK, authenticated envelope, and package-owned subtree for later enrollment.
 - Remote logout failure performs no package-controlled deletion and reports an
   indeterminate outcome; it closes the potentially mutated generation and a
   later reopen reconciles possible remote success.
@@ -839,9 +851,11 @@ private paths unnecessarily.
   authenticated exact-empty state completes normally without a remote call;
   exact-empty makes no
   remote-record/revocation claim and local forget removes the pair.
-- Confirmed logout and local forget keep the controller draining and the lease
-  held across caller-side custodian deletion and native directory cleanup, so
-  another start cannot enter the key/file handoff window.
+- Confirmed logout performs an ordinary close and never creates a reset marker
+  or calls Keybay `delete`; a later runtime reuses the stable DEK. Only local
+  forget keeps the controller draining and the lease held across caller-side
+  Keybay deletion and native directory cleanup, so another start cannot enter
+  the key/file handoff window.
 - Late reset-custody delete success proceeds to directory cleanup; late error
   preserves the directory and returns manual recovery, with admission blocked
   until either outcome settles.

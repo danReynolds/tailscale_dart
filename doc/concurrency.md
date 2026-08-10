@@ -25,10 +25,15 @@ Every native call enters the Go layer from one of two places:
    instance; public calls resolve that instance at call time rather than
    retaining method tear-offs from a dead isolate.
 2. **Helper isolates (concurrent).** The long, contended calls — `tcp.dial`,
-   `diag.ping`, `serve.forward`, `funnel.forward`, plus every HTTP client
-   request goroutine — run on short-lived `Isolate.run` helpers (data-plane
-   offloads are capped at 32 by the shared gate in the supported caller isolate;
-   see `lib/src/native_offload_gate.dart`). Native
+   `diag.ping`, `serve.forward`, `funnel.forward`, plus HTTP client request
+   admission while its runtime's data plane is not yet ready — run on
+   short-lived `Isolate.run` helpers (data-plane offloads are capped at 32 by
+   the shared gate in the supported caller isolate; see
+   `lib/src/native_offload_gate.dart`). Once the one-time publication bootstrap
+   succeeds, HTTP admission probes readiness per runtime token (a non-blocking
+   leaf FFI call) and starts the request directly on the caller isolate — the
+   native call can no longer block for that generation, and native still
+   re-checks token and readiness as the authority. Native
    secure-state preparation, probe, reset, quarantine, and quiescence calls also
    use helper isolates. Rescue and lifecycle custody calls deliberately bypass
    the data-plane gate so a saturated connection workload cannot block cleanup.

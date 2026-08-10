@@ -146,6 +146,18 @@ external ffi.Pointer<Utf8> duneFinishCustody(
   int cleanupSucceeded,
 );
 
+/// Non-blocking data-plane readiness probe for [runtimeToken].
+///
+/// Returns 1 only when the token identifies the current runtime and that
+/// runtime's one-time publication bootstrap has succeeded — the state in which
+/// `DuneHttpStart` can no longer block. Leaf call: native answers from
+/// in-memory runtime state and never calls back into Dart.
+@ffi.Native<ffi.Int32 Function(ffi.Uint64)>(
+  symbol: 'DuneDataPlaneReady',
+  isLeaf: true,
+)
+external int duneDataPlaneReady(int runtimeToken);
+
 /// Starts one outgoing tailnet HTTP request.
 ///
 /// Returns JSON:

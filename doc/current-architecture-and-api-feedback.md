@@ -17,9 +17,9 @@ The implementation is no longer a throwaway spike. HTTP, TCP, and UDP are
 implemented and validated through unit tests, package tests, Flutter demo tests,
 and Headscale E2E. R4d secure state and R5 publication ownership have focused Go
 and Dart coverage. The hosted R5 Funnel-tailnet and swap receipts passed on
-2026-08-10, but this remains pre-production/beta until crash/restart,
-platform Keybay/publication, backup-exclusion, sidecar-inventory, and remaining
-rearchitecture gates pass.
+2026-08-10, as did the macOS production-Keybay persisted process-crash/restart
+receipt. This remains pre-production/beta until the remaining platform Keybay/
+publication, backup-exclusion, sidecar-inventory, and rearchitecture gates pass.
 
 ## Summary
 
@@ -482,9 +482,9 @@ It is production-shaped in architecture, but not yet production-hardened.
 Known remaining work:
 
 - Real Keybay restart, failure, backup-exclusion, and full sidecar-inventory
-  receipts on each persistent platform.
-- The R5 crash/restart stale-config receipt; hosted Funnel-tailnet and
-  replacement tests passed 2026-08-10.
+  receipts on each remaining persistent platform. macOS CLI enrollment,
+  SIGKILL/restart, stale-publication cleanup, and explicit reset passed against
+  production Keybay and hosted Tailscale on 2026-08-10.
 - Remaining R7 transport/watcher ownership moves.
 - Windows support decision.
 - More HTTP fd server lifecycle/error tests.

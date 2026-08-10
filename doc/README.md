@@ -8,9 +8,9 @@ the checked-in code until their workstream lands.
 
 | Document | Status | Purpose |
 | --- | --- | --- |
-| [Rearchitecture plan](rearchitecture-plan.md) | In progress; R5 code present, evidence/release gates pending | North Star, decisions, live PR disposition, implementation order, and release gates. |
-| [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | R2-R5 code present; R6 evidence and R7 ownership pending | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
-| [Encrypted node state ADR](adr-encrypted-node-state.md) | Implemented through R4d; R6 evidence pending | Direct Keybay custody binding, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
+| [Rearchitecture plan](rearchitecture-plan.md) | In progress; R5 merged and R6 evidence underway | North Star, decisions, live PR disposition, implementation order, and release gates. |
+| [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | R2-R5 code present; macOS crash receipt passed; R6/R7 work pending | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
+| [Encrypted node state ADR](adr-encrypted-node-state.md) | Implemented through R4d; macOS production-Keybay receipt passed; remaining R6 evidence pending | Direct Keybay custody binding, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
 | [Current architecture and API feedback](current-architecture-and-api-feedback.md) | Current implementation | Existing Go/Dart/fd ownership and public API shape. |
 | [Concurrency model](concurrency.md) | Current implementation | Existing epoch, registries, lock order, and teardown commit protocol. |
 | [API status](api-status.md) | Current public surface | Namespace-by-namespace callable API and platform qualifications. |

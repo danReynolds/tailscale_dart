@@ -192,10 +192,12 @@ not part of the core embedded-private-network story.
 
 **Status:** implemented and desktop/server-qualified for local HTTP forwarding.
 The R5 hosted Funnel-tailnet and Serve/Funnel swap tests passed on 2026-08-10;
-mobile remains unqualified pending separate device handshakes and sidecar
-inventory. **Requires:** the operator has enabled HTTPS and Funnel for this node
-and an allowed Funnel port (usually 443, 8443, or 10000). Headscale doesn't
-support Funnel, so public ingress requires hosted Tailscale evidence.
+the shared ServeConfig first-`Up` reset also has a macOS production-Keybay
+process-crash/restart receipt through a private Serve mapping. Mobile remains
+unqualified pending separate device handshakes and sidecar inventory.
+**Requires:** the operator has enabled HTTPS and Funnel for this node and an
+allowed Funnel port (usually 443, 8443, or 10000). Headscale doesn't support
+Funnel, so public ingress requires hosted Tailscale evidence.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
@@ -257,10 +259,10 @@ port/path owns the handler and visibility mode; `close()` is exact-token and
 cannot remove a same-generation replacement or a mapping from a newer runtime.
 
 **Status:** implemented for local HTTP forwarding. Desktop/server HTTPS and the
-R5 swap/exact-handle sequence have hosted-Tailscale receipts, most recently
-2026-08-10. Crash/restart evidence and mobile HTTPS Serve remain pending; mobile
-requires its own real-device and sidecar receipts. Raw `ServeConfig` get/set
-remains a possible future escape hatch.
+R5 swap/exact-handle sequence plus a macOS production-Keybay persisted process-
+crash/restart sequence have hosted-Tailscale receipts, most recently 2026-08-10.
+Mobile HTTPS Serve remains pending and requires its own real-device and sidecar
+receipts. Raw `ServeConfig` get/set remains a possible future escape hatch.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |

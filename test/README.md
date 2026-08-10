@@ -39,6 +39,7 @@ layer that proves the behavior.
 | Live Tailscale Funnel | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_funnel_forward_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS/Funnel-enabled tailnet + `curl` | Validates `funnel.forward` end-to-end by proxying a loopback HTTP server and fetching its public Funnel URL. Uses DNS-over-HTTPS plus `curl --resolve` to avoid local negative DNS caching while preserving SNI/Host. |
 | Live Funnel tailnet reach | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_funnel_tailnet_reach_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS/Funnel-enabled tailnet | R5 receipt that a Funnel ServeConfig publication remains reachable from a second node inside the tailnet. |
 | Live Serve/Funnel swap | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_funnel_serve_swap_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS/Funnel-enabled tailnet + `curl` | R5 hosted replacement receipt: Serve -> Funnel -> Serve on one coordinate, including public Funnel ingress and stale exact-handle closes. |
+| Live publication crash/restart | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_publication_crash_restart_test.dart` | No, opt-in only; macOS | Tailscale SaaS + production macOS Keybay | R6 receipt: persist a Serve mapping, SIGKILL its process, bind a sentinel to the old local port, reopen the same encrypted identity without auth, and continuously prove stale ServeConfig never reaches the sentinel before or after package Running. |
 
 The default development loop is therefore:
 
@@ -56,7 +57,7 @@ tool/test_pr_gate.sh
 
 The live Tailscale suite is deliberately outside default CI. It is repeatable,
 but it depends on hosted Tailscale state and a secret with permissions to create
-auth keys, list/delete devices, and approve routes.
+and revoke auth keys, list/delete devices, and approve routes.
 
 ## Secure-State Evidence Boundary
 
@@ -75,10 +76,12 @@ passes `--ephemeral` to its headless `demo_core` peer, and the Flutter smoke app
 calls `up(ephemeral: true)`; those nodes use in-memory StateStores and never
 access Keybay.
 
-Real persistent Keybay enrollment/restart, stable-node recovery across process
-restart, platform backup exclusion, fail-closed platform permissions, crash
-recovery, and the complete plaintext sidecar inventory remain R6 evidence.
-They must be collected on each claimed persistent platform; a green Linux PR
+The macOS CLI production-Keybay receipt now proves fresh persistent enrollment,
+same-node recovery without an auth key after SIGKILL, automatic stale-
+publication cleanup, and explicit DEK/state-subtree reset. Equivalent real-
+Keybay evidence on each other claimed persistent platform, platform backup
+exclusion, fail-closed platform permissions, custody fault injection, and the
+complete plaintext sidecar inventory remain R6 evidence. A green Linux PR
 gate, Headscale E2E run, or smoke matrix is not a substitute.
 
 ## Placement Rules
@@ -113,6 +116,8 @@ TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
   dart test test/live_tailscale/live_funnel_tailnet_reach_test.dart
 TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
   dart test test/live_tailscale/live_funnel_serve_swap_test.dart
+TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
+  dart test test/live_tailscale/live_publication_crash_restart_test.dart
 tool/test_pr_gate.sh
 tool/test_local_full.sh
 cd packages/demo_core && dart test

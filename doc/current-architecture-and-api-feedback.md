@@ -485,7 +485,7 @@ Known remaining work:
   receipts on each remaining persistent platform. macOS CLI enrollment,
   SIGKILL/restart, stale-publication cleanup, and explicit reset passed against
   production Keybay and hosted Tailscale on 2026-08-10.
-- Remaining R7 transport/watcher ownership moves.
+- R8 identity-cache benchmark decision and R9 typed-error conformance.
 - Windows support decision.
 - More HTTP fd server lifecycle/error tests.
 - More stress tests for backpressure and resource limits.

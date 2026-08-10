@@ -11,8 +11,10 @@ the current repository and open pull requests, Keybay's current platform
 contract, and Tailscale v1.102.2 source behavior.
 
 The current source now contains the `nodeRuntime`/supervisor foundations,
-R4d's atomic secure-state cutover, and R5's runtime-owned publication manager,
-first-`Up` readiness gate, and exact publication handles. Persistent nodes use
+R4d's atomic secure-state cutover, R5's runtime-owned publication manager,
+first-`Up` readiness gate, and exact publication handles, and the R7a-R7c
+ownership moves: the outbound HTTP transport, the TCP/UDP/HTTP fd registries,
+and the state watcher now live on `nodeRuntime` (2026-08-10). Persistent nodes use
 the Keybay-backed encrypted StateStore, ephemeral nodes use an in-memory Store,
 local forget is explicit, and the SQLite runtime/dependency are gone. This does
 not mark the plan or a release complete. Hosted Funnel-tailnet and replacement
@@ -346,8 +348,9 @@ Each row is intentionally issue-sized. The dependency column is a merge-order
 constraint, not an instruction to combine the work into one large PR.
 
 Implementation snapshot: R2/R3 lifecycle foundations, R4a-R4d secure state,
-R5 publication convergence, and the first macOS R6 crash/restart receipt are
-present in the current source. The table
+R5 publication convergence, the first macOS R6 crash/restart receipt, and the
+R7a-R7c transport/registry/watcher ownership moves are present in the current
+source. The table
 continues to state each workstream's full acceptance result; code presence does
 not satisfy uncollected hosted, platform, or release receipts.
 

@@ -684,6 +684,15 @@ LocalAPI `WhoIs` on every datagram; evaluate any UDP simplification separately.
 
 ### R9 — direct APIs and error conformance
 
+**Status 2026-08-10:** WhoIs not-found classifies by the exported
+`local.ErrPeerNotFound` sentinel, and the package's own in-process
+serve/funnel precondition failures wrap a typed sentinel so featureDisabled
+no longer depends on prose on the live path. Two recorded deviations remain
+in `go/localapi.go` with rationale, revisit triggers, and real-string tests:
+the transient exit-node-suggestion match (upstream's handler exposes no
+typed/status signal) and the prose backstop for backend-originated serve
+errors. The direct-API audit rows below remain open.
+
 - Replace full status calls with `CertDomains` or `TailscaleIPs` only where the
   narrower result is sufficient and the runtime is fully initialized.
 - Keep LocalAPI for state, health, authentication URL, peer inventory, prefs,

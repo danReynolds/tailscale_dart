@@ -203,6 +203,34 @@ func TestClassifyLocalAPIError_HTTPStatusCodes(t *testing.T) {
 	}
 }
 
+func TestClassifyLocalAPIError_TypedServeFeatureUnavailable(t *testing.T) {
+	// The message deliberately contains no backstop phrasing, proving the
+	// classification comes from the typed sentinel, not prose.
+	err := fmt.Errorf("%w: capability xyz missing", errServeFeatureUnavailable)
+	code, status := classifyLocalAPIError(err)
+	if code != "featureDisabled" || status != 0 {
+		t.Fatalf("typed serve-feature error = (%q, %d), want (featureDisabled, 0)", code, status)
+	}
+}
+
+func TestApplyServeForwardFeatureErrorsAreTyped(t *testing.T) {
+	st := serveTestStatus()
+	st.Self.CapMap = nil // drop CapabilityHTTPS
+	_, err := applyServeForward(new(ipn.ServeConfig), st, serveForwardPayload{
+		TailnetPort:  443,
+		LocalAddress: "127.0.0.1",
+		LocalPort:    3000,
+		Path:         "/",
+		HTTPS:        true,
+	})
+	if !errors.Is(err, errServeFeatureUnavailable) {
+		t.Fatalf("HTTPS-capability failure must wrap the typed sentinel; got %v", err)
+	}
+	if code, _ := classifyLocalAPIError(err); code != "featureDisabled" {
+		t.Fatalf("HTTPS-capability failure code = %q, want featureDisabled", code)
+	}
+}
+
 func TestClassifyLocalAPIError_FeatureDisabledFromMessage(t *testing.T) {
 	// The live path: the exact strings tailscale.com's ipn/serve.go
 	// NodeCanFunnel returns (both variants). If upstream rewords these, this
@@ -214,6 +242,7 @@ func TestClassifyLocalAPIError_FeatureDisabledFromMessage(t *testing.T) {
 	// Speculative backstop phrasings (not tied to a specific current upstream
 	// error — classifyLocalAPIError documents them as such).
 	speculative := []string{
+		"Unable to turn on Funnel while shields-up is enabled",
 		"feature not enabled for this node",
 		"you must enable this in the admin panel",
 		"this capability is disabled by the operator",

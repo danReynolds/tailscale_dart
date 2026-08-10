@@ -18,7 +18,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=JetBrains+Mono:wght@500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&amp;family=JetBrains+Mono:wght@500;700&amp;display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css" />
@@ -38,6 +38,7 @@
         <a href="#examples">Examples</a>
         <a href="#support">Support table</a>
         <a href="#architecture">Architecture</a>
+        <a href="https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md">Target plan</a>
         <a href="api/">Dart docs</a>
         <a href="https://github.com/danReynolds/tailscale_dart">GitHub</a>
       </nav>
@@ -76,7 +77,7 @@
             </div>
             <div>
               <dt>Platforms</dt>
-              <dd>macOS, iOS, Android, Linux. Windows is intentionally not supported yet.</dd>
+              <dd>Core networking: macOS, iOS, Android, Linux. Mobile TLS/Funnel is not yet supported.</dd>
             </div>
           </dl>
         </div>
@@ -111,6 +112,9 @@ print(res.statusCode);</code></pre>
             This is intentionally explicit. Implemented means there is a typed
             Dart API and coverage in unit, integration, Headscale, or live
             Tailscale tests depending on what the feature requires.
+            Default tsnet TLS and Funnel certificate fetching is disabled
+            upstream on iOS and Android, so those HTTPS surfaces are currently
+            desktop/server-only.
           </p>
         </div>
         <p class="table-caption">
@@ -156,13 +160,13 @@ print(res.statusCode);</code></pre>
                 <td>Raw transports</td>
                 <td><code>tcp</code>, <code>udp</code>, <code>tls.bind</code></td>
                 <td><span class="status done">Implemented</span></td>
-                <td>Package-native connections/datagrams over Go-owned tailnet sockets.</td>
+                <td>Package-native connections/datagrams over Go-owned tailnet sockets. TCP/UDP are the mobile core; TLS termination is currently desktop/server-only.</td>
               </tr>
               <tr>
                 <td>Serve and Funnel</td>
                 <td><code>serve.forward</code>, <code>funnel.forward</code></td>
                 <td><span class="status done">Implemented</span></td>
-                <td>Forward an existing loopback HTTP server. Serve includes tailnet identity headers; Funnel is public and does not.</td>
+                <td>Forward an existing loopback HTTP server. Funnel is desktop/server-only; mobile HTTPS Serve still needs its own real-device receipt.</td>
               </tr>
               <tr>
                 <td>Tailscale Services</td>
@@ -243,6 +247,7 @@ print(res.statusCode);</code></pre>
             <p class="example-note">
               Examples assume <code>Tailscale.init</code> has already run and
               <code>await ts.up(...)</code> reached a stable state.
+              TLS and Funnel examples are currently desktop/server-only.
             </p>
           </div>
           <div class="code-window" id="example-panel" role="tabpanel" aria-labelledby="example-tab-quickstart" tabindex="0">
@@ -264,7 +269,11 @@ print(res.statusCode);</code></pre>
             Control calls cross a worker isolate into Go. High-volume transport
             I/O uses fd capabilities and a shared POSIX reactor. Forwarding APIs
             are different by design: they publish a local HTTP server the app
-            already owns.
+            already owns. The
+            <a href="https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md">accepted target plan</a>
+            adds per-lifecycle ownership, fail-safe teardown, and Keybay-custodied
+            encrypted node state; those changes are not all present in the
+            current release.
           </p>
         </div>
         <div class="architecture-grid">
@@ -336,7 +345,7 @@ print(res.statusCode);</code></pre>
           <div class="architecture-notes">
             <article>
               <h3>Go owns Tailscale state</h3>
-              <p>Authentication, WireGuard, ACLs, MagicDNS, DERP, TLS certs, and socket establishment stay inside upstream tsnet.</p>
+              <p>Authentication, WireGuard, ACLs, MagicDNS, DERP, TLS certs, and socket establishment stay inside upstream tsnet. Current 0.8.0 state paths are created owner-only and tightened best-effort, but are not yet application-layer encrypted or fail-closed on chmod verification.</p>
             </article>
             <article>
               <h3>Dart owns application shape</h3>
@@ -362,11 +371,12 @@ print(res.statusCode);</code></pre>
             <p>
               Requires Dart 3.10.4+, Go 1.26+ (or Go 1.25+ with
               <code>GOTOOLCHAIN=auto</code>), and the native toolchain for the
-              target platform. Supported today: Android, iOS, macOS, Linux.
+              target platform. Core networking is supported today on Android,
+              iOS, macOS, and Linux; see the support table for HTTPS caveats.
             </p>
           </div>
           <pre><code>dependencies:
-  tailscale: ^0.4.0</code></pre>
+  tailscale: ^0.8.0</code></pre>
           <div class="install-actions">
             <a class="button button-primary" href="https://pub.dev/packages/tailscale">Open pub.dev</a>
             <a class="button button-secondary" href="api/">Generated Dart docs</a>

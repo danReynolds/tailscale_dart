@@ -68,7 +68,9 @@ socket.datagrams.listen((datagram) async {
   },
   tls: {
     title: "tls_listener.dart",
-    code: `final listener = await ts.tls.bind(port: 443);
+    code: `// Desktop/server only; default tsnet certificate fetching is
+// unavailable on iOS and Android.
+final listener = await ts.tls.bind(port: 443);
 final domains = await ts.tls.domains();
 
 print('serving \${domains.first}');
@@ -105,7 +107,8 @@ print(server.tailnet);`,
   },
   funnel: {
     title: "serve_funnel.dart",
-    code: `// Forward an existing loopback HTTP server.
+    code: `// Desktop/server only for Funnel; mobile is not yet supported.
+// Forward an existing loopback HTTP server.
 final serve = await ts.serve.forward(
   tailnetPort: 443,
   localPort: 8080,

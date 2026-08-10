@@ -17,6 +17,12 @@ import 'serve_validation.dart';
 /// the node must have the Funnel node attribute, and the requested port must be
 /// allowed by policy.
 ///
+/// The currently shipped direct `ListenFunnel` certificate path is not
+/// supported on iOS or Android because upstream mobile builds disable the
+/// LocalAPI certificate endpoint it uses. A planned ServeConfig-based mobile
+/// path remains unqualified until real-device HTTPS and sidecar-inventory
+/// receipts pass.
+///
 /// Unlike [Serve.forward], public Funnel requests do not include Tailscale
 /// identity headers. Authenticate public callers at the forwarded service layer
 /// if the endpoint is not intentionally anonymous.

@@ -20,9 +20,10 @@ typedef TlsDomainsFn = Future<List<String>> Function();
 ///
 /// Reached via [Tailscale.tls]. Requires the tailnet operator to have enabled
 /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) and
-/// [HTTPS](https://tailscale.com/kb/1153/enabling-https). Use [domains] as a
-/// preflight; an empty result means the tailnet cannot currently serve
-/// auto-provisioned TLS certs.
+/// [HTTPS](https://tailscale.com/kb/1153/enabling-https). [domains] is
+/// read-only certificate-name discovery, not a platform-support preflight: a
+/// non-empty result does not prove that [bind] can acquire a certificate on the
+/// current platform.
 abstract class Tls {
   /// Accepts inbound HTTPS/TLS connections on the tailnet.
   ///
@@ -36,6 +37,11 @@ abstract class Tls {
   /// package-native plaintext [TailscaleConnection] objects, not
   /// `dart:io` sockets. Certificate acquisition and renewal stay inside the
   /// embedded Go runtime; Dart does not receive cert-rotation events.
+  ///
+  /// This direct certificate/listener path is currently supported only on
+  /// desktop/server targets. Upstream iOS and Android builds disable the
+  /// LocalAPI certificate endpoint used by `ListenTLS`, so [bind] is not a
+  /// supported mobile API even when [domains] is non-empty.
   Future<TailscaleListener> bind({required int port, String? address});
 
   /// Subject Alternative Names present in the auto-provisioned certificate —
@@ -43,7 +49,8 @@ abstract class Tls {
   ///
   /// Empty when [MagicDNS](https://tailscale.com/kb/1081/magicdns) or
   /// [HTTPS](https://tailscale.com/kb/1153/enabling-https) is disabled on the
-  /// tailnet.
+  /// tailnet. A non-empty result reports eligible names only; it does not
+  /// qualify [bind] on iOS or Android.
   Future<List<String>> domains();
 }
 

@@ -1,3 +1,37 @@
+## Unreleased — rearchitecture in progress
+
+This intermediate state is not releaseable: runtime fail-safe work has landed,
+but the plaintext SQLite StateStore remains until the atomic Keybay-backed
+encrypted-state cutover.
+
+**Lifecycle hardening:**
+
+- A caller-isolate supervisor now owns replaceable worker instances and exact
+  native runtime tokens. Unexpected worker exit quarantines the matching
+  generation, joins its watcher/background publishers, emits one structured
+  incident, and permits a later clean worker binding.
+- Completed `down()`/`logout()` results remain token-retained until the caller
+  isolate acknowledges them, so worker death between native completion and
+  Dart delivery cannot swallow cleanup errors or falsify logout disposition.
+- Failed Server/Store cleanup, startup unwind, or final logout disposition now
+  returns `runtimeCleanupFailed` and keeps lifecycle admission closed until
+  process restart. Teardown also publishes an empty peer snapshot so existing
+  subscribers cannot retain a stale tailnet inventory.
+- `up(timeout:)` quarantines its generation before reporting
+  `startupTimeout`; a non-cancellable late `Server.Start` can no longer leave
+  an active node behind the failed Future.
+- `logout()` is remote-first. Failed or timed-out revocation closes the
+  possibly-mutated runtime, preserves local state, and reports
+  `logoutIndeterminate`. Confirmed success lets upstream remove the logical
+  profile but still preserves the lower-level StateStore container; physical
+  deletion is reserved for the later explicit local-forget operation. A
+  temporary runtime reconstructed after `down()` remains hidden from public
+  state streams, so successful idle logout emits `noState` without a phantom
+  second `stopped` transition.
+- Idle logout reconstruction uses only the exact configuration proven applied
+  by a successful `Server.Start`; a fresh failed attempt invalidates any older
+  cached tuple instead of risking the wrong control plane.
+
 ## 0.8.1
 
 Critical Android fix. Anyone running 0.8.0 on Android should upgrade.

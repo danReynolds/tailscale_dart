@@ -28,11 +28,13 @@ void _workerEntrypoint(SendPort sendPort) {
 
       try {
         final parsed = jsonDecode(message) as Map<String, dynamic>;
+        final runtimeToken = parsed['runtimeToken'] as int? ?? 0;
 
         if (parsed['type'] == 'error') {
           sendPort.send(
             _WorkerRuntimeErrorEvent(
-              TailscaleRuntimeError.fromPushPayload(parsed),
+              runtimeToken: runtimeToken,
+              error: TailscaleRuntimeError.fromPushPayload(parsed),
             ),
           );
           return;
@@ -40,14 +42,19 @@ void _workerEntrypoint(SendPort sendPort) {
 
         if (parsed['type'] == 'status') {
           final state = NodeState.parse(parsed['state'] as String?);
-          sendPort.send(_WorkerStateEvent(state: state));
+          sendPort.send(
+            _WorkerStateEvent(runtimeToken: runtimeToken, state: state),
+          );
           return;
         }
 
         if (parsed['type'] == 'peers') {
           final raw = parsed['peers'] as List<dynamic>? ?? const [];
           sendPort.send(
-            _WorkerPeersEvent(peers: TailscaleNode.listFromJson(raw)),
+            _WorkerPeersEvent(
+              runtimeToken: runtimeToken,
+              peers: TailscaleNode.listFromJson(raw),
+            ),
           );
         }
       } catch (_) {
@@ -62,6 +69,7 @@ void _workerEntrypoint(SendPort sendPort) {
         switch (message) {
           case _WorkerStartCommand request:
             final _WorkerStartCommand(
+              :requestToken,
               :authKey,
               :controlUrl,
               :ephemeral,
@@ -87,6 +95,7 @@ void _workerEntrypoint(SendPort sendPort) {
               final result =
                   _callNativeJson(
                         () => native.duneStart(
+                          requestToken,
                           hostnamePtr!,
                           authKeyPtr!,
                           controlUrlPtr!,
@@ -98,11 +107,22 @@ void _workerEntrypoint(SendPort sendPort) {
                       as Map<String, dynamic>;
 
               final alreadyActive = result['alreadyActive'] == true;
+              final runtimeToken = result['runtimeToken'] as int? ?? 0;
+              if (runtimeToken <= 0) {
+                throw const TailscaleUpException(
+                  'Native runtime did not return its preparation token.',
+                );
+              }
               if (!alreadyActive) {
                 native.duneStartWatch();
               }
 
-              sendPort.send(_WorkerStartResponse(alreadyActive: alreadyActive));
+              sendPort.send(
+                _WorkerStartResponse(
+                  alreadyActive: alreadyActive,
+                  runtimeToken: runtimeToken,
+                ),
+              );
             } finally {
               if (hostnamePtr != null) calloc.free(hostnamePtr);
               if (authKeyPtr != null) calloc.free(authKeyPtr);
@@ -399,20 +419,56 @@ void _workerEntrypoint(SendPort sendPort) {
             } finally {
               calloc.free(payloadPtr);
             }
-          case _WorkerDownCommand():
-            native.duneStopWatch();
-            native.duneStop();
-
-            sendPort.send(const _WorkerAckResponse(_WorkerOperation.down));
-          case _WorkerLogoutCommand():
-            native.duneStopWatch();
-
-            _callNativeJson(
-              native.duneLogout,
-              onError: TailscaleLogoutException.new,
+          case _WorkerDownCommand(
+            :final runtimeToken,
+            :final terminateAfterNativeResult,
+          ):
+            final result =
+                _decodeNativeJson(() => native.duneStop(runtimeToken))
+                    as Map<String, dynamic>;
+            if (terminateAfterNativeResult) Isolate.exit();
+            sendPort.send(
+              _WorkerAckResponse(
+                _WorkerOperation.down,
+                runtimeToken: result['token'] as int? ?? runtimeToken,
+                matched: result['matched'] == true,
+                started: result['started'] == true,
+                emitStopped: result['emitStopped'] == true,
+                cleanupFailed: result['cleanupFailed'] == true,
+                errorMessage: result['error'] as String?,
+                errorCode: _parseErrorCode(result['code'] as String?),
+                statusCode: result['statusCode'] as int?,
+              ),
             );
-
-            sendPort.send(const _WorkerAckResponse(_WorkerOperation.logout));
+          case _WorkerLogoutCommand request:
+            final snapshotPtr = request.hostNetworkSnapshot.toNativeUtf8();
+            late final Map<String, dynamic> result;
+            try {
+              result =
+                  _decodeNativeJson(
+                        () => native.duneLogout(
+                          request.runtimeToken,
+                          snapshotPtr,
+                        ),
+                      )
+                      as Map<String, dynamic>;
+            } finally {
+              calloc.free(snapshotPtr);
+            }
+            if (request.terminateAfterNativeResult) Isolate.exit();
+            sendPort.send(
+              _WorkerAckResponse(
+                _WorkerOperation.logout,
+                runtimeToken: result['token'] as int? ?? request.runtimeToken,
+                started: result['started'] == true,
+                emitStopped: result['emitStopped'] == true,
+                noState: result['noState'] == true,
+                cleanupFailed: result['cleanupFailed'] == true,
+                errorMessage: result['error'] as String?,
+                errorCode: _parseErrorCode(result['code'] as String?),
+                statusCode: result['statusCode'] as int?,
+              ),
+            );
         }
       } catch (error) {
         final errorMessage = error is TailscaleException
@@ -484,7 +540,7 @@ dynamic _callNativeJson(
   ffi.Pointer<Utf8> Function() fn, {
   required _ErrorFactory onError,
 }) {
-  final result = jsonDecode(_callNativeString(fn));
+  final result = _decodeNativeJson(fn);
   if (result is Map<String, dynamic>) {
     final error = result['error'] as String?;
     if (error != null) {
@@ -498,10 +554,18 @@ dynamic _callNativeJson(
   return result;
 }
 
+dynamic _decodeNativeJson(ffi.Pointer<Utf8> Function() fn) =>
+    jsonDecode(_callNativeString(fn));
+
 TailscaleErrorCode _parseErrorCode(String? raw) => switch (raw) {
   'lifecycleBusy' => TailscaleErrorCode.lifecycleBusy,
+  'runtimeCleanupFailed' => TailscaleErrorCode.runtimeCleanupFailed,
   'configurationMismatch' => TailscaleErrorCode.configurationMismatch,
   'staleRuntime' => TailscaleErrorCode.staleRuntime,
+  'startupAbandoned' => TailscaleErrorCode.startupAbandoned,
+  'startupTimeout' => TailscaleErrorCode.startupTimeout,
+  'logoutIndeterminate' => TailscaleErrorCode.logoutIndeterminate,
+  'workerTerminated' => TailscaleErrorCode.workerTerminated,
   'notFound' => TailscaleErrorCode.notFound,
   'forbidden' => TailscaleErrorCode.forbidden,
   'conflict' => TailscaleErrorCode.conflict,

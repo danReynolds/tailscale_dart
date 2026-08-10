@@ -22,6 +22,12 @@ import (
 // tsnet.Server against the same process-owned state.
 var ErrLifecycleBusy = errors.New("tailscale lifecycle busy")
 
+// ErrRuntimeCleanupFailed means a runtime-owned Server, Store, or persisted
+// state reset did not finish cleanly. Native lifecycle admission remains
+// closed for the rest of the process so a replacement cannot overlap unknown
+// resources or consume partially removed state.
+var ErrRuntimeCleanupFailed = errors.New("tailscale runtime cleanup failed")
+
 // ErrConfigurationMismatch means an immutable process or active-runtime
 // setting differs from the value that already owns this process.
 var ErrConfigurationMismatch = errors.New("tailscale configuration mismatch")
@@ -29,6 +35,16 @@ var ErrConfigurationMismatch = errors.New("tailscale configuration mismatch")
 // ErrRuntimeStale means an operation captured a runtime generation that has
 // since been detached or canceled.
 var ErrRuntimeStale = errors.New("tailscale runtime stopped or stale")
+
+// ErrStartupAbandoned means the supervisor quarantined a preparation token
+// while native construction was still in flight. A successful late Start is
+// closed instead of becoming current.
+var ErrStartupAbandoned = errors.New("tailscale startup abandoned")
+
+// ErrLogoutIndeterminate means upstream logout may have changed remote or
+// in-memory state, but its result was not confirmed. Local state is retained
+// and the affected runtime is closed so a later fresh start can reconcile.
+var ErrLogoutIndeterminate = errors.New("tailscale logout indeterminate")
 
 type runtimeConfig struct {
 	hostname   string
@@ -41,6 +57,7 @@ type runtimeConfig struct {
 // now, but their teardown is centralized in close.
 type nodeRuntime struct {
 	generation uint64
+	token      uint64
 	config     runtimeConfig
 
 	ctx    context.Context
@@ -54,14 +71,17 @@ type nodeRuntime struct {
 
 	preparationDone     chan struct{}
 	preparationDoneOnce sync.Once
+	preparationErr      error
 	closeOnce           sync.Once
 	closeErr            error
+	abandoned           bool // guarded by runtimeController.mu
 }
 
-func newNodeRuntime(generation uint64, config runtimeConfig) *nodeRuntime {
+func newNodeRuntime(generation, token uint64, config runtimeConfig) *nodeRuntime {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &nodeRuntime{
 		generation:      generation,
+		token:           token,
 		config:          config,
 		ctx:             ctx,
 		cancel:          cancel,
@@ -70,7 +90,14 @@ func newNodeRuntime(generation uint64, config runtimeConfig) *nodeRuntime {
 }
 
 func (r *nodeRuntime) finishPreparation() {
-	r.preparationDoneOnce.Do(func() { close(r.preparationDone) })
+	r.finishPreparationWithError(nil)
+}
+
+func (r *nodeRuntime) finishPreparationWithError(err error) {
+	r.preparationDoneOnce.Do(func() {
+		r.preparationErr = err
+		close(r.preparationDone)
+	})
 }
 
 func (r *nodeRuntime) validateCurrent() error {
@@ -125,8 +152,39 @@ func (r *nodeRuntime) close() error {
 }
 
 type drainingRuntime struct {
-	runtime *nodeRuntime
-	done    chan struct{}
+	runtime          *nodeRuntime
+	done             chan struct{}
+	err              error
+	receiptOperation string
+}
+
+// logoutOperation keeps lifecycle admission closed after the matching runtime
+// is detached. Its done channel is closed only after the caller has completed
+// upstream logout, runtime close, and the final retained-StateStore
+// disposition.
+type logoutOperation struct {
+	token      uint64
+	done       chan struct{}
+	cleanupErr error
+}
+
+type preparationOutcome struct {
+	err error
+}
+
+const (
+	lifecycleOperationDown   = "down"
+	lifecycleOperationLogout = "logout"
+)
+
+type lifecycleReceipt struct {
+	result RuntimeCloseResult
+	err    error
+}
+
+type runtimeCleanupFailure struct {
+	token uint64
+	err   error
 }
 
 // runtimeController is the single owner of candidate/current/draining runtime
@@ -135,9 +193,15 @@ type runtimeController struct {
 	mu          sync.Mutex
 	configureMu sync.Mutex
 
-	candidate *nodeRuntime
-	current   *nodeRuntime
-	draining  *drainingRuntime
+	candidate             *nodeRuntime
+	current               *nodeRuntime
+	draining              *drainingRuntime
+	logout                *logoutOperation
+	abandonedTokens       map[uint64]struct{}
+	completedPreparations map[uint64]preparationOutcome
+	completedLifecycle    map[uint64]lifecycleReceipt
+	cleanupFailure        *runtimeCleanupFailure
+	lastConfig            *runtimeConfig
 
 	configured    bool
 	stateRoot     string
@@ -365,10 +429,22 @@ func setRawDiscoCompatibility() error {
 	return nil
 }
 
-func (c *runtimeController) reserve(config runtimeConfig) (*nodeRuntime, *nodeRuntime, error) {
+func (c *runtimeController) reserve(token uint64, config runtimeConfig) (*nodeRuntime, *nodeRuntime, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if token == 0 {
+		return nil, nil, fmt.Errorf("runtime preparation token must be non-zero")
+	}
+	if err := c.cleanupAdmissionErrorLocked(); err != nil {
+		return nil, nil, err
+	}
+	if _, abandoned := c.abandonedTokens[token]; abandoned {
+		return nil, nil, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
+	}
+	if c.logout != nil {
+		return nil, nil, fmt.Errorf("%w: logout token %d is still in progress", ErrLifecycleBusy, c.logout.token)
+	}
 	if c.candidate != nil || c.draining != nil {
 		return nil, nil, fmt.Errorf("%w: another node lifecycle transition is in progress", ErrLifecycleBusy)
 	}
@@ -379,30 +455,138 @@ func (c *runtimeController) reserve(config runtimeConfig) (*nodeRuntime, *nodeRu
 		return nil, nil, fmt.Errorf("%w: call down before changing hostname, control URL, or ephemeral mode", ErrConfigurationMismatch)
 	}
 
-	candidate := newNodeRuntime(nodeEpoch.Load(), config)
+	candidate := newNodeRuntime(nodeEpoch.Load(), token, config)
 	c.candidate = candidate
+	// A fresh Server.Start may persist Hostname/ControlURL before the runtime
+	// can commit. Invalidate any older tuple now; rememberStartedConfig restores
+	// only a configuration that a successful Start proved was applied.
+	c.lastConfig = nil
 	return candidate, nil, nil
+}
+
+func (c *runtimeController) cleanupAdmissionErrorLocked() error {
+	failure := c.cleanupFailure
+	if failure == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: token %d left native cleanup incomplete; restart the process before further lifecycle work: %v",
+		ErrRuntimeCleanupFailed,
+		failure.token,
+		failure.err,
+	)
+}
+
+func runtimeCleanupAdmissionError() error {
+	runtimes.mu.Lock()
+	defer runtimes.mu.Unlock()
+	return runtimes.cleanupAdmissionErrorLocked()
+}
+
+func (c *runtimeController) rememberStartedConfig(candidate *nodeRuntime) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if candidate != nil && c.candidate == candidate {
+		config := candidate.config
+		c.lastConfig = &config
+	}
 }
 
 func (c *runtimeController) commit(candidate *nodeRuntime) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if candidate.abandoned {
+		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
+	}
 	if c.candidate != candidate || c.current != nil || c.draining != nil {
 		return fmt.Errorf("%w: runtime reservation is no longer current", ErrLifecycleBusy)
 	}
 	c.candidate = nil
 	c.current = candidate
+	config := candidate.config
+	c.lastConfig = &config
 	candidate.finishPreparation()
 	return nil
 }
 
-func (c *runtimeController) release(candidate *nodeRuntime) {
+func (c *runtimeController) isAbandoned(candidate *nodeRuntime) bool {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	return candidate == nil || candidate.abandoned || c.candidate != candidate
+}
+
+func (c *runtimeController) release(candidate *nodeRuntime, cleanupErr error) error {
+	c.mu.Lock()
+	cleanupErr = c.recordCleanupFailureLocked(candidate.token, cleanupErr)
 	if c.candidate == candidate {
 		c.candidate = nil
+		if candidate.abandoned {
+			if c.completedPreparations == nil {
+				c.completedPreparations = make(map[uint64]preparationOutcome)
+			}
+			c.completedPreparations[candidate.token] = preparationOutcome{err: cleanupErr}
+		}
 	}
 	c.mu.Unlock()
-	candidate.finishPreparation()
+	candidate.finishPreparationWithError(cleanupErr)
+	return cleanupErr
+}
+
+func cleanupFailureError(err error) error {
+	if err == nil || errors.Is(err, ErrRuntimeCleanupFailed) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrRuntimeCleanupFailed, err)
+}
+
+func (c *runtimeController) recordCleanupFailureLocked(token uint64, err error) error {
+	err = cleanupFailureError(err)
+	if err != nil && c.cleanupFailure == nil {
+		c.cleanupFailure = &runtimeCleanupFailure{token: token, err: err}
+	}
+	return err
+}
+
+func (c *runtimeController) recordCleanupFailure(token uint64, err error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.recordCleanupFailureLocked(token, err)
+}
+
+func (c *runtimeController) recordLifecycleReceiptLocked(receipt lifecycleReceipt) {
+	if receipt.result.Token == 0 {
+		return
+	}
+	if c.completedLifecycle == nil {
+		c.completedLifecycle = make(map[uint64]lifecycleReceipt)
+	}
+	c.completedLifecycle[receipt.result.Token] = receipt
+}
+
+func (c *runtimeController) recordLifecycleReceipt(receipt lifecycleReceipt) {
+	c.mu.Lock()
+	c.recordLifecycleReceiptLocked(receipt)
+	c.mu.Unlock()
+}
+
+func (c *runtimeController) takeLifecycleReceiptLocked(token uint64) (lifecycleReceipt, bool) {
+	receipt, ok := c.completedLifecycle[token]
+	if ok {
+		delete(c.completedLifecycle, token)
+	}
+	return receipt, ok
+}
+
+// AcknowledgeLifecycleResult retires a terminal receipt only after the caller
+// isolate has received it. If the worker exits first, AbandonRuntime consumes
+// the same receipt and returns the exact disposition instead.
+func AcknowledgeLifecycleResult(token uint64) {
+	if token == 0 {
+		return
+	}
+	runtimes.mu.Lock()
+	delete(runtimes.completedLifecycle, token)
+	runtimes.mu.Unlock()
 }
 
 func currentRuntime() *nodeRuntime {
@@ -411,44 +595,345 @@ func currentRuntime() *nodeRuntime {
 	return runtimes.current
 }
 
+func lastRuntimeConfig() (runtimeConfig, error) {
+	runtimes.mu.Lock()
+	defer runtimes.mu.Unlock()
+	if runtimes.lastConfig == nil {
+		return runtimeConfig{}, fmt.Errorf(
+			"%w: persisted identity cannot be safely reopened for logout; start it once with its original hostname, control URL, and ephemeral mode",
+			ErrConfigurationMismatch,
+		)
+	}
+	return *runtimes.lastConfig, nil
+}
+
+// beginLogout reserves the exact current runtime through both upstream logout
+// and runtime close. The StateStore container is deliberately retained;
+// explicit local forget/reset owns physical key and file deletion.
+func (c *runtimeController) beginLogout(runtime *nodeRuntime) (*logoutOperation, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if runtime == nil || runtime.token == 0 || c.current != runtime || runtime.ctx.Err() != nil {
+		return nil, fmt.Errorf("%w: logout runtime is no longer current", ErrRuntimeStale)
+	}
+	if c.logout != nil {
+		return nil, fmt.Errorf("%w: logout token %d is already in progress", ErrLifecycleBusy, c.logout.token)
+	}
+	op := &logoutOperation{token: runtime.token, done: make(chan struct{})}
+	c.logout = op
+	return op, nil
+}
+
+func (c *runtimeController) finishLogout(
+	op *logoutOperation,
+	result LogoutResult,
+	operationErr error,
+	cleanupErr error,
+) {
+	if op == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.logout == op {
+		cleanupErr = c.recordCleanupFailureLocked(op.token, cleanupErr)
+		if op.cleanupErr == nil {
+			op.cleanupErr = cleanupErr
+		}
+		c.recordLifecycleReceiptLocked(lifecycleReceipt{
+			result: RuntimeCloseResult{
+				Token:         result.Token,
+				Operation:     lifecycleOperationLogout,
+				Matched:       true,
+				Started:       result.Started,
+				EmitStopped:   result.EmitStopped,
+				NoState:       result.NoState,
+				CleanupFailed: result.CleanupFailed,
+			},
+			err: operationErr,
+		})
+		c.logout = nil
+		close(op.done)
+	}
+	c.mu.Unlock()
+}
+
+// RuntimeCloseResult is the event-silent native lifecycle result returned to
+// the Dart supervisor. Started records an actual native detach; EmitStopped is
+// the narrower caller-visible stream transition. Pending means a
+// non-cancellable Server.Start is still unwinding; the token is already
+// quarantined and cannot commit or admit a replacement runtime.
+type RuntimeCloseResult struct {
+	Token         uint64 `json:"token"`
+	Operation     string `json:"operation,omitempty"`
+	Matched       bool   `json:"matched"`
+	Started       bool   `json:"started"`
+	EmitStopped   bool   `json:"emitStopped,omitempty"`
+	Pending       bool   `json:"pending"`
+	NoState       bool   `json:"noState,omitempty"`
+	CleanupFailed bool   `json:"cleanupFailed,omitempty"`
+}
+
+func detachRuntimeLocked(runtime *nodeRuntime, receiptOperation string) *drainingRuntime {
+	runtimes.current = nil
+	nodeEpoch.Add(1)
+	draining := &drainingRuntime{
+		runtime:          runtime,
+		done:             make(chan struct{}),
+		receiptOperation: receiptOperation,
+	}
+	runtimes.draining = draining
+	return draining
+}
+
+func finishRuntimeDrain(draining *drainingRuntime, err error) error {
+	runtimes.mu.Lock()
+	if runtimes.draining == draining {
+		err = runtimes.recordCleanupFailureLocked(draining.runtime.token, err)
+		draining.err = err
+		if logout := runtimes.logout; logout != nil && logout.token == draining.runtime.token {
+			logout.cleanupErr = err
+		}
+		if draining.receiptOperation != "" {
+			runtimes.recordLifecycleReceiptLocked(lifecycleReceipt{
+				result: RuntimeCloseResult{
+					Token:         draining.runtime.token,
+					Operation:     draining.receiptOperation,
+					Matched:       true,
+					Started:       true,
+					EmitStopped:   true,
+					CleanupFailed: err != nil,
+				},
+				err: err,
+			})
+		}
+		runtimes.draining = nil
+		close(draining.done)
+	}
+	runtimes.mu.Unlock()
+	return err
+}
+
+// AbandonRuntime quarantines exactly one supervisor-created token. It never
+// closes a different or newer generation. A candidate inside Server.Start is
+// marked abandoned and canceled but not closed concurrently; its construction
+// path owns the eventual unwind.
+func AbandonRuntime(token uint64) (RuntimeCloseResult, error) {
+	result := RuntimeCloseResult{Token: token}
+	if token == 0 {
+		return result, nil
+	}
+
+	for {
+		runtimes.mu.Lock()
+		if receipt, ok := runtimes.takeLifecycleReceiptLocked(token); ok {
+			runtimes.mu.Unlock()
+			return receipt.result, receipt.err
+		}
+		if runtimes.abandonedTokens == nil {
+			runtimes.abandonedTokens = make(map[uint64]struct{})
+		}
+		runtimes.abandonedTokens[token] = struct{}{}
+		if logout := runtimes.logout; logout != nil && logout.token == token {
+			done := logout.done
+			runtimes.mu.Unlock()
+			<-done
+			continue
+		}
+		if candidate := runtimes.candidate; candidate != nil && candidate.token == token {
+			candidate.abandoned = true
+			candidate.cancel()
+			result.Matched = true
+			result.Pending = true
+			runtimes.mu.Unlock()
+			return result, nil
+		}
+		if draining := runtimes.draining; draining != nil && draining.runtime.token == token {
+			done := draining.done
+			runtimes.mu.Unlock()
+			<-done
+			continue
+		}
+		runtime := runtimes.current
+		if runtime == nil || runtime.token != token {
+			runtimes.mu.Unlock()
+			return result, nil
+		}
+		draining := detachRuntimeLocked(runtime, "")
+		result.Matched = true
+		result.Started = true
+		result.EmitStopped = true
+		runtimes.mu.Unlock()
+
+		err := runtime.close()
+		return result, finishRuntimeDrain(draining, err)
+	}
+}
+
+// AwaitRuntimeQuiescence joins a previously quarantined token without ever
+// acting on a different generation. It is used before rebinding a replacement
+// worker/push port after an abandoned non-cancellable Start.
+func AwaitRuntimeQuiescence(token uint64) error {
+	if token == 0 {
+		return nil
+	}
+	for {
+		runtimes.mu.Lock()
+		if logout := runtimes.logout; logout != nil && logout.token == token {
+			done := logout.done
+			runtimes.mu.Unlock()
+			<-done
+			return logout.cleanupErr
+		}
+		if outcome, ok := runtimes.completedPreparations[token]; ok {
+			delete(runtimes.completedPreparations, token)
+			runtimes.mu.Unlock()
+			return outcome.err
+		}
+		var done <-chan struct{}
+		var candidate *nodeRuntime
+		var draining *drainingRuntime
+		candidate = runtimes.candidate
+		if candidate != nil && candidate.token == token {
+			done = candidate.preparationDone
+		} else {
+			candidate = nil
+			draining = runtimes.draining
+		}
+		if done == nil && draining != nil && draining.runtime.token == token {
+			done = draining.done
+		} else if done == nil {
+			draining = nil
+		}
+		runtimes.mu.Unlock()
+		if done == nil {
+			return nil
+		}
+		<-done
+		if candidate != nil {
+			runtimes.mu.Lock()
+			delete(runtimes.completedPreparations, token)
+			runtimes.mu.Unlock()
+			return candidate.preparationErr
+		}
+		if draining != nil {
+			return draining.err
+		}
+	}
+}
+
+// CloseRuntime closes only the matching active token. A stale worker cannot
+// use a delayed down acknowledgement to close a newer runtime.
+func CloseRuntime(token uint64) (RuntimeCloseResult, error) {
+	return closeRuntime(token, false)
+}
+
+// closeRuntime permits the logout owner to detach and close its own runtime
+// while all public lifecycle callers remain joined to the wider logout
+// operation through final state-directory disposition.
+func closeRuntime(token uint64, logoutOwner bool) (RuntimeCloseResult, error) {
+	result := RuntimeCloseResult{Token: token}
+	if !logoutOwner {
+		result.Operation = lifecycleOperationDown
+	}
+	if token == 0 {
+		return result, nil
+	}
+	for {
+		runtimes.mu.Lock()
+		if logout := runtimes.logout; !logoutOwner && logout != nil && logout.token == token {
+			done := logout.done
+			result.Matched = true
+			result.Started = true
+			runtimes.mu.Unlock()
+			<-done
+			result.CleanupFailed = logout.cleanupErr != nil
+			return result, logout.cleanupErr
+		}
+		if candidate := runtimes.candidate; candidate != nil {
+			if candidate.token != token {
+				runtimes.mu.Unlock()
+				return result, nil
+			}
+			done := candidate.preparationDone
+			result.Matched = true
+			runtimes.mu.Unlock()
+			<-done
+			continue
+		}
+		if draining := runtimes.draining; draining != nil {
+			if draining.runtime.token != token {
+				runtimes.mu.Unlock()
+				return result, nil
+			}
+			done := draining.done
+			result.Matched = true
+			result.Started = true
+			result.EmitStopped = draining.receiptOperation == lifecycleOperationDown
+			runtimes.mu.Unlock()
+			<-done
+			result.CleanupFailed = draining.err != nil
+			return result, draining.err
+		}
+		runtime := runtimes.current
+		if runtime == nil || runtime.token != token {
+			runtimes.mu.Unlock()
+			return result, nil
+		}
+		receiptOperation := ""
+		if !logoutOwner {
+			receiptOperation = lifecycleOperationDown
+		}
+		draining := detachRuntimeLocked(runtime, receiptOperation)
+		result.Matched = true
+		result.Started = true
+		result.EmitStopped = !logoutOwner
+		runtimes.mu.Unlock()
+
+		err := runtime.close()
+		err = finishRuntimeDrain(draining, err)
+		result.CleanupFailed = err != nil
+		return result, err
+	}
+}
+
+func closeRuntimeForLogout(token uint64) (RuntimeCloseResult, error) {
+	return closeRuntime(token, true)
+}
+
 // closeCurrentRuntime detaches and bumps the epoch under the controller lock,
 // then performs blocking cleanup outside it. A concurrent repeated close waits
 // for the first close and remains an idempotent no-op.
 func closeCurrentRuntime() (bool, error) {
 	for {
 		runtimes.mu.Lock()
+		if logout := runtimes.logout; logout != nil {
+			done := logout.done
+			runtimes.mu.Unlock()
+			<-done
+			return false, logout.cleanupErr
+		}
 		if runtimes.candidate != nil {
 			done := runtimes.candidate.preparationDone
 			runtimes.mu.Unlock()
 			<-done
 			continue
 		}
-		if runtimes.draining != nil {
-			done := runtimes.draining.done
+		if draining := runtimes.draining; draining != nil {
+			done := draining.done
 			runtimes.mu.Unlock()
 			<-done
-			return false, nil
+			return false, draining.err
 		}
 		runtime := runtimes.current
 		if runtime == nil {
 			runtimes.mu.Unlock()
 			return false, nil
 		}
-		runtimes.current = nil
-		nodeEpoch.Add(1)
-		draining := &drainingRuntime{runtime: runtime, done: make(chan struct{})}
-		runtimes.draining = draining
+		draining := detachRuntimeLocked(runtime, "")
 		runtimes.mu.Unlock()
 
 		err := runtime.close()
-
-		runtimes.mu.Lock()
-		if runtimes.draining == draining {
-			runtimes.draining = nil
-			close(draining.done)
-		}
-		runtimes.mu.Unlock()
-		return true, err
+		return true, finishRuntimeDrain(draining, err)
 	}
 }
 

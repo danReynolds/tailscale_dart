@@ -5,7 +5,6 @@ library;
 import 'dart:io';
 
 import 'package:test/test.dart';
-import 'package:tailscale/src/ffi_bindings.dart' as native;
 import 'package:tailscale/tailscale.dart';
 
 import '../support/process_state_root.dart';
@@ -23,7 +22,6 @@ void main() {
     try {
       await Tailscale.instance.down();
     } catch (_) {}
-    native.duneStop();
     clearProcessIntegrationState(configuredStateBaseDir);
   });
 

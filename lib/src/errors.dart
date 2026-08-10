@@ -16,11 +16,26 @@ enum TailscaleErrorCode {
   /// Another start/stop transition currently owns the process lifecycle.
   lifecycleBusy,
 
+  /// Native teardown or state cleanup failed; restart before further use.
+  runtimeCleanupFailed,
+
   /// Immutable active-runtime configuration differs from the request.
   configurationMismatch,
 
   /// The operation belongs to a node runtime that has already stopped.
   staleRuntime,
+
+  /// Native startup was quarantined before it could publish a runtime.
+  startupAbandoned,
+
+  /// The caller deadline expired and the matching runtime was quarantined.
+  startupTimeout,
+
+  /// Upstream logout may have completed; local recovery evidence was retained.
+  logoutIndeterminate,
+
+  /// The supervised control isolate exited unexpectedly.
+  workerTerminated,
 
   /// Target does not exist (unknown node, waiting file, profile, route...).
   notFound,
@@ -176,7 +191,7 @@ final class TailscaleStatusException extends TailscaleOperationException {
   }) : super('status', message);
 }
 
-/// Thrown when `logout()` fails to clear persisted state.
+/// Thrown when `logout()` cannot confirm remote revocation or local cleanup.
 final class TailscaleLogoutException extends TailscaleOperationException {
   const TailscaleLogoutException(
     String message, {
@@ -259,13 +274,14 @@ final class TailscaleDiagException extends TailscaleOperationException {
 }
 
 /// High-level category for asynchronous runtime errors pushed from Go.
-enum TailscaleRuntimeErrorCode { localClient, watcher, node, unknown }
+enum TailscaleRuntimeErrorCode { localClient, watcher, node, worker, unknown }
 
 TailscaleRuntimeErrorCode _parseRuntimeErrorCode(String? value) =>
     switch (value) {
       'localClient' => TailscaleRuntimeErrorCode.localClient,
       'watcher' => TailscaleRuntimeErrorCode.watcher,
       'node' => TailscaleRuntimeErrorCode.node,
+      'worker' => TailscaleRuntimeErrorCode.worker,
       _ => TailscaleRuntimeErrorCode.unknown,
     };
 

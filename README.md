@@ -96,17 +96,17 @@ Future<void> main() async {
 
 Subsequent launches can call `up()` without an auth key. The node identity is persisted in `stateDir`.
 
-> **Securing `stateDir`.** In the current `0.8.1` implementation, the package
-> creates the SQLite database as `0600` under a `0700` subdirectory and attempts
-> to tighten pre-existing modes, but currently logs and continues if chmod
-> verification is unavailable; it is **not yet application-layer encrypted**. Choose a
-> location excluded from cloud backups—a copied database can be restored onto
-> another device and impersonate the node. On Flutter, prefer the application
-> support directory (`getApplicationSupportDirectory()`) over the documents
-> directory and apply the platform backup-exclusion rules. The accepted
-> [encrypted-state design](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md) replaces SQLite with
-> an authenticated encrypted StateStore whose key is held by Keybay, integrated
-> directly into the core package as the required persistent-state mechanism.
+> **Pre-launch storage warning.** The current SQLite StateStore is protected by
+> owner-only filesystem permissions but is not yet encrypted at rest. A copied
+> database can impersonate the node, so exclude `stateDir` from cloud backups and do not
+> ship this intermediate rearchitecture state in a client application. The
+> accepted [secure-state design](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md)
+> supplies a Keybay-custodied key to an authenticated encrypted Go StateStore
+> and removes SQLite atomically. Calling `logout()` is
+> remote-first: upstream removes the logged-in profile only after confirmed
+> control-plane success. The package preserves the lower-level StateStore
+> container in both the confirmed and indeterminate cases; R4's explicit local
+> forget/reset operation owns physical state destruction.
 
 For short-lived CI jobs, preview environments, and disposable test nodes, pass
 `ephemeral: true` to register a node that Tailscale removes after it goes
@@ -128,7 +128,7 @@ existing node instead of registering a new ephemeral one.
 
 Area | API | Status | Notes
 --- | --- | --- | ---
-Lifecycle | `init`, `up`, `down`, `logout`, `status` | Supported | `up(ephemeral: true)` supports disposable CI/test nodes; `up()` resolves on the first stable state: running, needs login, or needs machine auth.
+Lifecycle | `init`, `up`, `down`, `logout`, `status` | Supported | `up(ephemeral: true)` supports disposable CI/test nodes; `up()` resolves on the first stable state and quarantines a timed-out generation before returning. `logout()` is remote-first: confirmed success removes the upstream profile, while both success and indeterminate failure preserve the lower-level StateStore container.
 Reactive state | `onStateChange`, `onError`, `onNodeChanges` | Supported | Go pushes updates to Dart; callers do not poll.
 Node identity | `nodes`, `nodeByIp`, `whois` | Supported | Use stable node IDs for durable references.
 Outbound HTTP | `http.client` | Supported | A normal `package:http` client routed through tsnet.
@@ -258,22 +258,30 @@ The package is intentionally POSIX-first because owned transports use native des
 ## Runtime model
 
 ```
-Dart app
+Dart app / lifecycle supervisor
   |
   | typed API calls and streams
   v
-FFI worker isolate
+Replaceable FFI worker isolate
   |
-  | control ops + fd-backed data-plane handoff
+  | token-tagged control ops + fd-backed data-plane handoff
   v
-Go tsnet runtime
+Go nodeRuntime generation
   |
   | WireGuard, ACLs, MagicDNS, DERP
   v
 Tailnet peers
 ```
 
-Control-plane calls go through a worker isolate so Dart's main isolate does not block on native work. Runtime events come back through Dart ports as streams.
+Control-plane calls go through a worker isolate so Dart's main isolate does not
+block on native work. The caller isolate supervises that worker: every startup
+has a token known before dispatch, timeout or worker death quarantines only that
+generation, and replacement waits for native watcher/teardown joins. Runtime
+events carry the generation token back through Dart ports so stale pushes are
+dropped. Native `down`/`logout` receipts remain token-addressable until the
+caller receives them, so worker death cannot erase a completed result. A
+failed native cleanup is typed as `runtimeCleanupFailed` and blocks replacement
+for the rest of the process rather than guessing that teardown succeeded.
 
 Owned transports (`http.bind`, `tcp.bind`, `udp.bind`, `tls.bind`) use private fd-backed capabilities. That keeps listener ownership inside the package and avoids pretending that a localhost proxy is secure. Forwarding APIs (`serve.forward`, `funnel.forward`) intentionally use loopback because their purpose is to publish an existing local HTTP server the application already owns.
 

@@ -14,7 +14,6 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:tailscale/tailscale.dart';
-import 'package:tailscale/src/ffi_bindings.dart' as native;
 
 import '../support/process_state_root.dart';
 
@@ -467,7 +466,6 @@ void main() {
           try {
             await Tailscale.instance.down();
           } catch (_) {}
-          native.duneStop();
         });
 
         await Tailscale.instance.up(
@@ -495,7 +493,6 @@ void main() {
         try {
           await Tailscale.instance.down();
         } catch (_) {}
-        native.duneStop();
       });
       await Tailscale.instance.up(
         hostname: 'mismatch-base',
@@ -574,31 +571,315 @@ void main() {
       expect(census.udpBridges, 0);
       expect(census.transportCached, isFalse);
     });
+
+    test('up timeout quarantines its token before a later start', () async {
+      await expectLater(
+        Tailscale.instance.up(
+          hostname: 'timeout-quarantine',
+          authKey: 'tskey-fake-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+          timeout: const Duration(microseconds: 1),
+        ),
+        throwsA(
+          isA<TailscaleUpException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.startupTimeout,
+          ),
+        ),
+      );
+
+      final restarted = await Tailscale.instance.up(
+        hostname: 'timeout-quarantine',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+      expect(
+        restarted.state,
+        anyOf(NodeState.needsLogin, NodeState.needsMachineAuth),
+      );
+      await Tailscale.instance.down();
+    });
+
+    test('timed-out idempotent up preserves the active runtime', () async {
+      await Tailscale.instance.up(
+        hostname: 'idempotent-timeout',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+      final clientBefore = Tailscale.instance.http.client;
+
+      await expectLater(
+        Tailscale.instance.up(
+          hostname: 'idempotent-timeout',
+          authKey: 'tskey-different-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+          timeout: const Duration(microseconds: 1),
+        ),
+        throwsA(
+          isA<TailscaleUpException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.startupTimeout,
+          ),
+        ),
+      );
+
+      expect(
+        (await Tailscale.instance.status()).state,
+        isNot(NodeState.noState),
+      );
+      expect(Tailscale.instance.http.client, same(clientBefore));
+      await Tailscale.instance.down();
+    });
+
+    test('worker exit fails the exact up before replacement starts', () async {
+      await Tailscale.instance.debugTerminateWorkerAfterNextStartForTesting();
+      final incident = Tailscale.instance.onError.firstWhere(
+        (error) => error.code == TailscaleRuntimeErrorCode.worker,
+      );
+      final stopped = Tailscale.instance.onStateChange.firstWhere(
+        (state) => state == NodeState.stopped,
+      );
+
+      await expectLater(
+        Tailscale.instance.up(
+          hostname: 'worker-exit-during-up',
+          authKey: 'tskey-fake-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+        ),
+        throwsA(
+          isA<TailscaleOperationException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.workerTerminated,
+          ),
+        ),
+      );
+      await incident.timeout(const Duration(seconds: 10));
+      await stopped.timeout(const Duration(seconds: 10));
+
+      final restarted = await Tailscale.instance.up(
+        hostname: 'worker-exit-during-up',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+      expect(restarted.state, isNot(NodeState.noState));
+      await Tailscale.instance.down();
+    });
+
+    test(
+      'unexpected worker exit quarantines and permits replacement',
+      () async {
+        await Tailscale.instance.up(
+          hostname: 'worker-failsafe',
+          authKey: 'tskey-fake-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+        );
+
+        final sequence = <String>[];
+        final incidents = <TailscaleRuntimeError>[];
+        final errorSub = Tailscale.instance.onError.listen((error) {
+          incidents.add(error);
+          sequence.add('error:${error.code.name}');
+        });
+        final stateSub = Tailscale.instance.onStateChange.listen((state) {
+          sequence.add('state:${state.name}');
+        });
+        addTearDown(errorSub.cancel);
+        addTearDown(stateSub.cancel);
+
+        final incident = Tailscale.instance.onError.firstWhere(
+          (error) => error.code == TailscaleRuntimeErrorCode.worker,
+        );
+        final stopped = Tailscale.instance.onStateChange.firstWhere(
+          (state) => state == NodeState.stopped,
+        );
+
+        await Tailscale.instance.debugTerminateWorkerForTesting();
+        await incident.timeout(const Duration(seconds: 10));
+        await stopped.timeout(const Duration(seconds: 10));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        expect(
+          incidents
+              .where((error) => error.code == TailscaleRuntimeErrorCode.worker)
+              .length,
+          1,
+        );
+        expect(
+          sequence.indexOf('error:worker'),
+          lessThan(sequence.indexOf('state:stopped')),
+        );
+        expect((await Tailscale.instance.status()).state, NodeState.stopped);
+
+        final census = await Tailscale.instance.diag.nodeState();
+        expect(census.servePublications, 0);
+        expect(census.funnelForwarders, 0);
+        expect(census.httpBindings, 0);
+        expect(census.tcpListeners, 0);
+        expect(census.udpBridges, 0);
+        expect(census.transportCached, isFalse);
+      },
+    );
+
+    test('worker exit during down is rescued by the initiating call', () async {
+      await Tailscale.instance.up(
+        hostname: 'worker-expected-exit',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+
+      final incidents = <TailscaleRuntimeError>[];
+      final errorSub = Tailscale.instance.onError.listen(incidents.add);
+      addTearDown(errorSub.cancel);
+
+      await Tailscale.instance.debugTerminateWorkerOnNextShutdownForTesting();
+      await expectLater(Tailscale.instance.down(), completes);
+      final status = await Tailscale.instance.status().timeout(
+        const Duration(seconds: 10),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(status.state, NodeState.stopped);
+      expect(
+        incidents.where(
+          (error) => error.code == TailscaleRuntimeErrorCode.worker,
+        ),
+        isEmpty,
+      );
+
+      await Tailscale.instance.up(
+        hostname: 'worker-expected-exit',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+      await Tailscale.instance.down();
+    });
+
+    test('lost down response is recovered from the native receipt', () async {
+      await Tailscale.instance.up(
+        hostname: 'lost-down-receipt',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+
+      final states = <NodeState>[];
+      final stateSub = Tailscale.instance.onStateChange.listen(states.add);
+      addTearDown(stateSub.cancel);
+
+      await Tailscale.instance
+          .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
+      await expectLater(Tailscale.instance.down(), completes);
+      expect((await Tailscale.instance.status()).state, NodeState.stopped);
+      expect(states.where((state) => state == NodeState.stopped), hasLength(1));
+    });
   });
 
   group('logout', () {
-    test('removes only the owned state subdirectory', () async {
-      final ownedStateDir = Directory(
-        p.join(configuredStateBaseDir.path, 'tailscale'),
-      );
-      if (ownedStateDir.existsSync()) {
-        ownedStateDir.deleteSync(recursive: true);
-      }
-      ownedStateDir.createSync(recursive: true);
+    test(
+      'worker exit after logout dispatch preserves truthful result',
+      () async {
+        await Tailscale.instance.up(
+          hostname: 'logout-worker-exit',
+          authKey: 'tskey-fake-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+        );
+        final incidents = <TailscaleRuntimeError>[];
+        final states = <NodeState>[];
+        final errorSub = Tailscale.instance.onError.listen(incidents.add);
+        final stateSub = Tailscale.instance.onStateChange.listen(states.add);
+        addTearDown(errorSub.cancel);
+        addTearDown(stateSub.cancel);
 
-      final preservedFile = File(
-        p.join(configuredStateBaseDir.path, 'keep.txt'),
-      )..writeAsStringSync('keep');
-      File(
-        p.join(ownedStateDir.path, 'state.db'),
-      ).writeAsStringSync('placeholder');
+        await Tailscale.instance
+            .debugTerminateWorkerAfterNextLogoutDispatchForTesting();
+        TailscaleLogoutException? logoutError;
+        try {
+          await Tailscale.instance.logout();
+        } on TailscaleLogoutException catch (error) {
+          logoutError = error;
+        }
+        if (logoutError != null) {
+          expect(logoutError.code, TailscaleErrorCode.logoutIndeterminate);
+        }
+        final status = await Tailscale.instance.status().timeout(
+          const Duration(seconds: 10),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      await Tailscale.instance.logout();
+        expect(
+          status.state,
+          NodeState.stopped,
+          reason:
+              'the retained SQLite container is conservatively classified '
+              'as stopped until R4 can authenticate logical state',
+        );
+        expect(
+          incidents.where(
+            (error) => error.code == TailscaleRuntimeErrorCode.worker,
+          ),
+          isEmpty,
+        );
+        expect(states.where((state) => state == NodeState.stopped).length, 1);
+        expect(states, isNotEmpty);
+        expect(
+          states.last,
+          logoutError == null ? NodeState.noState : NodeState.stopped,
+          reason:
+              'confirmed noState is an operation receipt; idle status still '
+              'classifies the retained Store as stopped',
+        );
+      },
+    );
 
-      expect(configuredStateBaseDir.existsSync(), isTrue);
-      expect(preservedFile.existsSync(), isTrue);
-      expect(ownedStateDir.existsSync(), isFalse);
-    });
+    test(
+      'absent logout preserves root siblings without creating owned state',
+      () async {
+        final ownedStateDir = Directory(
+          p.join(configuredStateBaseDir.path, 'tailscale'),
+        );
+        if (ownedStateDir.existsSync()) {
+          ownedStateDir.deleteSync(recursive: true);
+        }
+
+        final preservedFile = File(
+          p.join(configuredStateBaseDir.path, 'keep.txt'),
+        )..writeAsStringSync('keep');
+
+        await Tailscale.instance.logout();
+
+        expect(configuredStateBaseDir.existsSync(), isTrue);
+        expect(preservedFile.existsSync(), isTrue);
+        expect(ownedStateDir.existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'lost confirmed logout response for absent state uses its receipt',
+      () async {
+        final ownedStateDir = Directory(
+          p.join(configuredStateBaseDir.path, 'tailscale'),
+        );
+        if (ownedStateDir.existsSync()) {
+          ownedStateDir.deleteSync(recursive: true);
+        }
+
+        final states = <NodeState>[];
+        final stateSub = Tailscale.instance.onStateChange.listen(states.add);
+        addTearDown(stateSub.cancel);
+
+        await Tailscale.instance
+            .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
+        await expectLater(Tailscale.instance.logout(), completes);
+        expect((await Tailscale.instance.status()).state, NodeState.noState);
+        expect(ownedStateDir.existsSync(), isFalse);
+        expect(
+          states.where((state) => state == NodeState.noState),
+          hasLength(1),
+        );
+      },
+    );
 
     test('logout() twice does not throw', () async {
       await expectLater(Tailscale.instance.logout(), completes);

@@ -30,7 +30,6 @@ void main() {
   });
 
   tearDownAll(() {
-    native.duneStop();
     clearProcessIntegrationState(configuredStateBaseDir);
   });
 
@@ -98,7 +97,26 @@ void main() {
 
   group('duneStop', () {
     test('does not crash when server not running', () {
-      native.duneStop();
+      final resultPtr = native.duneStop(999999);
+      final result = jsonDecode(resultPtr.toDartString());
+      native.duneFree(resultPtr);
+
+      expect(result, containsPair('matched', false));
+    });
+  });
+
+  group('runtime quarantine', () {
+    test('abandon and quiescence exports return JSON receipts', () {
+      final abandonPtr = native.duneAbandon(525252);
+      final abandon = jsonDecode(abandonPtr.toDartString());
+      native.duneFree(abandonPtr);
+
+      final awaitPtr = native.duneAwaitRuntimeQuiescence(525252);
+      final quiescence = jsonDecode(awaitPtr.toDartString());
+      native.duneFree(awaitPtr);
+
+      expect(abandon, containsPair('token', 525252));
+      expect(quiescence, {'ok': true});
     });
   });
 
@@ -132,8 +150,12 @@ void main() {
   group('duneStart error handling', () {
     test('returns valid JSON for unreachable control URL', () {
       clearProcessIntegrationState(configuredStateBaseDir);
+      var startedToken = 0;
       addTearDown(() {
-        native.duneStop();
+        if (startedToken > 0) {
+          final stopPtr = native.duneStop(startedToken);
+          native.duneFree(stopPtr);
+        }
         clearProcessIntegrationState(configuredStateBaseDir);
       });
 
@@ -143,6 +165,7 @@ void main() {
       final hostNetworkSnapshot = '{}'.toNativeUtf8();
 
       final resultPtr = native.duneStart(
+        4242,
         hostname,
         authKey,
         controlUrl,
@@ -158,6 +181,7 @@ void main() {
       calloc.free(hostNetworkSnapshot);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      startedToken = parsed['runtimeToken'] as int? ?? 0;
       expect(
         parsed['ok'] == true || parsed.containsKey('error'),
         isTrue,

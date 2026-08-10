@@ -15,6 +15,7 @@ import 'package:ffi/ffi.dart';
 ///   {"error": "...", "code": "..."?} on failure.
 @ffi.Native<
   ffi.Pointer<Utf8> Function(
+    ffi.Uint64,
     ffi.Pointer<Utf8>,
     ffi.Pointer<Utf8>,
     ffi.Pointer<Utf8>,
@@ -23,6 +24,7 @@ import 'package:ffi/ffi.dart';
   )
 >(symbol: 'DuneStart')
 external ffi.Pointer<Utf8> duneStart(
+  int requestToken,
   ffi.Pointer<Utf8> hostname,
   ffi.Pointer<Utf8> authKey,
   ffi.Pointer<Utf8> controlURL,
@@ -272,14 +274,32 @@ external ffi.Pointer<Utf8> duneDiagCheckUpdate();
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneClassifyState')
 external ffi.Pointer<Utf8> duneClassifyState();
 
-/// Stops the server and removes the configured package-owned state directory.
-/// Returns JSON: {"ok": true} on success, {"error": "..."} on failure.
-@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneLogout')
-external ffi.Pointer<Utf8> duneLogout();
+/// Performs remote-first logout for the exact active/preparation token.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Pointer<Utf8>)>(
+  symbol: 'DuneLogout',
+)
+external ffi.Pointer<Utf8> duneLogout(
+  int requestToken,
+  ffi.Pointer<Utf8> hostNetworkSnapshot,
+);
 
-/// Stops the server, preserving state.
-@ffi.Native<ffi.Void Function()>(symbol: 'DuneStop')
-external void duneStop();
+/// Event-silently quarantines exactly one runtime/preparation token.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(symbol: 'DuneAbandon')
+external ffi.Pointer<Utf8> duneAbandon(int requestToken);
+
+/// Joins cleanup for a token that was already quarantined.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneAwaitRuntimeQuiescence',
+)
+external ffi.Pointer<Utf8> duneAwaitRuntimeQuiescence(int requestToken);
+
+/// Retires a terminal lifecycle receipt after the caller isolate receives it.
+@ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'DuneAcknowledgeLifecycle')
+external void duneAcknowledgeLifecycle(int requestToken);
+
+/// Stops only the matching runtime token, preserving state.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(symbol: 'DuneStop')
+external ffi.Pointer<Utf8> duneStop(int requestToken);
 
 /// Returns the local-node Tailscale status as JSON.
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneStatus')

@@ -13,7 +13,7 @@ import (
 
 func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	runtimes.mu.Lock()
-	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil {
+	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil {
 		runtimes.mu.Unlock()
 		t.Fatal("test requires an idle runtime controller")
 	}
@@ -21,10 +21,20 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	previousRoot := runtimes.stateRoot
 	previousRootInfo := runtimes.stateRootInfo
 	previousLogLevel := runtimes.logLevel
+	previousAbandonedTokens := runtimes.abandonedTokens
+	previousCompletedPreparations := runtimes.completedPreparations
+	previousCompletedLifecycle := runtimes.completedLifecycle
+	previousCleanupFailure := runtimes.cleanupFailure
+	previousLastConfig := runtimes.lastConfig
 	runtimes.configured = false
 	runtimes.stateRoot = ""
 	runtimes.stateRootInfo = nil
 	runtimes.logLevel = 0
+	runtimes.abandonedTokens = nil
+	runtimes.completedPreparations = nil
+	runtimes.completedLifecycle = nil
+	runtimes.cleanupFailure = nil
+	runtimes.lastConfig = nil
 	runtimes.mu.Unlock()
 	t.Cleanup(func() {
 		runtimes.mu.Lock()
@@ -32,6 +42,11 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 		runtimes.stateRoot = previousRoot
 		runtimes.stateRootInfo = previousRootInfo
 		runtimes.logLevel = previousLogLevel
+		runtimes.abandonedTokens = previousAbandonedTokens
+		runtimes.completedPreparations = previousCompletedPreparations
+		runtimes.completedLifecycle = previousCompletedLifecycle
+		runtimes.cleanupFailure = previousCleanupFailure
+		runtimes.lastConfig = previousLastConfig
 		runtimes.mu.Unlock()
 	})
 
@@ -113,30 +128,178 @@ func TestRuntimeController_ReservationAndConfigIdentity(t *testing.T) {
 		ephemeral:  false,
 	}
 
-	candidate, active, err := controller.reserve(config)
+	candidate, active, err := controller.reserve(1, config)
 	if err != nil || candidate == nil || active != nil {
 		t.Fatalf("first reserve = (%v, %v, %v), want a candidate", candidate, active, err)
 	}
-	if _, _, err := controller.reserve(config); !errors.Is(err, ErrLifecycleBusy) {
+	if _, _, err := controller.reserve(2, config); !errors.Is(err, ErrLifecycleBusy) {
 		t.Fatalf("concurrent reserve error = %v, want ErrLifecycleBusy", err)
 	}
 	if err := controller.commit(candidate); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
+	if controller.lastConfig == nil || *controller.lastConfig != config {
+		t.Fatalf("committed config cache = %v, want %+v", controller.lastConfig, config)
+	}
 
-	next, active, err := controller.reserve(config)
+	next, active, err := controller.reserve(3, config)
 	if err != nil || next != nil || active != candidate {
 		t.Fatalf("same-config reserve = (%v, %v, %v), want current runtime", next, active, err)
 	}
 	mismatch := config
 	mismatch.hostname = "Node-B"
-	if _, _, err := controller.reserve(mismatch); !errors.Is(err, ErrConfigurationMismatch) {
+	if _, _, err := controller.reserve(4, mismatch); !errors.Is(err, ErrConfigurationMismatch) {
 		t.Fatalf("mismatched reserve error = %v, want ErrConfigurationMismatch", err)
 	}
 	if controller.current != candidate {
 		t.Fatal("configuration mismatch replaced the active runtime")
 	}
 	candidate.cancel()
+}
+
+func TestRuntimeController_CleanupFailurePoisonsReplacementAdmission(t *testing.T) {
+	var controller runtimeController
+	candidate, active, err := controller.reserve(70001, runtimeConfig{})
+	if err != nil || candidate == nil || active != nil {
+		t.Fatalf("reserve = (%v, %v, %v), want candidate", candidate, active, err)
+	}
+	closeFailure := errors.New("injected store close failure")
+	cleanupErr := controller.release(candidate, closeFailure)
+	if !errors.Is(cleanupErr, ErrRuntimeCleanupFailed) || !errors.Is(cleanupErr, closeFailure) {
+		t.Fatalf("release error = %v, want typed cleanup failure", cleanupErr)
+	}
+	if _, _, err := controller.reserve(70002, runtimeConfig{}); !errors.Is(err, ErrRuntimeCleanupFailed) {
+		t.Fatalf("replacement reserve error = %v, want ErrRuntimeCleanupFailed", err)
+	}
+}
+
+func TestRuntimeController_FreshStartInvalidatesStaleReopenConfig(t *testing.T) {
+	oldConfig := runtimeConfig{hostname: "old", controlURL: "https://old/"}
+	newConfig := runtimeConfig{hostname: "new", controlURL: "https://new/", ephemeral: true}
+	controller := runtimeController{lastConfig: &oldConfig}
+
+	candidate, _, err := controller.reserve(70003, newConfig)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if controller.lastConfig != nil {
+		t.Fatalf("reserve retained stale reopen config: %+v", controller.lastConfig)
+	}
+	controller.rememberStartedConfig(candidate)
+	if controller.lastConfig == nil || *controller.lastConfig != newConfig {
+		t.Fatalf("started reopen config = %+v, want %+v", controller.lastConfig, newConfig)
+	}
+	controller.release(candidate, nil)
+}
+
+func TestCloseRuntime_TerminalReceiptSurvivesUntilRescueConsumesIt(t *testing.T) {
+	configureFreshStateRootForTest(t)
+	const token uint64 = 70004
+	runtime := newNodeRuntime(nodeEpoch.Load(), token, runtimeConfig{})
+	runtime.storeCloser = new(recordingStateStore)
+	runtime.finishPreparation()
+	runtimes.mu.Lock()
+	runtimes.current = runtime
+	runtimes.mu.Unlock()
+
+	closed, err := CloseRuntime(token)
+	if err != nil || !closed.Matched || !closed.Started || !closed.EmitStopped {
+		t.Fatalf("CloseRuntime = (%+v, %v), want clean close", closed, err)
+	}
+	recovered, err := AbandonRuntime(token)
+	if err != nil || recovered.Operation != lifecycleOperationDown || !recovered.Matched || !recovered.Started || !recovered.EmitStopped {
+		t.Fatalf("receipt recovery = (%+v, %v), want exact down receipt", recovered, err)
+	}
+	again, err := AbandonRuntime(token)
+	if err != nil || again.Matched {
+		t.Fatalf("second receipt recovery = (%+v, %v), want consumed receipt", again, err)
+	}
+}
+
+func TestCloseRuntime_CleanupFailureReceiptCannotBeSwallowed(t *testing.T) {
+	configureFreshStateRootForTest(t)
+	const token uint64 = 70005
+	closeFailure := errors.New("injected server close failure")
+	runtime := newNodeRuntime(nodeEpoch.Load(), token, runtimeConfig{})
+	runtime.server = &tsnet.Server{}
+	runtime.closeServer = func(*tsnet.Server) error { return closeFailure }
+	runtime.finishPreparation()
+	runtimes.mu.Lock()
+	runtimes.current = runtime
+	runtimes.mu.Unlock()
+
+	closed, err := CloseRuntime(token)
+	if !errors.Is(err, ErrRuntimeCleanupFailed) || !closed.CleanupFailed {
+		t.Fatalf("CloseRuntime = (%+v, %v), want typed cleanup failure", closed, err)
+	}
+	recovered, err := AbandonRuntime(token)
+	if !errors.Is(err, ErrRuntimeCleanupFailed) ||
+		!errors.Is(err, closeFailure) ||
+		recovered.Operation != lifecycleOperationDown ||
+		!recovered.CleanupFailed {
+		t.Fatalf("receipt recovery = (%+v, %v), want exact cleanup failure", recovered, err)
+	}
+}
+
+func TestAbandonRuntime_RetiresTokenBeforeNativeReservation(t *testing.T) {
+	configureFreshStateRootForTest(t)
+	const abandonedToken uint64 = 72001
+
+	result, err := AbandonRuntime(abandonedToken)
+	if err != nil {
+		t.Fatalf("AbandonRuntime: %v", err)
+	}
+	if result.Matched || result.Started || result.Pending {
+		t.Fatalf("pre-reservation abandon result = %+v, want no allocated runtime", result)
+	}
+	if _, _, reserveErr := runtimes.reserve(abandonedToken, runtimeConfig{}); !errors.Is(reserveErr, ErrStartupAbandoned) {
+		t.Fatalf("retired-token reserve error = %v, want ErrStartupAbandoned", reserveErr)
+	}
+
+	candidate, active, reserveErr := runtimes.reserve(72002, runtimeConfig{})
+	if reserveErr != nil || candidate == nil || active != nil {
+		t.Fatalf("fresh-token reserve = (%v, %v, %v), want candidate", candidate, active, reserveErr)
+	}
+	runtimes.release(candidate, nil)
+}
+
+func TestAbandonRuntime_StaleTokenCannotCloseNewerRuntime(t *testing.T) {
+	configureFreshStateRootForTest(t)
+	store := new(recordingStateStore)
+	runtime := newNodeRuntime(nodeEpoch.Load(), 72004, runtimeConfig{})
+	runtime.storeCloser = store
+	runtime.finishPreparation()
+	runtimes.mu.Lock()
+	runtimes.current = runtime
+	runtimes.mu.Unlock()
+
+	result, err := AbandonRuntime(72003)
+	if err != nil {
+		t.Fatalf("stale AbandonRuntime: %v", err)
+	}
+	if result.Matched || result.Started || result.Pending {
+		t.Fatalf("stale abandon result = %+v, want unmatched", result)
+	}
+	if currentRuntime() != runtime {
+		t.Fatal("stale abandon detached the newer runtime")
+	}
+	if got := store.closeCalls.Load(); got != 0 {
+		t.Fatalf("stale abandon closed newer store %d times", got)
+	}
+
+	result, err = AbandonRuntime(runtime.token)
+	if err != nil {
+		t.Fatalf("matching AbandonRuntime: %v", err)
+	}
+	if !result.Matched || !result.Started || result.Pending {
+		t.Fatalf("matching abandon result = %+v, want closed active runtime", result)
+	}
+	if currentRuntime() != nil {
+		t.Fatal("matching abandon left runtime current")
+	}
+	if got := store.closeCalls.Load(); got != 1 {
+		t.Fatalf("matching abandon store close calls = %d, want 1", got)
+	}
 }
 
 func TestStartRuntime_AuthKeyCannotReplaceActiveIdentity(t *testing.T) {
@@ -201,7 +364,7 @@ func TestStartRuntime_ConfigMismatchDoesNotTearDown(t *testing.T) {
 func configureFreshStateRootForTest(t *testing.T) string {
 	t.Helper()
 	runtimes.mu.Lock()
-	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil {
+	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil {
 		runtimes.mu.Unlock()
 		t.Fatal("test requires an idle runtime controller")
 	}
@@ -209,10 +372,20 @@ func configureFreshStateRootForTest(t *testing.T) string {
 	previousRoot := runtimes.stateRoot
 	previousRootInfo := runtimes.stateRootInfo
 	previousLogLevel := runtimes.logLevel
+	previousAbandonedTokens := runtimes.abandonedTokens
+	previousCompletedPreparations := runtimes.completedPreparations
+	previousCompletedLifecycle := runtimes.completedLifecycle
+	previousCleanupFailure := runtimes.cleanupFailure
+	previousLastConfig := runtimes.lastConfig
 	runtimes.configured = false
 	runtimes.stateRoot = ""
 	runtimes.stateRootInfo = nil
 	runtimes.logLevel = 0
+	runtimes.abandonedTokens = nil
+	runtimes.completedPreparations = nil
+	runtimes.completedLifecycle = nil
+	runtimes.cleanupFailure = nil
+	runtimes.lastConfig = nil
 	runtimes.mu.Unlock()
 	previousNativeLogLevel := atomic.LoadInt32(&LogLevel)
 	previousRawDisco, hadRawDisco := os.LookupEnv("TS_ENABLE_RAW_DISCO")
@@ -223,6 +396,11 @@ func configureFreshStateRootForTest(t *testing.T) string {
 		runtimes.stateRoot = previousRoot
 		runtimes.stateRootInfo = previousRootInfo
 		runtimes.logLevel = previousLogLevel
+		runtimes.abandonedTokens = previousAbandonedTokens
+		runtimes.completedPreparations = previousCompletedPreparations
+		runtimes.completedLifecycle = previousCompletedLifecycle
+		runtimes.cleanupFailure = previousCleanupFailure
+		runtimes.lastConfig = previousLastConfig
 		runtimes.mu.Unlock()
 		atomic.StoreInt32(&LogLevel, previousNativeLogLevel)
 		if hadRawDisco {
@@ -241,7 +419,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 
 func withActiveRuntimeForTest(t *testing.T, config runtimeConfig) {
 	t.Helper()
-	runtime := newNodeRuntime(nodeEpoch.Load(), config)
+	runtime := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), config)
 	runtimes.mu.Lock()
 	previous := runtimes.current
 	if runtimes.candidate != nil || runtimes.draining != nil {
@@ -268,7 +446,7 @@ func (c *countingCloser) Close() error {
 
 func TestNodeRuntime_CloseIsIdempotentAndCancelsContext(t *testing.T) {
 	closer := new(countingCloser)
-	runtime := newNodeRuntime(nodeEpoch.Load(), runtimeConfig{})
+	runtime := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
 	runtime.storeCloser = closer
 
 	if err := runtime.close(); err != nil {
@@ -288,7 +466,7 @@ func TestNodeRuntime_CloseIsIdempotentAndCancelsContext(t *testing.T) {
 func TestNodeRuntime_ConcurrentCloseInvokesOwnedClosersOnce(t *testing.T) {
 	closer := new(countingCloser)
 	var serverCloseCalls atomic.Int32
-	runtime := newNodeRuntime(nodeEpoch.Load(), runtimeConfig{})
+	runtime := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
 	runtime.server = &tsnet.Server{}
 	runtime.storeCloser = closer
 	runtime.closeServer = func(*tsnet.Server) error {

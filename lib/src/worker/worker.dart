@@ -20,6 +20,9 @@ part 'messages.dart';
 part 'entrypoint.dart';
 part 'native_offload.dart';
 
+/// Native disposition for an abandoned caller-isolate Keybay operation.
+enum StateCustodyDisposition { none, compensateKey, preserveCoherentPair }
+
 Future<String> _loadHostNetworkSnapshot() async {
   if (!io.Platform.isAndroid) {
     return '{}';

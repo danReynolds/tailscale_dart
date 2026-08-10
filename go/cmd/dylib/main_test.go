@@ -30,11 +30,13 @@ func TestLifecycleErrorJSONPreservesCloseDisposition(t *testing.T) {
 	payload := decodeLifecycleErrorForTest(t, lifecycleErrorJSON(
 		errors.Join(tailscale.ErrLifecycleBusy, errors.New("cleanup failed")),
 		runtimeCloseDisposition(tailscale.RuntimeCloseResult{
-			Token:       81002,
-			Matched:     true,
-			Started:     true,
-			EmitStopped: true,
-			Pending:     false,
+			Token:              81002,
+			Matched:            true,
+			Started:            true,
+			EmitStopped:        true,
+			Pending:            false,
+			CustodyHeld:        true,
+			CustodyDisposition: tailscale.CustodyDispositionPreserveCoherentPair,
 		}),
 	))
 
@@ -44,6 +46,8 @@ func TestLifecycleErrorJSONPreservesCloseDisposition(t *testing.T) {
 	assertLifecycleFieldForTest(t, payload, "started", true)
 	assertLifecycleFieldForTest(t, payload, "emitStopped", true)
 	assertLifecycleFieldForTest(t, payload, "pending", false)
+	assertLifecycleFieldForTest(t, payload, "custodyHeld", true)
+	assertLifecycleFieldForTest(t, payload, "custodyDisposition", "preserveCoherentPair")
 }
 
 func TestLifecycleErrorJSONClassifiesCleanupFailure(t *testing.T) {

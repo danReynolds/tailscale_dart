@@ -15,7 +15,7 @@ const testKeybayNamespace = "dev.tailscale.dart.test.tailscale"
 
 func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	runtimes.mu.Lock()
-	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil {
+	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil || runtimes.persistentPreparation != nil {
 		runtimes.mu.Unlock()
 		t.Fatal("test requires an idle runtime controller")
 	}
@@ -29,6 +29,7 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	previousCompletedLifecycle := runtimes.completedLifecycle
 	previousCleanupFailure := runtimes.cleanupFailure
 	previousLastConfig := runtimes.lastConfig
+	previousPersistentPreparation := runtimes.persistentPreparation
 	runtimes.configured = false
 	runtimes.stateRoot = ""
 	runtimes.stateRootInfo = nil
@@ -39,6 +40,7 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	runtimes.completedLifecycle = nil
 	runtimes.cleanupFailure = nil
 	runtimes.lastConfig = nil
+	runtimes.persistentPreparation = nil
 	runtimes.mu.Unlock()
 	t.Cleanup(func() {
 		runtimes.mu.Lock()
@@ -52,6 +54,7 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 		runtimes.completedLifecycle = previousCompletedLifecycle
 		runtimes.cleanupFailure = previousCleanupFailure
 		runtimes.lastConfig = previousLastConfig
+		runtimes.persistentPreparation = previousPersistentPreparation
 		runtimes.mu.Unlock()
 	})
 
@@ -369,7 +372,7 @@ func TestStartRuntime_ConfigMismatchDoesNotTearDown(t *testing.T) {
 func configureFreshStateRootForTest(t *testing.T) string {
 	t.Helper()
 	runtimes.mu.Lock()
-	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil {
+	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil || runtimes.persistentPreparation != nil {
 		runtimes.mu.Unlock()
 		t.Fatal("test requires an idle runtime controller")
 	}
@@ -383,6 +386,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 	previousCompletedLifecycle := runtimes.completedLifecycle
 	previousCleanupFailure := runtimes.cleanupFailure
 	previousLastConfig := runtimes.lastConfig
+	previousPersistentPreparation := runtimes.persistentPreparation
 	runtimes.configured = false
 	runtimes.stateRoot = ""
 	runtimes.stateRootInfo = nil
@@ -393,6 +397,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 	runtimes.completedLifecycle = nil
 	runtimes.cleanupFailure = nil
 	runtimes.lastConfig = nil
+	runtimes.persistentPreparation = nil
 	runtimes.mu.Unlock()
 	previousNativeLogLevel := atomic.LoadInt32(&LogLevel)
 	previousRawDisco, hadRawDisco := os.LookupEnv("TS_ENABLE_RAW_DISCO")
@@ -409,6 +414,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 		runtimes.completedLifecycle = previousCompletedLifecycle
 		runtimes.cleanupFailure = previousCleanupFailure
 		runtimes.lastConfig = previousLastConfig
+		runtimes.persistentPreparation = previousPersistentPreparation
 		runtimes.mu.Unlock()
 		atomic.StoreInt32(&LogLevel, previousNativeLogLevel)
 		if hadRawDisco {

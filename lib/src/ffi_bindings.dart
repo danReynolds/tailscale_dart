@@ -43,6 +43,46 @@ external ffi.Pointer<Utf8> duneConfigure(
   int logLevel,
 );
 
+/// Acquires the configured root's token-bound persistent-state lease.
+///
+/// R4c leaves this path unwired from public startup; R4d calls it before any
+/// secure-state probe or Keybay operation.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneBeginPersistentPreparation',
+)
+external ffi.Pointer<Utf8> duneBeginPersistentPreparation(int requestToken);
+
+/// Marks that a non-cancellable caller-isolate Keybay operation may begin.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneMarkCustodyActive',
+)
+external ffi.Pointer<Utf8> duneMarkCustodyActive(int requestToken);
+
+/// Marks the possibly-committed boundary immediately before a fresh DEK write.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneMarkCustodyWriteAttempted',
+)
+external ffi.Pointer<Utf8> duneMarkCustodyWriteAttempted(int requestToken);
+
+/// Supplies exactly 32 raw DEK bytes to the matching native preparation.
+@ffi.Native<
+  ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Pointer<ffi.Uint8>, ffi.Int64)
+>(symbol: 'DuneSupplyPreparedDEK')
+external ffi.Pointer<Utf8> duneSupplyPreparedDek(
+  int requestToken,
+  ffi.Pointer<ffi.Uint8> key,
+  int keyLength,
+);
+
+/// Releases abandoned custody after its Future and compensation have settled.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Int32)>(
+  symbol: 'DuneFinishCustody',
+)
+external ffi.Pointer<Utf8> duneFinishCustody(
+  int requestToken,
+  int cleanupSucceeded,
+);
+
 /// Starts one outgoing tailnet HTTP request.
 ///
 /// Returns JSON:

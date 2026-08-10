@@ -28,6 +28,12 @@ enum TailscaleErrorCode {
   /// Native startup was quarantined before it could publish a runtime.
   startupAbandoned,
 
+  /// Another process or isolate owns the persistent StateStore lease.
+  stateLeaseBusy,
+
+  /// The persistent StateStore DEK was not exactly 32 raw bytes.
+  invalidStateKey,
+
   /// The caller deadline expired and the matching runtime was quarantined.
   startupTimeout,
 

@@ -39,16 +39,15 @@ HTTP, TCP, UDP, TLS, Funnel, and future service listeners follow
 `tsnet`; node introspection, diagnostics, prefs, profiles, serve
 config, exit nodes, and taildrop follow LocalAPI via `local.Client`.
 
-**Mobile TLS qualification:** both the current upstream v1.100.0 pin and the
-reviewed v1.102.2 target compile the LocalAPI certificate endpoint used by
-default `tsnet.ListenTLS` and `ListenFunnel` as a 404 stub on iOS and Android.
+**Mobile TLS qualification:** the current upstream v1.102.2 pin compiles the
+LocalAPI certificate endpoint used by default `tsnet.ListenTLS` and
+`ListenFunnel` as a 404 stub on iOS and Android.
 Those two HTTPS surfaces are therefore unsupported on mobile until an alternate
 certificate path passes real-device handshakes. The private HTTP/TCP/UDP core
 remains the mobile support target.
 
-**Version note:** the current repo pin is `tailscale.com v1.100.0`; PR #90 is
-the tracked v1.102.2 / Go 1.26.5 baseline. Keep upstream version skew visible
-when adding new wrappers.
+**Version note:** the current repo pin is `tailscale.com v1.102.2`. Keep
+upstream version skew visible when adding new wrappers.
 
 ## Namespace overview
 

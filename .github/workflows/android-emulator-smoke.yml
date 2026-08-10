@@ -1,0 +1,122 @@
+name: Android emulator smoke (x86_64)
+
+# This is the only check that executes the package on the ABI that issue #81
+# broke: Android x86_64. It is slow and emulator jobs are a common source of CI
+# flake, so pull requests run it only when the reactor, Android native build, or
+# syscall dependencies change. workflow_dispatch remains available for release
+# validation.
+#
+# This must launch an app. Android installs the relevant seccomp policy when the
+# zygote spawns an app process. A binary pushed to /data/local/tmp and run with
+# adb shell uses the shell domain and would pass even if issue #81 regressed.
+#
+# go/epoll_wait_seccomp_linux_test.go is the cheap, always-on guard for the same
+# bug class; this job provides the real Android app-process receipt.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/android-emulator-smoke.yml'
+      - '.github/scripts/android-emulator-smoke.sh'
+      - 'go/go.mod'
+      - 'go/go.sum'
+      - 'go/reactor*.go'
+      - 'go/cmd/dylib/**'
+      - 'hook/build.dart'
+      - 'lib/src/fd_transport.dart'
+      - 'lib/src/ffi_bindings.dart'
+      - 'lib/src/posix_reactor.dart'
+  workflow_dispatch:
+    inputs:
+      api-level:
+        description: Android API level to boot
+        required: false
+        default: '35'
+
+permissions:
+  contents: read
+
+jobs:
+  emulator-smoke:
+    name: Boot on Android x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # This is a pure Dart package built through native-asset hooks, not a
+      # Flutter plugin, so scaffold a throwaway host app. Tailscale.init()
+      # probes the Go reactor without joining a tailnet or needing credentials.
+      - name: Scaffold host app
+        run: |
+          flutter config --enable-native-assets
+          flutter create --platforms=android /tmp/smoke
+          cd /tmp/smoke
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('pubspec.yaml')
+          s = p.read_text()
+          s = s.replace(
+              'dependencies:\n  flutter:\n    sdk: flutter',
+              'dependencies:\n  flutter:\n    sdk: flutter\n  tailscale:\n    path: ${{ github.workspace }}',
+          )
+          p.write_text(s)
+          PY
+          cat > lib/main.dart <<'DART'
+          import 'dart:io';
+
+          import 'package:flutter/material.dart';
+          import 'package:tailscale/tailscale.dart';
+
+          void main() {
+            Tailscale.init(
+              stateDir: '${Directory.systemTemp.path}/ts-smoke',
+            );
+            print('TAILSCALE_DART_SMOKE_READY');
+            runApp(const MaterialApp(home: Scaffold(body: Text('up'))));
+          }
+          DART
+          flutter pub get
+
+      - name: Build APK (x86_64 only)
+        working-directory: /tmp/smoke
+        run: flutter build apk --debug --target-platform android-x64
+
+      - name: Boot emulator and smoke the app
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ inputs.api-level || '35' }}
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          # The runner executes each script line independently with `sh -c`.
+          # Enter Bash once so strict mode, variables, and control flow share a
+          # single process.
+          script: bash .github/scripts/android-emulator-smoke.sh
+
+      - name: Upload logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logcat
+          path: /tmp/logcat.txt
+          if-no-files-found: ignore

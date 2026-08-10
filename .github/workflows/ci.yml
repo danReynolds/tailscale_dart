@@ -29,6 +29,54 @@ jobs:
         # teardown under the race detector (see node_gate_test.go); gate on it.
         run: go test -race -v -count=1 ./...
 
+  android-build:
+    name: Android cross-build (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    # Every ABI we ship. Nothing else in CI compiles for Android, so an
+    # Android-only build break could otherwise reach a release unnoticed.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            cc: aarch64-linux-android24-clang
+          - goarch: amd64
+            cc: x86_64-linux-android24-clang
+          - goarch: arm
+            cc: armv7a-linux-androideabi24-clang
+          - goarch: '386'
+            cc: i686-linux-android24-clang
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      # Pin NDK 28.2 because its clang target triples are part of this matrix.
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r28c
+          # The action's repository cache uses one immutable key per NDK and
+          # OS. A prior matrix run populated that key with an archive missing
+          # bin/clang, so prefer a fresh, deterministic pinned-NDK install.
+          local-cache: false
+      - name: Build
+        working-directory: go
+        env:
+          GOOS: android
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          CC="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.cc }}"
+          echo "CC=$CC"
+          # Match hook/build.dart's shipped Android artifact, including cgo's
+          # c-shared link step and the actual FFI entry point.
+          CC="$CC" go build \
+            -buildmode=c-shared \
+            -tags 'ts_omit_listenrawdisco ts_omit_portmapper' \
+            -o "/tmp/libtailscale-${GOARCH}.so" \
+            ./cmd/dylib/main.go
+
   dart-tests:
     name: Dart tests
     runs-on: ubuntu-latest

@@ -104,6 +104,30 @@ final class KeybayStateCustodyBinding {
   SecretStorage createStorage() => _storageFactory(appId: keybayNamespace);
 }
 
+/// Deletes the exact StateStore DEK entry — the compensating action shared by
+/// custody abandonment and explicit local reset.
+///
+/// Resolves [binding]'s container unless the caller passes an already-resolved
+/// [storage]. Failures are mapped through [mapKeybayStateCustodyError] with
+/// the shared removal action text.
+@internal
+Future<void> deleteStateStoreDek(
+  KeybayStateCustodyBinding binding, {
+  SecretStorage? storage,
+}) async {
+  try {
+    await (storage ?? binding.createStorage()).delete(stateStoreDekEntry);
+  } catch (error, stackTrace) {
+    Error.throwWithStackTrace(
+      mapKeybayStateCustodyError(
+        error,
+        action: 'remove the Tailscale state key',
+      ),
+      stackTrace,
+    );
+  }
+}
+
 /// Validates [hostAppId] and derives Tailscale's dedicated Keybay namespace.
 ///
 /// Keybay permits at most 120 characters. The host-identifier budget reserves

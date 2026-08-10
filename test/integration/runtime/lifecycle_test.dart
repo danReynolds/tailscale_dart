@@ -700,7 +700,9 @@ void main() {
     });
 
     test('worker exit fails the exact up before replacement starts', () async {
-      await Tailscale.instance.debugTerminateWorkerAfterNextStartForTesting();
+      await Tailscale.instance.debugTerminateWorkerForTesting(
+        at: DebugTerminatePoint.afterNextStart,
+      );
       final incident = Tailscale.instance.onError.firstWhere(
         (error) => error.code == TailscaleRuntimeErrorCode.worker,
       );
@@ -799,7 +801,9 @@ void main() {
       final errorSub = Tailscale.instance.onError.listen(incidents.add);
       addTearDown(errorSub.cancel);
 
-      await Tailscale.instance.debugTerminateWorkerOnNextShutdownForTesting();
+      await Tailscale.instance.debugTerminateWorkerForTesting(
+        at: DebugTerminatePoint.nextShutdown,
+      );
       await expectLater(Tailscale.instance.down(), completes);
       final status = await Tailscale.instance.status().timeout(
         const Duration(seconds: 10),
@@ -833,8 +837,9 @@ void main() {
       final stateSub = Tailscale.instance.onStateChange.listen(states.add);
       addTearDown(stateSub.cancel);
 
-      await Tailscale.instance
-          .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
+      await Tailscale.instance.debugTerminateWorkerForTesting(
+        at: DebugTerminatePoint.afterNextLifecycleNativeResult,
+      );
       await expectLater(Tailscale.instance.down(), completes);
       expect((await Tailscale.instance.status()).state, NodeState.stopped);
       expect(states.where((state) => state == NodeState.stopped), hasLength(1));
@@ -857,8 +862,9 @@ void main() {
         addTearDown(errorSub.cancel);
         addTearDown(stateSub.cancel);
 
-        await Tailscale.instance
-            .debugTerminateWorkerAfterNextLogoutDispatchForTesting();
+        await Tailscale.instance.debugTerminateWorkerForTesting(
+          at: DebugTerminatePoint.afterNextLogoutDispatch,
+        );
         TailscaleLogoutException? logoutError;
         try {
           await Tailscale.instance.logout();
@@ -903,8 +909,9 @@ void main() {
           controlUrl: Uri.parse('http://127.0.0.1:1/'),
         );
         await Tailscale.instance.down();
-        await Tailscale.instance
-            .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
+        await Tailscale.instance.debugTerminateWorkerForTesting(
+          at: DebugTerminatePoint.afterNextLifecycleNativeResult,
+        );
 
         try {
           await Tailscale.instance.logout();

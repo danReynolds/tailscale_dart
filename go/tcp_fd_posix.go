@@ -47,13 +47,9 @@ var (
 // The returned fd is owned by the caller. Go keeps the other side of a
 // socketpair and pipes it to the tsnet connection.
 func TcpDialFd(runtimeToken uint64, host string, port int, timeout time.Duration) (*TcpFdConn, error) {
-	gate, ok := acquireNodeGateForRuntimeToken(runtimeToken)
-	if !ok {
-		return nil, fmt.Errorf(
-			"%w: TcpDialFd captured runtime %d is no longer current",
-			ErrRuntimeStale,
-			runtimeToken,
-		)
+	gate, err := gateForRuntimeToken("TcpDialFd", runtimeToken)
+	if err != nil {
+		return nil, err
 	}
 	if host == "" {
 		return nil, errors.New("host is required")
@@ -102,9 +98,9 @@ func TcpListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 		return nil, fmt.Errorf("invalid port %d", tailnetPort)
 	}
 
-	gate, ok := acquireNodeGate()
-	if !ok {
-		return nil, errors.New("TcpListenFd called before Start")
+	gate, err := gateForCurrentRuntime("TcpListenFd")
+	if err != nil {
+		return nil, err
 	}
 	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
 		return nil, fmt.Errorf("tcp listen data plane: %w", err)
@@ -124,9 +120,9 @@ func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 		return nil, fmt.Errorf("invalid port %d", tailnetPort)
 	}
 
-	gate, ok := acquireNodeGate()
-	if !ok {
-		return nil, errors.New("TlsListenFd called before Start")
+	gate, err := gateForCurrentRuntime("TlsListenFd")
+	if err != nil {
+		return nil, err
 	}
 	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
 		return nil, fmt.Errorf("tls listen data plane: %w", err)
@@ -153,6 +149,10 @@ func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 // mandatory first-Up bootstrap has completed. Deliberately absent is
 // ListenTLS: that convenience method calls Server.Up internally and would
 // create a second lifecycle/publication-reset authority.
+//
+// listenTLSOnReadyServer therefore mirrors the composition inside upstream
+// tsnet.Server.ListenTLS (tsnet/tsnet.go, v1.102.2) minus its internal Up
+// call; diff it against upstream on every tailscale.com bump.
 type readyTLSListenServer interface {
 	CertDomains() []string
 	Listen(network, addr string) (net.Listener, error)

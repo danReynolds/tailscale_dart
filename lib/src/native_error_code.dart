@@ -1,4 +1,21 @@
+import 'dart:convert';
+import 'dart:ffi' as ffi;
+
+import 'package:ffi/ffi.dart';
+
 import 'errors.dart';
+import 'ffi_bindings.dart' as native;
+
+/// Factory that wraps a native error-response message with the right
+/// operation-specific exception subtype. `code` + `statusCode` plumb
+/// through from the Go-side error classification so callers can
+/// pattern-match on [TailscaleErrorCode].
+typedef NativeEnvelopeErrorFactory =
+    TailscaleException Function(
+      String message, {
+      TailscaleErrorCode code,
+      int? statusCode,
+    });
 
 /// Maps the stable native error vocabulary onto Dart's public error enum.
 ///
@@ -39,3 +56,43 @@ TailscaleErrorCode parseNativeErrorCode(String? raw) => switch (raw) {
   'featureDisabled' => TailscaleErrorCode.featureDisabled,
   _ => TailscaleErrorCode.unknown,
 };
+
+/// Invokes [fn], frees the Go-allocated response buffer, and decodes its JSON
+/// envelope.
+///
+/// When [onError] is supplied and the decoded envelope is a map carrying an
+/// `error` key, the message is thrown through [onError] with the code mapped
+/// by [parseNativeErrorCode] — the single wire vocabulary — plus any
+/// `statusCode`. Callers that interpret the error field themselves omit
+/// [onError]. Usable on any isolate; the worker helpers and the synchronous
+/// caller-isolate FFI capabilities share this decode. [free] is a test seam
+/// over [native.duneFree].
+dynamic decodeNativeEnvelope(
+  ffi.Pointer<Utf8> Function() fn, {
+  NativeEnvelopeErrorFactory? onError,
+  void Function(ffi.Pointer<Utf8> pointer)? free,
+}) {
+  final pointer = fn();
+  late final String json;
+  // Free the Go-allocated buffer even if decoding throws — `toDartString`
+  // rejects malformed UTF-8, and Go error strings can carry raw
+  // remote-supplied bytes, so without the finally a bad response would leak
+  // native memory.
+  try {
+    json = pointer.toDartString();
+  } finally {
+    (free ?? native.duneFree)(pointer);
+  }
+  final decoded = jsonDecode(json);
+  if (onError != null && decoded is Map<String, dynamic>) {
+    final error = decoded['error'] as String?;
+    if (error != null) {
+      throw onError(
+        error,
+        code: parseNativeErrorCode(decoded['code'] as String?),
+        statusCode: decoded['statusCode'] as int?,
+      );
+    }
+  }
+  return decoded;
+}

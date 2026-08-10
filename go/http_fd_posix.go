@@ -92,9 +92,9 @@ func HttpBind(tailnetPort int) (*HttpBinding, error) {
 		return nil, fmt.Errorf("invalid tailnet port %d", tailnetPort)
 	}
 
-	gate, ok := acquireNodeGate()
-	if !ok {
-		return nil, fmt.Errorf("HttpBind called before Start")
+	gate, err := gateForCurrentRuntime("HttpBind")
+	if err != nil {
+		return nil, err
 	}
 	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
 		return nil, fmt.Errorf("http bind data plane: %w", err)
@@ -261,12 +261,9 @@ func HttpStart(
 		return nil, errors.New("HTTP URL is required")
 	}
 
-	gate, ok := acquireNodeGate()
-	if !ok {
-		return nil, fmt.Errorf("%w: HttpStart called before Start", ErrRuntimeStale)
-	}
-	if runtimeToken == 0 || gate.runtime.token != runtimeToken {
-		return nil, fmt.Errorf("%w: HTTP client belongs to another runtime", ErrRuntimeStale)
+	gate, err := gateForRuntimeToken("HttpStart", runtimeToken)
+	if err != nil {
+		return nil, err
 	}
 	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
 		return nil, fmt.Errorf("HTTP client data plane: %w", err)
@@ -387,96 +384,11 @@ func runHttpFdRequest(
 	}
 }
 
-// httpTransportCache holds one *http.Transport (an HTTP connection pool + TLS
-// session cache) and rebuilds it whenever its owner changes.
-//
-// The owner is the *tsnet.Server the pooled connections were dialed and
-// authenticated through. This is a SECURITY boundary, not just hygiene: a
-// pooled connection carries the tailnet identity that was live when it was
-// dialed, so if the node logs out and back in as a different identity (a new
-// *tsnet.Server), the old connections must never serve new-identity requests.
-// Keying the cache on the owner guarantees a fresh, empty pool per identity;
-// CloseIdleConnections on swap/reset stops the old identity's connections from
-// lingering. Cross-host isolation is inherent to http.Transport (its pool is
-// keyed by host:port), so a peer-A connection is never handed to a peer-B
-// request.
-//
-// INVARIANT: the *tsnet.Server pointer is a proxy for identity. This is correct
-// only because every identity change produces a *distinct* server — Start
-// always allocates a fresh tsnet.Server (lib.go), and the controller refuses to
-// replace or re-authenticate an active runtime in place. Runtime drain resets
-// this cache before the next candidate can start.
-type httpTransportCache struct {
-	mu        sync.Mutex
-	owner     any
-	transport *http.Transport
-}
-
-// get returns the cached transport for [owner], building it via [build] (and
-// discarding any transport from a previous owner) when the owner differs.
-func (c *httpTransportCache) get(owner any, build func() *http.Transport) *http.Transport {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.transport == nil || c.owner != owner {
-		if c.transport != nil {
-			c.transport.CloseIdleConnections()
-		}
-		c.transport = build()
-		c.owner = owner
-	}
-	return c.transport
-}
-
-// getCurrent is get with a commit-point epoch check (see nodeGate): when the
-// gated lifecycle is no longer live, it returns a one-off transport WITHOUT
-// touching the cache — reported via oneOff=true so the caller can close its
-// idle connections after use (nothing else retains it) — so a request racing
-// Stop can't repopulate the cache with a dead server behind
-// resetTailnetHTTPTransport's sweep. The check runs under c.mu — the same lock
-// the reset sweeps under — so there is no check-to-cache window; and because
-// it is a lock-free atomic load it needs no controller lock, keeping lifecycle
-// coordination off the per-request hot path entirely.
-func (c *httpTransportCache) getCurrent(gate nodeGate, build func() *http.Transport) (transport *http.Transport, oneOff bool) {
-	c.mu.Lock()
-	if !gate.stillCurrent() {
-		c.mu.Unlock()
-		return build(), true
-	}
-	defer c.mu.Unlock()
-	if c.transport == nil || c.owner != any(gate.s) {
-		if c.transport != nil {
-			c.transport.CloseIdleConnections()
-		}
-		c.transport = build()
-		c.owner = gate.s
-	}
-	return c.transport, false
-}
-
-// reset drops the cached transport and closes its idle connections. Called on
-// node teardown so no pooled connection outlives the node/identity.
-func (c *httpTransportCache) reset() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.transport != nil {
-		c.transport.CloseIdleConnections()
-	}
-	c.transport = nil
-	c.owner = nil
-}
-
-var tailnetHTTPTransports httpTransportCache
-
-// sharedTailnetTransport returns the process-wide tailnet HTTP transport for
-// the gated server, rebuilding it if the server (identity) changed since last
-// use. A request whose lifecycle already ended (Stop raced the request) gets a
-// one-off transport instead (oneOff=true; the caller must close its idle
-// connections after use) — see getCurrent, which makes the liveness check
-// atomic with the cache populate so a dead server can never be re-cached (and
-// retained, with its whole netstack/wireguard graph) behind
-// resetTailnetHTTPTransport's teardown sweep.
+// sharedTailnetTransport returns the gated runtime's owned HTTP transport,
+// building it on first use; see nodeRuntime.tailnetTransport for the identity
+// and teardown contract (including the oneOff close-idle obligation).
 func sharedTailnetTransport(gate nodeGate) (transport *http.Transport, oneOff bool) {
-	return tailnetHTTPTransports.getCurrent(gate, func() *http.Transport {
+	return gate.runtime.tailnetTransport(func() *http.Transport {
 		return buildTailnetTransport(gate.s)
 	})
 }
@@ -498,13 +410,6 @@ func applyTailnetTLS(base *http.Transport) *http.Transport {
 	cloned := base.Clone()
 	cloned.TLSClientConfig = tlsdial.Config(nil, cloned.TLSClientConfig)
 	return cloned
-}
-
-// resetTailnetHTTPTransport drops the cached HTTP transport and closes its idle
-// connections. Called from nodeRuntime.close so pooled connections never
-// survive a node/identity change.
-func resetTailnetHTTPTransport() {
-	tailnetHTTPTransports.reset()
 }
 
 func serveHTTPFdRequest(state *httpBindingState, w http.ResponseWriter, r *http.Request) {

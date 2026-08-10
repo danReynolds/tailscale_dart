@@ -19,7 +19,6 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 )
 
 // peerPublishDebounce coalesces rapid NetMap deltas into a single
@@ -271,11 +270,7 @@ func publishPeerSnapshot(run *watcherRun, lc *local.Client) {
 	if err != nil {
 		return
 	}
-	peers := make([]*ipnstate.PeerStatus, 0, len(status.Peer))
-	for _, peer := range status.Peer {
-		peers = append(peers, peer)
-	}
-	ipnstate.SortPeers(peers)
+	peers := sortedPeers(status)
 	body, err := json.Marshal(peers)
 	if err != nil {
 		return

@@ -51,12 +51,7 @@ func (a *runtimeLocalClient) resultError(err error) error {
 }
 
 func (a *runtimeLocalClient) awaitDataPlaneReady(ctx context.Context) error {
-	gate := nodeGate{
-		runtime: a.runtime,
-		s:       a.runtime.server,
-		epoch:   a.runtime.generation,
-	}
-	return gate.awaitDataPlaneReady(ctx)
+	return a.runtime.gate().awaitDataPlaneReady(ctx)
 }
 
 // lcOr returns the LocalClient and runtime generation captured together, or an
@@ -75,14 +70,9 @@ func lcOr(op string) (*runtimeLocalClient, error) {
 // Dart while a lifecycle replacement occurs; it must fail stale rather than
 // discover the replacement's LocalClient at native entry.
 func lcForRuntimeToken(op string, runtimeToken uint64) (*runtimeLocalClient, error) {
-	gate, ok := acquireNodeGateForRuntimeToken(runtimeToken)
-	if !ok {
-		return nil, fmt.Errorf(
-			"%w: %s captured runtime %d is no longer current",
-			ErrRuntimeStale,
-			op,
-			runtimeToken,
-		)
+	gate, err := gateForRuntimeToken(op, runtimeToken)
+	if err != nil {
+		return nil, err
 	}
 	return &runtimeLocalClient{Client: gate.runtime.localClient, runtime: gate.runtime}, nil
 }
@@ -246,17 +236,34 @@ func lookupNodeIdentityViaLocalAPI(addr netip.Addr) *nodeIdentity {
 	return nodeIdentityFromWhoIs(resp)
 }
 
-// isNotFound is true when err wraps a LocalAPI 404. Covers both the
-// typed `*apitype.HTTPErr`-shaped case and a string fallback so the
-// package works across minor upstream version skew.
+// decodeStrictJSON decodes exactly one JSON value into T, rejecting unknown
+// fields and trailing values, with one shared "invalid <what> JSON" spelling.
+func decodeStrictJSON[T any](raw, what string) (T, error) {
+	var payload T
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&payload); err != nil {
+		return payload, fmt.Errorf("invalid %s JSON: %w", what, err)
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		return payload, fmt.Errorf("invalid %s JSON: %w", what, err)
+	}
+	return payload, nil
+}
+
+// isNotFound is true when err reports a LocalAPI 404. WhoIs returns the
+// exported [local.ErrPeerNotFound] sentinel; the Status() branch covers other
+// LocalAPI endpoints that surface *apitype.HTTPErr directly.
 func isNotFound(err error) bool {
-	var herr interface{ Status() int }
-	if errors.As(err, &herr) && herr.Status() == http.StatusNotFound {
+	if errors.Is(err, local.ErrPeerNotFound) {
 		return true
 	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "404") ||
-		strings.Contains(lower, "not found")
+	var herr interface{ Status() int }
+	return errors.As(err, &herr) && herr.Status() == http.StatusNotFound
 }
 
 // isTransientNoSuggestion reports whether err is one of upstream's transient
@@ -280,24 +287,13 @@ func isTransientNoSuggestion(err error) bool {
 // available, zero otherwise. Used as a secondary signal for the
 // Dart side.
 func classifyLocalAPIError(err error) (code string, status int) {
-	if errors.Is(err, ErrDataPlaneNotReady) {
-		return "dataPlaneNotReady", 0
-	}
-	if errors.Is(err, ErrPublicationBootstrapFailure) {
-		return "publicationBootstrapFailure", 0
-	}
-	if errors.Is(err, ErrServeConfigConflict) {
-		return "serveConfigConflict", 0
-	}
-	if errors.Is(err, ErrPublicationCommitIndeterminate) {
-		return "publicationCommitIndeterminate", 0
-	}
-	if errors.Is(err, ErrRuntimeStale) {
-		return "staleRuntime", 0
-	}
+	code = LifecycleErrorCode(err)
 	var herr interface{ Status() int }
 	if errors.As(err, &herr) {
 		status = herr.Status()
+	}
+	if code != "" {
+		return code, status
 	}
 	switch status {
 	case http.StatusNotFound:
@@ -419,18 +415,9 @@ func PrefsGet() string {
 
 // PrefsUpdate applies a Dart PrefsUpdate JSON object using LocalAPI EditPrefs.
 func PrefsUpdate(updateJSON string) string {
-	var payload prefsUpdatePayload
-	dec := json.NewDecoder(strings.NewReader(updateJSON))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&payload); err != nil {
-		return jsonError(fmt.Errorf("invalid prefs update JSON: %w", err))
-	}
-	var extra struct{}
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			err = errors.New("multiple JSON values")
-		}
-		return jsonError(fmt.Errorf("invalid prefs update JSON: %w", err))
+	payload, err := decodeStrictJSON[prefsUpdatePayload](updateJSON, "prefs update")
+	if err != nil {
+		return jsonError(err)
 	}
 
 	masked, err := maskedPrefsFromPayload(payload)
@@ -543,42 +530,22 @@ type servePublication struct {
 // ServeConfig; Funnel is the same handler with AllowFunnel enabled, matching
 // upstream's one-config Serve/Funnel authority.
 func ServeForward(runtimeToken uint64, payloadJSON string) string {
-	var payload serveForwardPayload
-	dec := json.NewDecoder(strings.NewReader(payloadJSON))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&payload); err != nil {
-		return jsonError(fmt.Errorf("invalid serve forward JSON: %w", err))
-	}
-	var extra struct{}
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			err = errors.New("multiple JSON values")
-		}
-		return jsonError(fmt.Errorf("invalid serve forward JSON: %w", err))
+	payload, err := decodeStrictJSON[serveForwardPayload](payloadJSON, "serve forward")
+	if err != nil {
+		return jsonError(err)
 	}
 
-	runtime := currentRuntime()
-	if runtime == nil {
-		if runtimeToken != 0 {
-			return localAPIError(fmt.Errorf("%w: ServeForward runtime %d is no longer current", ErrRuntimeStale, runtimeToken))
-		}
-		return jsonError(errors.New("ServeForward called before Start"))
+	gate, err := gateForRuntimeToken("ServeForward", runtimeToken)
+	if err != nil {
+		return localAPIError(err)
 	}
-	if runtimeToken == 0 || runtime.token != runtimeToken {
-		return localAPIError(fmt.Errorf(
-			"%w: ServeForward captured runtime %d, current runtime is %d",
-			ErrRuntimeStale,
-			runtimeToken,
-			runtime.token,
-		))
-	}
+	runtime := gate.runtime
 	manager := runtime.publication
 	if manager == nil {
 		return localAPIError(notAppliedError(errors.New("ServeForward publication manager is unavailable")))
 	}
 	ctx, cancel := boundedCallCtxFrom(runtime.ctx, 0)
 	defer cancel()
-	gate := nodeGate{runtime: runtime, s: runtime.server, epoch: runtime.generation}
 	if err := gate.awaitDataPlaneReady(ctx); err != nil {
 		return localAPIError(err)
 	}
@@ -601,10 +568,11 @@ func ServeForward(runtimeToken uint64, payloadJSON string) string {
 // a replacement runtime; an ambiguous live receipt quarantines this exact
 // generation before returning an error.
 func AcknowledgePublication(runtimeToken, generation, mappingToken uint64) error {
-	runtime := currentRuntime()
-	if runtime == nil || runtimeToken == 0 || runtime.token != runtimeToken || runtime.generation != generation {
+	gate, ok := acquireNodeGateForRuntimeToken(runtimeToken)
+	if !ok || gate.epoch != generation {
 		return ErrRuntimeStale
 	}
+	runtime := gate.runtime
 	if runtime.publication == nil {
 		return quarantinePublicationDeliveryFailure(
 			runtime,
@@ -671,18 +639,9 @@ func failPublicationDelivery(
 // ServeClear removes one Serve/Funnel web path from this node. It is
 // intentionally idempotent: clearing an absent mapping still succeeds.
 func ServeClear(payloadJSON string) string {
-	var payload serveClearPayload
-	dec := json.NewDecoder(strings.NewReader(payloadJSON))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&payload); err != nil {
-		return jsonError(fmt.Errorf("invalid serve clear JSON: %w", err))
-	}
-	var extra struct{}
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			err = errors.New("multiple JSON values")
-		}
-		return jsonError(fmt.Errorf("invalid serve clear JSON: %w", err))
+	payload, err := decodeStrictJSON[serveClearPayload](payloadJSON, "serve clear")
+	if err != nil {
+		return jsonError(err)
 	}
 
 	mode, generation, _, err := payload.clearMode()
@@ -702,8 +661,7 @@ func ServeClear(payloadJSON string) string {
 	}
 	ctx, cancel := boundedCallCtxFrom(runtime.ctx, 0)
 	defer cancel()
-	gate := nodeGate{runtime: runtime, s: runtime.server, epoch: runtime.generation}
-	if err := gate.awaitDataPlaneReady(ctx); err != nil {
+	if err := runtime.gate().awaitDataPlaneReady(ctx); err != nil {
 		return localAPIError(err)
 	}
 	if err := manager.clear(ctx, payload); err != nil {
@@ -810,18 +768,6 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 	}, nil
 }
 
-func applyServeClear(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveClearPayload) error {
-	dnsName, _, err := serveHostFromStatus(st)
-	if err != nil {
-		return err
-	}
-	return applyServeClearForHost(sc, dnsName, payload)
-}
-
-func applyServeClearForHost(sc *ipn.ServeConfig, dnsName string, payload serveClearPayload) error {
-	return applyServeClearForHostWithFunnelCleanup(sc, dnsName, payload, true)
-}
-
 func applyServeClearForHostWithFunnelCleanup(
 	sc *ipn.ServeConfig,
 	dnsName string,
@@ -842,42 +788,21 @@ func applyServeClearForHostWithFunnelCleanup(
 	if sc.IsTCPForwardingOnPort(port, "") {
 		return fmt.Errorf("cannot clear web serve; currently serving TCP on port %d", port)
 	}
-
-	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(port))))
 	if payload.Funnel {
 		// Funnel visibility is keyed by host:port, not path. Clearing a Funnel
 		// publication withdraws public ingress for the whole port while the
 		// selected handler cleanup below remains path-specific.
 		sc.SetFunnel(dnsName, port, false)
 	}
-	web := sc.Web[hp]
-	if web == nil {
-		return nil
-	}
-	delete(web.Handlers, mount)
-	if len(web.Handlers) == 0 {
-		delete(sc.Web, hp)
-		delete(sc.TCP, port)
-		if cleanupFunnelWhenEmpty {
-			delete(sc.AllowFunnel, hp)
-		}
-	}
-	if len(sc.Web) == 0 {
-		sc.Web = nil
-	}
-	if len(sc.TCP) == 0 {
-		sc.TCP = nil
-	}
-	if len(sc.AllowFunnel) == 0 {
-		sc.AllowFunnel = nil
-	}
+	removeServeWebHandlerWithFunnelCleanup(sc, dnsName, port, mount, cleanupFunnelWhenEmpty)
 	return nil
 }
 
-func removeServeWebHandler(sc *ipn.ServeConfig, host string, port uint16, mount string) {
-	removeServeWebHandlerWithFunnelCleanup(sc, host, port, mount, true)
-}
-
+// removeServeWebHandlerWithFunnelCleanup removes one web handler through
+// upstream's cascade-delete and empty-map normalization, which the publication
+// manager's DeepEqual change detection depends on. The guards exist because
+// upstream (*ipn.ServeConfig).RemoveWebHandler dereferences sc.Web[hp]
+// unconditionally and panics when no web config exists at that host:port.
 func removeServeWebHandlerWithFunnelCleanup(
 	sc *ipn.ServeConfig,
 	host string,
@@ -889,27 +814,10 @@ func removeServeWebHandlerWithFunnelCleanup(
 		return
 	}
 	hp := ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
-	web := sc.Web[hp]
-	if web == nil {
+	if sc.Web[hp] == nil {
 		return
 	}
-	delete(web.Handlers, mount)
-	if len(web.Handlers) == 0 {
-		delete(sc.Web, hp)
-		delete(sc.TCP, port)
-		if cleanupFunnelWhenEmpty {
-			delete(sc.AllowFunnel, hp)
-		}
-	}
-	if len(sc.Web) == 0 {
-		sc.Web = nil
-	}
-	if len(sc.TCP) == 0 {
-		sc.TCP = nil
-	}
-	if len(sc.AllowFunnel) == 0 {
-		sc.AllowFunnel = nil
-	}
+	sc.RemoveWebHandler(host, port, []string{mount}, cleanupFunnelWhenEmpty)
 }
 
 func validateServePort(name string, port int) (uint16, error) {
@@ -919,10 +827,6 @@ func validateServePort(name string, port int) (uint16, error) {
 	return uint16(port), nil
 }
 
-func validateServeLocalAddress(address string) error {
-	_, err := normalizeServeLocalAddress(address)
-	return err
-}
 
 func normalizeServeLocalAddress(address string) (string, error) {
 	address = strings.TrimSpace(address)

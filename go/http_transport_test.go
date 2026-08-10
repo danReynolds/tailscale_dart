@@ -35,90 +35,126 @@ func getOK(t *testing.T, tr *http.Transport, url string) {
 	_ = resp.Body.Close()
 }
 
-// TestHttpTransportCache_ReusesWithinSameOwner is the win: successive requests
+func transportRuntime() *nodeRuntime {
+	return newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
+}
+
+// TestRuntimeTransport_ReusesWithinSameRuntime is the win: successive requests
 // under the same identity share one connection (one dial).
-func TestHttpTransportCache_ReusesWithinSameOwner(t *testing.T) {
+func TestRuntimeTransport_ReusesWithinSameRuntime(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer server.Close()
 
 	var dials atomic.Int64
-	var cache httpTransportCache
-	owner := new(int) // stands in for a *tsnet.Server identity
+	runtime := transportRuntime()
+	t.Cleanup(runtime.cancel)
 
 	for i := 0; i < 3; i++ {
-		getOK(t, cache.get(owner, func() *http.Transport { return countingTransport(&dials) }), server.URL)
+		tr, oneOff := runtime.tailnetTransport(func() *http.Transport { return countingTransport(&dials) })
+		if oneOff {
+			t.Fatal("a live runtime's transport must not be reported one-off")
+		}
+		getOK(t, tr, server.URL)
 	}
 	if got := dials.Load(); got != 1 {
 		t.Fatalf("same-identity requests should reuse one connection: got %d dials, want 1", got)
 	}
 }
 
-// TestHttpTransportCache_NoReuseAcrossIdentityChange is the load-bearing
-// security boundary: after the owner (identity) changes, a request must NOT be
-// served by the previous identity's pooled connection — it must dial fresh.
-func TestHttpTransportCache_NoReuseAcrossIdentityChange(t *testing.T) {
+// TestRuntimeTransport_NoReuseAcrossIdentityChange is the load-bearing security
+// boundary: an identity change is a new runtime with its own empty slot, so a
+// request after the change must NOT be served by the previous identity's
+// pooled connection — it must dial fresh.
+func TestRuntimeTransport_NoReuseAcrossIdentityChange(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer server.Close()
 
 	var dials atomic.Int64
-	var cache httpTransportCache
-	identityA := new(int)
-	identityB := new(int)
+	build := func() *http.Transport { return countingTransport(&dials) }
+	runtimeA := transportRuntime()
+	t.Cleanup(runtimeA.cancel)
+	runtimeB := transportRuntime()
+	t.Cleanup(runtimeB.cancel)
 
 	// Warm identity A's pool.
-	getOK(t, cache.get(identityA, func() *http.Transport { return countingTransport(&dials) }), server.URL)
-	getOK(t, cache.get(identityA, func() *http.Transport { return countingTransport(&dials) }), server.URL)
+	for i := 0; i < 2; i++ {
+		tr, _ := runtimeA.tailnetTransport(build)
+		getOK(t, tr, server.URL)
+	}
 	if got := dials.Load(); got != 1 {
 		t.Fatalf("identity A should have reused: got %d dials, want 1", got)
 	}
 
-	// Switch identity. The prior connection must not be reused.
-	getOK(t, cache.get(identityB, func() *http.Transport { return countingTransport(&dials) }), server.URL)
+	// Identity A ends; its pool drains with it.
+	runtimeA.closeTailnetTransport()
+
+	// The replacement identity has its own slot and must dial fresh.
+	trB, oneOff := runtimeB.tailnetTransport(build)
+	if oneOff {
+		t.Fatal("the replacement runtime's transport must not be one-off")
+	}
+	getOK(t, trB, server.URL)
 	if got := dials.Load(); got != 2 {
 		t.Fatalf("identity change must force a fresh connection (not reuse A's): got %d dials, want 2", got)
 	}
 
 	// And identity B keeps its own reusable pool.
-	getOK(t, cache.get(identityB, func() *http.Transport { return countingTransport(&dials) }), server.URL)
+	trB2, _ := runtimeB.tailnetTransport(build)
+	getOK(t, trB2, server.URL)
 	if got := dials.Load(); got != 2 {
 		t.Fatalf("identity B should reuse its own connection: got %d dials, want 2", got)
 	}
 }
 
-// TestHttpTransportCache_ResetForcesFreshConnection covers node teardown: after
-// reset() (called from nodeRuntime.close), the next request must dial anew.
-func TestHttpTransportCache_ResetForcesFreshConnection(t *testing.T) {
+// TestRuntimeTransport_CloseForcesOneOff covers node teardown: after
+// closeTailnetTransport (called from nodeRuntime.close), a straggling request
+// gets a one-off transport and must not repopulate the closed slot — an entry
+// there would retain the dead server's netstack graph behind the sweep.
+func TestRuntimeTransport_CloseForcesOneOff(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer server.Close()
 
 	var dials atomic.Int64
-	var cache httpTransportCache
-	owner := new(int)
+	build := func() *http.Transport { return countingTransport(&dials) }
+	runtime := transportRuntime()
+	t.Cleanup(runtime.cancel)
 
-	getOK(t, cache.get(owner, func() *http.Transport { return countingTransport(&dials) }), server.URL)
-	getOK(t, cache.get(owner, func() *http.Transport { return countingTransport(&dials) }), server.URL)
+	tr, _ := runtime.tailnetTransport(build)
+	getOK(t, tr, server.URL)
+	getOK(t, tr, server.URL)
 	if got := dials.Load(); got != 1 {
-		t.Fatalf("pre-reset reuse: got %d dials, want 1", got)
+		t.Fatalf("pre-close reuse: got %d dials, want 1", got)
 	}
 
-	cache.reset() // node stopped
+	runtime.closeTailnetTransport() // node stopped
 
-	// Even with the same owner value, a fresh transport must be built.
-	getOK(t, cache.get(owner, func() *http.Transport { return countingTransport(&dials) }), server.URL)
+	late, oneOff := runtime.tailnetTransport(build)
+	if !oneOff {
+		t.Fatal("a closed runtime's transport must be reported one-off so the caller closes its idle conns")
+	}
+	getOK(t, late, server.URL)
+	late.CloseIdleConnections()
 	if got := dials.Load(); got != 2 {
-		t.Fatalf("post-reset request must dial fresh: got %d dials, want 2", got)
+		t.Fatalf("post-close request must dial fresh: got %d dials, want 2", got)
+	}
+
+	runtime.httpMu.Lock()
+	repopulated := runtime.httpTransport != nil
+	runtime.httpMu.Unlock()
+	if repopulated {
+		t.Fatal("a straggler must not repopulate a closed transport slot")
 	}
 }
 
-// TestHttpTransportCache_CrossHostIsolation confirms a pooled connection to one
+// TestRuntimeTransport_CrossHostIsolation confirms a pooled connection to one
 // host is never handed to a request for a different host.
-func TestHttpTransportCache_CrossHostIsolation(t *testing.T) {
+func TestRuntimeTransport_CrossHostIsolation(t *testing.T) {
 	hostA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("a"))
 	}))
@@ -129,93 +165,45 @@ func TestHttpTransportCache_CrossHostIsolation(t *testing.T) {
 	defer hostB.Close()
 
 	var dials atomic.Int64
-	var cache httpTransportCache
-	owner := new(int)
-	build := func() *http.Transport { return countingTransport(&dials) }
+	runtime := transportRuntime()
+	t.Cleanup(runtime.cancel)
+	transport := func() *http.Transport {
+		tr, _ := runtime.tailnetTransport(func() *http.Transport { return countingTransport(&dials) })
+		return tr
+	}
 
 	// Same identity, two different hosts: two separate connections.
-	getOK(t, cache.get(owner, build), hostA.URL)
-	getOK(t, cache.get(owner, build), hostB.URL)
+	getOK(t, transport(), hostA.URL)
+	getOK(t, transport(), hostB.URL)
 	if got := dials.Load(); got != 2 {
 		t.Fatalf("distinct hosts must use distinct connections: got %d dials, want 2", got)
 	}
 	// Re-hitting each host reuses its own connection (no extra dials).
-	getOK(t, cache.get(owner, build), hostA.URL)
-	getOK(t, cache.get(owner, build), hostB.URL)
+	getOK(t, transport(), hostA.URL)
+	getOK(t, transport(), hostB.URL)
 	if got := dials.Load(); got != 2 {
 		t.Fatalf("per-host reuse: got %d dials, want 2", got)
 	}
 }
 
-// cacheOwner reads the cache's current owner under its own lock (race-safe).
-func cacheOwner(c *httpTransportCache) any {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.owner
-}
-
-// TestGetCurrent_CachesForLiveGate: a request under the live lifecycle
-// populates the cache keyed to the gated server, and a second request reuses it
-// (no rebuild).
-func TestGetCurrent_CachesForLiveGate(t *testing.T) {
-	liveServer := &tsnet.Server{}
-	withLiveServer(t, liveServer)
-	var cache httpTransportCache
+// TestSharedTailnetTransport_CachesForLiveGate: a request under the live
+// lifecycle populates the runtime's slot, and a second request reuses it (no
+// rebuild).
+func TestSharedTailnetTransport_CachesForLiveGate(t *testing.T) {
+	withLiveServer(t, &tsnet.Server{})
+	gate := liveGate(t)
 	builds := 0
 	build := func() *http.Transport { builds++; return &http.Transport{} }
 
-	gate := liveGate(t)
-	first, oneOff1 := cache.getCurrent(gate, build)
-	second, oneOff2 := cache.getCurrent(gate, build)
+	first, oneOff1 := gate.runtime.tailnetTransport(build)
+	second, oneOff2 := gate.runtime.tailnetTransport(build)
 	if first == nil || first != second {
-		t.Fatalf("live gate must cache and reuse one transport (builds=%d)", builds)
+		t.Fatalf("a live runtime must cache and reuse one transport (builds=%d)", builds)
 	}
 	if oneOff1 || oneOff2 {
-		t.Fatal("live-gate transports must not be reported one-off")
+		t.Fatal("live transports must not be reported one-off")
 	}
 	if builds != 1 {
 		t.Fatalf("expected exactly one build for repeated live requests, got %d", builds)
-	}
-	if owner := cacheOwner(&cache); owner != any(liveServer) {
-		t.Fatalf("cache must be keyed to the gated server; owner=%v", owner)
-	}
-}
-
-// TestGetCurrent_OneOffForStaleGate is the teardown-race lock-in: once the
-// lifecycle ends (epoch bumped), a late request gets a one-off transport and
-// must NOT touch the cache — neither populating an empty cache (re-caching a
-// dead server pins its whole netstack graph behind the teardown sweep) nor
-// evicting a newer lifecycle's entry.
-func TestGetCurrent_OneOffForStaleGate(t *testing.T) {
-	serverA := &tsnet.Server{}
-	withLiveServer(t, serverA)
-	var cache httpTransportCache
-
-	staleGate := liveGate(t)
-	nodeEpoch.Add(1) // teardown begins
-	cache.reset()    // nodeRuntime.close's sweep
-
-	// Stale request against the empty cache: one-off, cache stays empty.
-	tr, oneOff := cache.getCurrent(staleGate, func() *http.Transport { return &http.Transport{} })
-	if tr == nil {
-		t.Fatal("stale gate must still get a one-off transport")
-	}
-	if !oneOff {
-		t.Fatal("a stale-gate transport must be reported one-off so the caller closes its idle conns")
-	}
-	if owner := cacheOwner(&cache); owner != nil {
-		t.Fatalf("stale gate must not repopulate the cache; owner=%v", owner)
-	}
-
-	// New lifecycle populates; a leftover stale request must not evict it.
-	serverB := &tsnet.Server{}
-	withLiveServer(t, serverB)
-	fresh := liveGate(t)
-	cached, _ := cache.getCurrent(fresh, func() *http.Transport { return &http.Transport{} })
-	if tr, _ := cache.getCurrent(staleGate, func() *http.Transport { return &http.Transport{} }); tr == cached {
-		t.Fatal("stale gate must not be served the new lifecycle's cached transport")
-	}
-	if owner := cacheOwner(&cache); owner != any(serverB) {
-		t.Fatalf("stale gate must not disturb the new lifecycle's entry; owner=%v", owner)
 	}
 }

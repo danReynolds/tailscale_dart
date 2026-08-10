@@ -717,8 +717,9 @@ void main() {
         // upstream confirms logout, and the worker dies before Dart receives
         // the response. Supervisor recovery must replay the retained receipt
         // without converting logical logout into physical state deletion.
-        await tsnet
-            .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
+        await tsnet.debugTerminateWorkerForTesting(
+          at: DebugTerminatePoint.afterNextLifecycleNativeResult,
+        );
 
         final sequence = await recordUntil(
           tsnet,

@@ -94,12 +94,37 @@ func TestDataPlaneEntrypointsRejectBeforePublicationBootstrap(t *testing.T) {
 		})
 	}
 
-	var pingResult map[string]any
-	out := DiagPing(runtime.token, "100.64.0.1", 1000, "disco")
-	if err := json.Unmarshal([]byte(out), &pingResult); err != nil {
-		t.Fatalf("DiagPing returned invalid JSON %q: %v", out, err)
+	jsonCalls := []struct {
+		name string
+		call func() string
+	}{
+		{
+			name: "DiagPing",
+			call: func() string { return DiagPing(runtime.token, "100.64.0.1", 1000, "disco") },
+		},
+		{
+			name: "ServeForward",
+			call: func() string {
+				return ServeForward(runtime.token, `{"tailnetPort":443,"localPort":3000,"localAddress":"127.0.0.1","path":"/","https":true,"funnel":false}`)
+			},
+		},
+		{
+			name: "ServeClear",
+			call: func() string {
+				return ServeClear(`{"tailnetPort":443,"path":"/","funnel":false}`)
+			},
+		},
 	}
-	if pingResult["code"] != "dataPlaneNotReady" {
-		t.Fatalf("DiagPing before publication bootstrap = %v, want dataPlaneNotReady", pingResult)
+	for _, tt := range jsonCalls {
+		t.Run(tt.name, func(t *testing.T) {
+			var result map[string]any
+			out := tt.call()
+			if err := json.Unmarshal([]byte(out), &result); err != nil {
+				t.Fatalf("%s returned invalid JSON %q: %v", tt.name, out, err)
+			}
+			if result["code"] != "dataPlaneNotReady" {
+				t.Fatalf("%s before publication bootstrap = %v, want dataPlaneNotReady", tt.name, result)
+			}
+		})
 	}
 }

@@ -123,9 +123,9 @@ func UdpBindFd(host string, port int) (*UdpFdBinding, error) {
 		return nil, fmt.Errorf("invalid port %d", port)
 	}
 
-	gate, ok := acquireNodeGate()
-	if !ok {
-		return nil, errors.New("UdpBindFd called before Start")
+	gate, err := gateForCurrentRuntime("UdpBindFd")
+	if err != nil {
+		return nil, err
 	}
 	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
 		return nil, fmt.Errorf("udp bind data plane: %w", err)

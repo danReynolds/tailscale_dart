@@ -65,6 +65,7 @@ export 'src/api/udp.dart'
     hide createUdp, createFdTailscaleDatagramBinding, UdpBindFn;
 export 'src/errors.dart';
 export 'src/status.dart';
+export 'src/worker/worker.dart' show DebugTerminatePoint;
 
 /// Native log verbosity for the embedded Tailscale runtime — controls
 /// what the Go side writes to stderr. Dart-side logging (e.g.
@@ -89,6 +90,11 @@ extension on TailscaleLogLevel {
   };
 }
 
+/// Which already-thrown exceptions may stand in unchanged for a site's
+/// cleanup failure in [Tailscale._retainedCleanupFailure], instead of being
+/// wrapped in that site's fresh `runtimeCleanupFailed` exception.
+enum _CleanupFailureKeep { none, anyOperationException, cleanupCoded }
+
 final class _TailscaleInitialization {
   const _TailscaleInitialization({
     required this.canonicalStateBaseDir,
@@ -105,12 +111,6 @@ final class _TailscaleInitialization {
       logLevel == other.logLevel &&
       keybay.hostAppId == other.keybay.hostAppId &&
       keybay.keybayNamespace == other.keybay.keybayNamespace;
-}
-
-final class _PreparedPersistentState {
-  const _PreparedPersistentState({required this.start});
-
-  final bool start;
 }
 
 /// Testable app-facing contract for an embedded Tailscale node.
@@ -205,19 +205,13 @@ class Tailscale implements TailscaleClient {
   final StreamController<List<TailscaleNode>> _nodesController =
       StreamController<List<TailscaleNode>>.broadcast();
 
-  static String _requireStateBaseDir() {
-    final initialization = _initialization;
-    if (initialization == null) {
+  static void _requireInitialized() {
+    if (_initialization == null) {
       throw const TailscaleUsageException(
         'Call Tailscale.init(stateDir: ..., appId: ...) before using '
         'Tailscale.instance.',
       );
     }
-    return initialization.canonicalStateBaseDir;
-  }
-
-  static void _requireInitialized() {
-    _requireStateBaseDir();
   }
 
   int _allocateRuntimeToken() {
@@ -261,13 +255,11 @@ class Tailscale implements TailscaleClient {
       );
     }
     if (cleanupFailed) {
-      _retainCleanupFailure(
-        TailscaleOperationException(
-          'native runtime termination',
-          'Native teardown did not reach a proven quiescent state.',
-          code: TailscaleErrorCode.runtimeCleanupFailed,
-          cause: failure,
-        ),
+      _retainedCleanupFailure(
+        failure,
+        operation: 'native runtime termination',
+        message: 'Native teardown did not reach a proven quiescent state.',
+        keep: _CleanupFailureKeep.none,
       );
       return;
     }
@@ -409,16 +401,12 @@ class Tailscale implements TailscaleClient {
         await awaitNativeRuntimeQuiescence(token);
       }
       if (hasTerminalReceipt && quarantine.cleanupFailed) {
-        _retainCleanupFailure(
-          quarantineError?.code == TailscaleErrorCode.runtimeCleanupFailed
-              ? quarantineError!
-              : TailscaleOperationException(
-                  'worker recovery',
-                  'The completed lifecycle operation did not cleanly close '
-                      'all native resources.',
-                  code: TailscaleErrorCode.runtimeCleanupFailed,
-                  cause: quarantineError,
-                ),
+        _retainedCleanupFailure(
+          quarantineError,
+          operation: 'worker recovery',
+          message:
+              'The completed lifecycle operation did not cleanly close '
+              'all native resources.',
         );
       }
     } catch (error) {
@@ -571,6 +559,42 @@ class Tailscale implements TailscaleClient {
     );
   }
 
+  /// Classifies one failed-cleanup [error], retains it via
+  /// [_retainCleanupFailure], and returns the retained failure so the call
+  /// site can throw its operation-specific exception with restart advice.
+  ///
+  /// [keep] preserves each site's pass-through predicate; anything that does
+  /// not qualify is wrapped in a fresh
+  /// [TailscaleErrorCode.runtimeCleanupFailed] exception built from
+  /// [operation] and [message] with [error] as its cause.
+  TailscaleOperationException _retainedCleanupFailure(
+    Object? error, {
+    required String operation,
+    required String message,
+    _CleanupFailureKeep keep = _CleanupFailureKeep.cleanupCoded,
+  }) {
+    final kept = switch (keep) {
+      _CleanupFailureKeep.none => null,
+      _CleanupFailureKeep.anyOperationException =>
+        error is TailscaleOperationException ? error : null,
+      _CleanupFailureKeep.cleanupCoded =>
+        error is TailscaleOperationException &&
+                error.code == TailscaleErrorCode.runtimeCleanupFailed
+            ? error
+            : null,
+    };
+    final failure =
+        kept ??
+        TailscaleOperationException(
+          operation,
+          message,
+          code: TailscaleErrorCode.runtimeCleanupFailed,
+          cause: error,
+        );
+    _retainCleanupFailure(failure);
+    return failure;
+  }
+
   Future<RuntimeQuarantineResult> _quarantineStateOperation(int token) async {
     final result = await quarantineNativeRuntime(token);
     // Custody must settle before interpreting any accompanying native error;
@@ -646,13 +670,14 @@ class Tailscale implements TailscaleClient {
         if (!quarantined.isCompleted) quarantined.complete();
       } catch (error, stackTrace) {
         _reset();
-        final cleanupFailure = TailscaleOperationException(
-          'worker recovery',
-          'Timed-out startup cleanup did not reach a proven quiescent state.',
-          code: TailscaleErrorCode.runtimeCleanupFailed,
-          cause: error,
+        final cleanupFailure = _retainedCleanupFailure(
+          error,
+          operation: 'worker recovery',
+          message:
+              'Timed-out startup cleanup did not reach a proven quiescent '
+              'state.',
+          keep: _CleanupFailureKeep.none,
         );
-        _retainCleanupFailure(cleanupFailure);
         if (!quarantined.isCompleted) {
           quarantined.completeError(cleanupFailure, stackTrace);
         }
@@ -664,7 +689,12 @@ class Tailscale implements TailscaleClient {
     }
   }
 
-  Future<_PreparedPersistentState> _preparePersistentState({
+  /// Runs the shared persistent preparation sequence for [token].
+  ///
+  /// Returns true when a prepared runtime remains open for a subsequent
+  /// start; false when the preparation already settled as an authenticated
+  /// no-state idle result and was closed.
+  Future<bool> _preparePersistentState({
     required int token,
     required bool startRequested,
   }) async {
@@ -695,7 +725,7 @@ class Tailscale implements TailscaleClient {
       if (action == 'provision' && !startRequested) {
         await _stateCustody.complete(token);
         await finishNativePreparedPersistentState(token);
-        return const _PreparedPersistentState(start: false);
+        return false;
       }
 
       if (action == 'provision') {
@@ -721,9 +751,9 @@ class Tailscale implements TailscaleClient {
       await _stateCustody.complete(token);
       if (action == 'open' && empty && !startRequested) {
         await finishNativePreparedPersistentState(token);
-        return const _PreparedPersistentState(start: false);
+        return false;
       }
-      return const _PreparedPersistentState(start: true);
+      return true;
     } catch (error, stackTrace) {
       Object? cleanupError;
       if (nativeAdmission) {
@@ -824,9 +854,13 @@ class Tailscale implements TailscaleClient {
     closeFn: (bindingId) =>
         _withWorker((worker) => worker.udpCloseBinding(bindingId: bindingId)),
   );
-  @override
-  late final Funnel funnel = createFunnel(
-    forwardFn:
+
+  /// One worker wiring shared verbatim by [serve] and [funnel]; the two
+  /// factories differ only in the namespace they expose, with every closure
+  /// selecting Serve or Funnel behavior from its own `funnel` argument.
+  late final ({ServeForwardFn forward, ServeClearFn clear, ServeCloseFn close})
+  _publicationWiring = (
+    forward:
         ({
           required tailnetPort,
           required localPort,
@@ -845,7 +879,7 @@ class Tailscale implements TailscaleClient {
             funnel: funnel,
           ),
         ),
-    clearFn: ({required tailnetPort, required path, required funnel}) =>
+    clear: ({required tailnetPort, required path, required funnel}) =>
         _withWorker(
           (worker) => worker.serveClear(
             tailnetPort: tailnetPort,
@@ -853,7 +887,7 @@ class Tailscale implements TailscaleClient {
             funnel: funnel,
           ),
         ),
-    closeFn:
+    close:
         ({
           required tailnetPort,
           required path,
@@ -869,6 +903,12 @@ class Tailscale implements TailscaleClient {
             mappingToken: mappingToken,
           ),
         ),
+  );
+  @override
+  late final Funnel funnel = createFunnel(
+    forwardFn: _publicationWiring.forward,
+    clearFn: _publicationWiring.clear,
+    closeFn: _publicationWiring.close,
   );
   @override
   late final Http http = createHttp(
@@ -884,49 +924,9 @@ class Tailscale implements TailscaleClient {
   final Taildrop taildrop = Taildrop.instance;
   @override
   late final Serve serve = createServe(
-    forwardFn:
-        ({
-          required tailnetPort,
-          required localPort,
-          required localAddress,
-          required path,
-          required https,
-          required funnel,
-        }) => _withNativeRuntime(
-          (runtimeToken) => offloadServeForward(
-            runtimeToken: runtimeToken,
-            tailnetPort: tailnetPort,
-            localPort: localPort,
-            localAddress: localAddress,
-            path: path,
-            https: https,
-            funnel: funnel,
-          ),
-        ),
-    clearFn: ({required tailnetPort, required path, required funnel}) =>
-        _withWorker(
-          (worker) => worker.serveClear(
-            tailnetPort: tailnetPort,
-            path: path,
-            funnel: funnel,
-          ),
-        ),
-    closeFn:
-        ({
-          required tailnetPort,
-          required path,
-          required funnel,
-          required generation,
-          required mappingToken,
-        }) => _withWorker(
-          (worker) => worker.serveClose(
-            tailnetPort: tailnetPort,
-            path: path,
-            funnel: funnel,
-            generation: generation,
-            mappingToken: mappingToken,
-          ),
-        ),
+    forwardFn: _publicationWiring.forward,
+    clearFn: _publicationWiring.clear,
+    closeFn: _publicationWiring.close,
   );
   @override
   late final ExitNode exitNode = createExitNode(
@@ -1338,15 +1338,12 @@ class Tailscale implements TailscaleClient {
           );
           pendingNativeToken = false;
         } catch (error) {
-          final cleanupFailure = error is TailscaleOperationException
-              ? error
-              : TailscaleOperationException(
-                  'up',
-                  'Native startup quarantine could not be confirmed.',
-                  code: TailscaleErrorCode.runtimeCleanupFailed,
-                  cause: error,
-                );
-          _retainCleanupFailure(cleanupFailure);
+          final cleanupFailure = _retainedCleanupFailure(
+            error,
+            operation: 'up',
+            message: 'Native startup quarantine could not be confirmed.',
+            keep: _CleanupFailureKeep.anyOperationException,
+          );
           throw TailscaleUpException(
             '$message Native cleanup could not be confirmed; restart before '
             'retrying.',
@@ -1380,27 +1377,24 @@ class Tailscale implements TailscaleClient {
           !currentWorker.isDisposed &&
           currentWorker.runtimeToken != null;
       if (!ephemeral && !activeRuntime) {
-        late final _PreparedPersistentState prepared;
+        late final bool startPrepared;
         final preparationOperation = _preparePersistentState(
           token: requestToken,
           startRequested: true,
         );
         try {
-          prepared = await preparationOperation.timeout(remainingBudget());
+          startPrepared = await preparationOperation.timeout(remainingBudget());
         } on TimeoutException {
           _retireAbandonedTokenAfter(preparationOperation, requestToken);
           try {
             await _quarantineStateOperation(requestToken);
           } catch (cleanupError) {
-            final cleanupFailure = cleanupError is TailscaleOperationException
-                ? cleanupError
-                : TailscaleOperationException(
-                    'up',
-                    'Persistent state cleanup could not be confirmed.',
-                    code: TailscaleErrorCode.runtimeCleanupFailed,
-                    cause: cleanupError,
-                  );
-            _retainCleanupFailure(cleanupFailure);
+            final cleanupFailure = _retainedCleanupFailure(
+              cleanupError,
+              operation: 'up',
+              message: 'Persistent state cleanup could not be confirmed.',
+              keep: _CleanupFailureKeep.anyOperationException,
+            );
             throw TailscaleUpException(
               'Persistent state preparation exceeded $timeout and cleanup '
               'could not be confirmed; restart before retrying.',
@@ -1414,7 +1408,7 @@ class Tailscale implements TailscaleClient {
             code: TailscaleErrorCode.startupTimeout,
           );
         }
-        if (!prepared.start) {
+        if (!startPrepared) {
           _idleStatusError = null;
           return TailscaleStatus.noState;
         }
@@ -1568,18 +1562,13 @@ class Tailscale implements TailscaleClient {
         }
       }
       if (cleanupError != null) {
-        final cleanupFailure =
-            cleanupError is TailscaleOperationException &&
-                cleanupError.code == TailscaleErrorCode.runtimeCleanupFailed
-            ? cleanupError
-            : TailscaleOperationException(
-                'up',
-                'Failed startup cleanup did not reach a proven quiescent '
-                    'state.',
-                code: TailscaleErrorCode.runtimeCleanupFailed,
-                cause: cleanupError,
-              );
-        _retainCleanupFailure(cleanupFailure);
+        final cleanupFailure = _retainedCleanupFailure(
+          cleanupError,
+          operation: 'up',
+          message:
+              'Failed startup cleanup did not reach a proven quiescent '
+              'state.',
+        );
         throw TailscaleUpException(
           'Node startup failed and native cleanup could not be confirmed; '
           'restart before retrying.',
@@ -1666,11 +1655,11 @@ class Tailscale implements TailscaleClient {
     final token = _allocateRuntimeToken();
     var pendingPreparation = false;
     try {
-      final prepared = await _preparePersistentState(
+      final startPrepared = await _preparePersistentState(
         token: token,
         startRequested: false,
       );
-      if (!prepared.start) return TailscaleStatus.noState;
+      if (!startPrepared) return TailscaleStatus.noState;
       pendingPreparation = true;
       await finishNativePreparedPersistentState(token);
       pendingPreparation = false;
@@ -1687,13 +1676,14 @@ class Tailscale implements TailscaleClient {
         }
       }
       if (cleanupError != null) {
-        final cleanupFailure = TailscaleOperationException(
-          'status',
-          'Persistent status cleanup did not reach a proven quiescent state.',
-          code: TailscaleErrorCode.runtimeCleanupFailed,
-          cause: cleanupError,
+        final cleanupFailure = _retainedCleanupFailure(
+          cleanupError,
+          operation: 'status',
+          message:
+              'Persistent status cleanup did not reach a proven quiescent '
+              'state.',
+          keep: _CleanupFailureKeep.none,
         );
-        _retainCleanupFailure(cleanupFailure);
         throw TailscaleStatusException(
           'Persistent state inspection failed and cleanup could not be '
           'confirmed; restart before retrying.',
@@ -1909,11 +1899,11 @@ class Tailscale implements TailscaleClient {
             current.runtimeToken != null;
         if (!activeRuntime) {
           try {
-            final prepared = await _preparePersistentState(
+            final startPrepared = await _preparePersistentState(
               token: requestToken,
               startRequested: false,
             );
-            if (!prepared.start) {
+            if (!startPrepared) {
               _idleStatusError = null;
               _publishTerminalNodes();
               _stateController.add(NodeState.noState);
@@ -1942,16 +1932,11 @@ class Tailscale implements TailscaleClient {
           _publishTerminalNodes();
         }
         if (result.cleanupFailed) {
-          final cleanupFailure =
-              logoutError?.code == TailscaleErrorCode.runtimeCleanupFailed
-              ? logoutError!
-              : TailscaleOperationException(
-                  'logout',
-                  'Logout did not cleanly close all native resources.',
-                  code: TailscaleErrorCode.runtimeCleanupFailed,
-                  cause: logoutError,
-                );
-          _retainCleanupFailure(cleanupFailure);
+          final cleanupFailure = _retainedCleanupFailure(
+            logoutError,
+            operation: 'logout',
+            message: 'Logout did not cleanly close all native resources.',
+          );
           if (logoutError != null) throw logoutError;
           throw cleanupFailure;
         }
@@ -2005,17 +1990,11 @@ class Tailscale implements TailscaleClient {
           cleanupError = error;
         }
         if (cleanupError != null) {
-          final cleanupFailure =
-              cleanupError is TailscaleOperationException &&
-                  cleanupError.code == TailscaleErrorCode.runtimeCleanupFailed
-              ? cleanupError
-              : TailscaleOperationException(
-                  'logout',
-                  'Idle logout preparation cleanup could not be confirmed.',
-                  code: TailscaleErrorCode.runtimeCleanupFailed,
-                  cause: cleanupError,
-                );
-          _retainCleanupFailure(cleanupFailure);
+          final cleanupFailure = _retainedCleanupFailure(
+            cleanupError,
+            operation: 'logout',
+            message: 'Idle logout preparation cleanup could not be confirmed.',
+          );
           throw TailscaleLogoutException(
             'Logout failed before its prepared state could be safely '
             'released; restart before retrying.',
@@ -2111,13 +2090,9 @@ class Tailscale implements TailscaleClient {
 
     TailscaleOperationException? custodyError;
     try {
-      final storage = _initialization!.keybay.createStorage();
-      await storage.delete(stateStoreDekEntry);
-    } catch (error) {
-      custodyError = mapKeybayStateCustodyError(
-        error,
-        action: 'remove the Tailscale state key',
-      );
+      await deleteStateStoreDek(_initialization!.keybay);
+    } on TailscaleOperationException catch (error) {
+      custodyError = error;
     }
 
     TailscaleOperationException? finishError;
@@ -2161,54 +2136,26 @@ class Tailscale implements TailscaleClient {
     _stateController.add(NodeState.noState);
   }
 
-  /// Terminates the supervised control isolate without touching native state.
-  /// The caller-isolate rescue path must quarantine any matching runtime.
+  /// Terminates the supervised control isolate without touching native state —
+  /// immediately when [at] is omitted, or armed at that exact lifecycle
+  /// injection point (see [DebugTerminatePoint]). The caller-isolate rescue
+  /// path must quarantine any matching runtime. [expected] applies only to an
+  /// immediate termination.
   @visibleForTesting
-  Future<void> debugTerminateWorkerForTesting({bool expected = false}) async {
+  Future<void> debugTerminateWorkerForTesting({
+    bool expected = false,
+    // Deliberate: this wrapper is itself test-only; the enum's annotation
+    // still guards direct production arming.
+    // ignore: invalid_use_of_visible_for_testing_member
+    DebugTerminatePoint? at,
+  }) async {
     _requireInitialized();
     final worker = await _workerForCall();
     await worker.debugWaitUntilReady();
-    worker.debugTerminate(expected: expected);
-  }
-
-  /// Arms a test-only worker termination immediately after the next
-  /// down/logout intent is tagged and before its native acknowledgement.
-  @visibleForTesting
-  Future<void> debugTerminateWorkerOnNextShutdownForTesting() async {
-    _requireInitialized();
-    final worker = await _workerForCall();
-    await worker.debugWaitUntilReady();
-    worker.debugTerminateOnNextShutdown();
-  }
-
-  /// Arms a test-only termination after the next native start response but
-  /// before the public up operation can complete its stable-state wait.
-  @visibleForTesting
-  Future<void> debugTerminateWorkerAfterNextStartForTesting() async {
-    _requireInitialized();
-    final worker = await _workerForCall();
-    await worker.debugWaitUntilReady();
-    worker.debugTerminateAfterNextStart();
-  }
-
-  /// Arms a test-only termination immediately after the next logout command
-  /// is sent to the worker, before its native acknowledgement reaches Dart.
-  @visibleForTesting
-  Future<void> debugTerminateWorkerAfterNextLogoutDispatchForTesting() async {
-    _requireInitialized();
-    final worker = await _workerForCall();
-    await worker.debugWaitUntilReady();
-    worker.debugTerminateAfterNextLogoutDispatch();
-  }
-
-  /// Terminates the worker after native down/logout has produced a terminal
-  /// receipt but before that receipt can be delivered to the caller isolate.
-  @visibleForTesting
-  Future<void>
-  debugTerminateWorkerAfterNextLifecycleNativeResultForTesting() async {
-    _requireInitialized();
-    final worker = await _workerForCall();
-    await worker.debugWaitUntilReady();
-    worker.debugTerminateAfterNextLifecycleNativeResult();
+    if (at == null) {
+      worker.debugTerminate(expected: expected);
+    } else {
+      worker.debugArmTermination(at);
+    }
   }
 }

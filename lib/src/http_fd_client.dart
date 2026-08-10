@@ -179,31 +179,20 @@ Future<http.StreamedResponse> sendOverFdsForTesting({
   final headersPtr = request.headersJson.toNativeUtf8();
 
   try {
-    final resultPtr = native.duneHttpStart(
-      runtimeToken,
-      methodPtr,
-      urlPtr,
-      headersPtr,
-      request.contentLength,
-      request.followRedirects ? 1 : 0,
-      request.maxRedirects,
-    );
-    late final String json;
-    try {
-      json = resultPtr.toDartString();
-    } finally {
-      native.duneFree(resultPtr);
-    }
-
-    final parsed = jsonDecode(json) as Map<String, dynamic>;
-    final error = parsed['error'] as String?;
-    if (error != null) {
-      throw TailscaleHttpException(
-        error,
-        code: parseNativeErrorCode(parsed['code'] as String?),
-        statusCode: parsed['statusCode'] as int?,
-      );
-    }
+    final parsed =
+        decodeNativeEnvelope(
+              () => native.duneHttpStart(
+                runtimeToken,
+                methodPtr,
+                urlPtr,
+                headersPtr,
+                request.contentLength,
+                request.followRedirects ? 1 : 0,
+                request.maxRedirects,
+              ),
+              onError: TailscaleHttpException.new,
+            )
+            as Map<String, dynamic>;
 
     return validateNativeHttpFdsForTesting(
       requestBodyFd: parsed['requestBodyFd'],

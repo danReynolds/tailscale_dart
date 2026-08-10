@@ -3,6 +3,7 @@ package tailscale
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync/atomic"
 
 	"tailscale.com/tsnet"
@@ -64,6 +65,13 @@ type nodeGate struct {
 	epoch   uint64
 }
 
+// gate builds the runtime's own entry-time snapshot. It is the only sanctioned
+// way to construct a nodeGate from a runtime already in hand, so a gate can
+// never pair a runtime with another generation's epoch.
+func (r *nodeRuntime) gate() nodeGate {
+	return nodeGate{runtime: r, s: r.server, epoch: r.generation}
+}
+
 // acquireNodeGate snapshots the live server and current epoch. Returns ok=false
 // when no node is running (callers keep their existing "called before Start"
 // error text).
@@ -98,6 +106,37 @@ func acquireNodeGateForRuntimeToken(runtimeToken uint64) (nodeGate, bool) {
 		s:       runtime.server,
 		epoch:   runtime.generation,
 	}, true
+}
+
+// gateForRuntimeToken admits token-qualified FFI work for the exact current
+// runtime and formats the one standard typed stale error otherwise. A zero
+// token with no runtime keeps the friendlier before-Start spelling; every
+// other refusal names the captured token so logs identify the stale caller.
+func gateForRuntimeToken(op string, runtimeToken uint64) (nodeGate, error) {
+	gate, ok := acquireNodeGateForRuntimeToken(runtimeToken)
+	if ok {
+		return gate, nil
+	}
+	if runtimeToken == 0 && currentRuntime() == nil {
+		return nodeGate{}, fmt.Errorf("%w: %s called before Start", ErrRuntimeStale, op)
+	}
+	return nodeGate{}, fmt.Errorf(
+		"%w: %s captured runtime %d is no longer current",
+		ErrRuntimeStale,
+		op,
+		runtimeToken,
+	)
+}
+
+// gateForCurrentRuntime admits worker-FIFO work that carries no runtime token
+// against whatever runtime is current, with the one standard typed
+// before-Start error.
+func gateForCurrentRuntime(op string) (nodeGate, error) {
+	gate, ok := acquireNodeGate()
+	if !ok {
+		return nodeGate{}, fmt.Errorf("%w: %s called before Start", ErrRuntimeStale, op)
+	}
+	return gate, nil
 }
 
 // stillCurrent reports whether the gated lifecycle is still the live one. Safe
@@ -157,6 +196,9 @@ func debugNodeState() nodeStateSnapshot {
 
 	if runtime := currentRuntime(); runtime != nil {
 		snap.ServePublications = runtime.publication.count()
+		runtime.httpMu.Lock()
+		snap.TransportCached = runtime.httpTransport != nil
+		runtime.httpMu.Unlock()
 	}
 
 	httpBindingMu.Lock()
@@ -170,10 +212,6 @@ func debugNodeState() nodeStateSnapshot {
 	udpFdBindingMu.Lock()
 	snap.UdpBridges = len(udpFdBindingRegistry)
 	udpFdBindingMu.Unlock()
-
-	tailnetHTTPTransports.mu.Lock()
-	snap.TransportCached = tailnetHTTPTransports.transport != nil
-	tailnetHTTPTransports.mu.Unlock()
 
 	return snap
 }

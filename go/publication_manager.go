@@ -631,21 +631,33 @@ func mappingMatchesServeConfig(mapping publicationMapping, sc *ipn.ServeConfig, 
 	return false
 }
 
-func mergePublicationVariants(a, b []publicationVariant) []publicationVariant {
-	out := make([]publicationVariant, 0, len(a)+len(b))
-	for _, candidate := range append(append([]publicationVariant(nil), a...), b...) {
+// mergeDedup appends b to a, dropping candidates equal to an already-kept
+// entry per eq and passing each kept candidate through keep (identity when
+// nil). Variant and visibility-evidence merging share this one algorithm.
+func mergeDedup[T any](a, b []T, eq func(existing, candidate T) bool, keep func(T) T) []T {
+	out := make([]T, 0, len(a)+len(b))
+	for _, candidate := range append(append([]T(nil), a...), b...) {
 		duplicate := false
 		for _, existing := range out {
-			if reflect.DeepEqual(existing.handler, candidate.handler) {
+			if eq(existing, candidate) {
 				duplicate = true
 				break
 			}
 		}
 		if !duplicate {
+			if keep != nil {
+				candidate = keep(candidate)
+			}
 			out = append(out, candidate)
 		}
 	}
 	return out
+}
+
+func mergePublicationVariants(a, b []publicationVariant) []publicationVariant {
+	return mergeDedup(a, b, func(existing, candidate publicationVariant) bool {
+		return reflect.DeepEqual(existing.handler, candidate.handler)
+	}, nil)
 }
 
 func visibilityEvidence(key publicationKey, mapping publicationMapping, funnel bool) []publicationVisibilityEvidence {
@@ -661,22 +673,13 @@ func visibilityEvidence(key publicationKey, mapping publicationMapping, funnel b
 }
 
 func mergeVisibilityEvidence(a, b []publicationVisibilityEvidence) []publicationVisibilityEvidence {
-	out := make([]publicationVisibilityEvidence, 0, len(a)+len(b))
-	for _, candidate := range append(append([]publicationVisibilityEvidence(nil), a...), b...) {
-		duplicate := false
-		for _, existing := range out {
-			if existing.key == candidate.key && existing.funnel == candidate.funnel &&
-				reflect.DeepEqual(existing.handler, candidate.handler) {
-				duplicate = true
-				break
-			}
-		}
-		if !duplicate {
-			candidate.handler = candidate.handler.Clone()
-			out = append(out, candidate)
-		}
-	}
-	return out
+	return mergeDedup(a, b, func(existing, candidate publicationVisibilityEvidence) bool {
+		return existing.key == candidate.key && existing.funnel == candidate.funnel &&
+			reflect.DeepEqual(existing.handler, candidate.handler)
+	}, func(kept publicationVisibilityEvidence) publicationVisibilityEvidence {
+		kept.handler = kept.handler.Clone()
+		return kept
+	})
 }
 
 func visibilityOwnsEnabledConfig(

@@ -442,7 +442,7 @@ func (c *runtimeController) reserve(token uint64, config runtimeConfig) (*nodeRu
 		return nil, nil, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
 	}
 	if c.logout != nil {
-		return nil, nil, fmt.Errorf("%w: logout token %d is finalizing local state", ErrLifecycleBusy, c.logout.token)
+		return nil, nil, fmt.Errorf("%w: logout token %d is still in progress", ErrLifecycleBusy, c.logout.token)
 	}
 	if c.candidate != nil || c.draining != nil {
 		return nil, nil, fmt.Errorf("%w: another node lifecycle transition is in progress", ErrLifecycleBusy)
@@ -606,9 +606,9 @@ func lastRuntimeConfig() (runtimeConfig, error) {
 	return *runtimes.lastConfig, nil
 }
 
-// beginLogout reserves the exact current runtime through both remote revoke
-// and the final local-state disposition. This is deliberately separate from
-// draining: Server.Close may finish before the state directory is removed.
+// beginLogout reserves the exact current runtime through both upstream logout
+// and runtime close. The StateStore container is deliberately retained;
+// explicit local forget/reset owns physical key and file deletion.
 func (c *runtimeController) beginLogout(runtime *nodeRuntime) (*logoutOperation, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -637,9 +637,6 @@ func (c *runtimeController) finishLogout(
 		cleanupErr = c.recordCleanupFailureLocked(op.token, cleanupErr)
 		if op.cleanupErr == nil {
 			op.cleanupErr = cleanupErr
-		}
-		if result.NoState && operationErr == nil {
-			c.lastConfig = nil
 		}
 		c.recordLifecycleReceiptLocked(lifecycleReceipt{
 			result: RuntimeCloseResult{

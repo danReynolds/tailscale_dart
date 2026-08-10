@@ -78,8 +78,9 @@ func boundedCallCtxFrom(parent context.Context, timeout time.Duration) (context.
 // LogoutResult is the event-silent lifecycle receipt returned to Dart. Started
 // means a live or temporary runtime was actually detached for close. EmitStopped
 // is narrower: the public node was active when logout began, so Dart should
-// publish the terminal transition. NoState means local cleanup was confirmed or
-// the configured root was already clean.
+// publish the terminal transition. NoState means upstream confirmed there is no
+// logged-in profile, or the configured root was already clean; it does not mean
+// the lower-level StateStore container was deleted.
 type LogoutResult struct {
 	Token         uint64 `json:"token"`
 	Started       bool   `json:"started"`
@@ -96,7 +97,6 @@ type runtimeLogoutDependencies struct {
 	startRuntime       func(uint64, runtimeConfig, string) (uint64, error)
 	revokeNodeKey      func(*nodeRuntime) error
 	closeRuntime       func(uint64) (RuntimeCloseResult, error)
-	removeAll          func(string) error
 }
 
 var productionRuntimeLogoutDependencies = runtimeLogoutDependencies{
@@ -116,7 +116,6 @@ var productionRuntimeLogoutDependencies = runtimeLogoutDependencies{
 	},
 	revokeNodeKey: revokeNodeKey,
 	closeRuntime:  closeRuntimeForLogout,
-	removeAll:     removeOwnedDirectory,
 }
 
 // Logout follows the remote-first contract using either the active runtime or
@@ -131,9 +130,9 @@ func Logout() error {
 	return err
 }
 
-// LogoutWithToken never deletes package state unless upstream logout returns a
-// confirmed success. A failure/timeout closes the potentially mutated runtime,
-// retains the state directory, and returns ErrLogoutIndeterminate.
+// LogoutWithToken delegates profile removal to upstream Tailscale and always
+// preserves the lower-level StateStore container. A failure/timeout closes the
+// potentially mutated runtime and returns ErrLogoutIndeterminate.
 func LogoutWithToken(requestToken uint64, hostNetworkSnapshot string) (result LogoutResult, err error) {
 	result, err = logoutWithDependencies(
 		requestToken,
@@ -162,11 +161,6 @@ func LogoutWithToken(requestToken uint64, hostNetworkSnapshot string) (result Lo
 			err: err,
 		})
 	}
-	if result.NoState && err == nil {
-		runtimes.mu.Lock()
-		runtimes.lastConfig = nil
-		runtimes.mu.Unlock()
-	}
 	return result, err
 }
 
@@ -193,6 +187,12 @@ func logoutWithDependencies(requestToken uint64, hostNetworkSnapshot string, dep
 			return result, err
 		}
 		if state == IdleStateAbsent {
+			// A truly absent root has no runtime configuration worth retaining.
+			// Confirmed upstream logout is different: it preserves the Store, so
+			// that path retains the exact configuration needed to reopen it.
+			runtimes.mu.Lock()
+			runtimes.lastConfig = nil
+			runtimes.mu.Unlock()
 			result.NoState = true
 			return result, nil
 		}
@@ -240,14 +240,6 @@ func logoutWithDependencies(requestToken uint64, hostNetworkSnapshot string, dep
 	result.CleanupFailed = closeErr != nil
 	cleanupErr = runtimes.recordCleanupFailure(runtime.token, closeErr)
 	if closeErr != nil {
-		return result, cleanupErr
-	}
-	if err := dependencies.removeAll(stateDir); err != nil {
-		result.CleanupFailed = true
-		cleanupErr = runtimes.recordCleanupFailure(
-			runtime.token,
-			fmt.Errorf("failed to remove state dir after confirmed logout: %w", err),
-		)
 		return result, cleanupErr
 	}
 	result.NoState = true

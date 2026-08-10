@@ -584,13 +584,12 @@ void main() {
   //     synthetic publish, so the sequence is fully deterministic and
   //     asserted with `equals` (exact match).
   //
-  // [setUp] normalizes every test to enter with the engine `stopped`,
-  // credentials on disk, and no in-flight stream events. Test bodies then
-  // read linearly — arrange, act, assert — with no defensive preambles.
+  // [setUp] normalizes every test to enter with the engine `stopped` and no
+  // in-flight stream events. The retained container may hold either an
+  // enrolled or logged-out upstream profile after the logout cases below.
   //
-  // Placed at the end of the file because the logout tests wipe persisted
-  // state; setUp re-establishes them for the next test, but earlier
-  // groups outside this one can't rely on that repair.
+  // Placed at the end of the file because the logout tests mutate the
+  // persisted upstream profile; earlier groups require an enrolled profile.
   group('onStateChange lifecycle', () {
     const hostname = 'dune-e2e-lifecycle';
     Future<void> bringUp() => tsnet.up(
@@ -607,7 +606,7 @@ void main() {
       // into the test's subscription.
       switch ((await tsnet.status()).state) {
         case NodeState.noState:
-          // Logout wiped creds. Re-establish and shut down.
+          // A truly clean root needs an enrolled profile for reconnect tests.
           await recordUntil(tsnet, NodeState.running, bringUp);
           await recordUntil(tsnet, NodeState.stopped, tsnet.down);
         case NodeState.running:
@@ -699,7 +698,7 @@ void main() {
     );
 
     test(
-      'logout from running emits [Stopped, NoState] and clears creds',
+      'logout from running emits [Stopped, NoState] and preserves storage',
       () async {
         await recordUntil(tsnet, NodeState.running, bringUp);
 
@@ -715,14 +714,24 @@ void main() {
           reason:
               'logout from running must emit Stopped then NoState — '
               'Stop() publishes Stopped on teardown, Logout() publishes '
-              'NoState after wiping creds. Subscribers rely on this full '
+              'NoState after upstream confirms profile removal. Subscribers rely on this full '
               'sequence to route back to the unauthenticated UI.',
         );
-        expect((await tsnet.status()).state, NodeState.noState);
+        expect(
+          (await tsnet.status()).state,
+          NodeState.stopped,
+          reason:
+              'until R4 can authenticate and inspect the encrypted map, the '
+              'idle filesystem probe must conservatively classify a retained '
+              'StateStore container as stopped; NoState above is the confirmed '
+              'logout event receipt',
+        );
         expect(
           Directory(p.join(stateDir, 'tailscale')).existsSync(),
-          isFalse,
-          reason: 'logout() should remove the persisted tailscale state subdir',
+          isTrue,
+          reason:
+              'logout() must preserve the lower-level StateStore container; '
+              'explicit local forget/reset owns physical deletion',
         );
       },
     );
@@ -741,7 +750,14 @@ void main() {
             "logout from stopped must not emit Stopped — Stop()'s "
             'wasRunning guard skips the publish when srv is nil',
       );
-      expect((await tsnet.status()).state, NodeState.noState);
+      expect(
+        (await tsnet.status()).state,
+        NodeState.stopped,
+        reason:
+            'the confirmed NoState logout receipt does not imply physical '
+            'StateStore absence; R4 will replace this conservative probe '
+            'with authenticated logical-state classification',
+      );
     });
 
     // Consecutive-duplicate scenarios — the stream filters these in
@@ -793,10 +809,10 @@ void main() {
       // fresh stream).
       await recordUntil(tsnet, NodeState.noState, tsnet.logout);
 
-      // Second logout — srv already nil (wasRunning guard skips Stop's
-      // Stopped publish), state dir already gone, but Logout still
-      // calls publishState("NoState"). onStateChange filters the duplicate
-      // because _previous is NoState from the first logout.
+      // Second logout — srv already nil, so Go briefly reopens the retained
+      // StateStore and upstream reports that it is already logged out. The
+      // temporary close remains hidden and onStateChange filters the duplicate
+      // NoState because _previous is NoState from the first logout.
       await tsnet.logout();
       await Future<void>.delayed(const Duration(seconds: 1));
       await sub.cancel();

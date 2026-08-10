@@ -96,21 +96,17 @@ Future<void> main() async {
 
 Subsequent launches can call `up()` without an auth key. The node identity is persisted in `stateDir`.
 
-> **Securing `stateDir`.** In the current `0.8.1` implementation, the package
-> creates the SQLite database as `0600` under a `0700` subdirectory and attempts
-> to tighten pre-existing modes, but currently logs and continues if chmod
-> verification is unavailable; it is **not yet application-layer encrypted**. Choose a
-> location excluded from cloud backups—a copied database can be restored onto
-> another device and impersonate the node. On Flutter, prefer the application
-> support directory (`getApplicationSupportDirectory()`) over the documents
-> directory and apply the platform backup-exclusion rules. The accepted
-> [encrypted-state design](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md) replaces SQLite with
-> an authenticated encrypted StateStore whose key is held by Keybay, integrated
-> directly into the core package as the required persistent-state mechanism.
-> Until that cutover lands, do not ship this intermediate storage state in a
-> client application. `logout()` is remote-first: it deletes the retained local
-> StateStore only after confirmed control-plane success and preserves that
-> recovery evidence when revocation is indeterminate.
+> **Pre-launch storage warning.** The current SQLite StateStore is protected by
+> owner-only filesystem permissions but is not yet encrypted at rest. A copied
+> database can impersonate the node, so exclude `stateDir` from cloud backups and do not
+> ship this intermediate rearchitecture state in a client application. The
+> accepted [secure-state design](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md)
+> supplies a Keybay-custodied key to an authenticated encrypted Go StateStore
+> and removes SQLite atomically. Calling `logout()` is
+> remote-first: upstream removes the logged-in profile only after confirmed
+> control-plane success. The package preserves the lower-level StateStore
+> container in both the confirmed and indeterminate cases; R4's explicit local
+> forget/reset operation owns physical state destruction.
 
 For short-lived CI jobs, preview environments, and disposable test nodes, pass
 `ephemeral: true` to register a node that Tailscale removes after it goes
@@ -132,7 +128,7 @@ existing node instead of registering a new ephemeral one.
 
 Area | API | Status | Notes
 --- | --- | --- | ---
-Lifecycle | `init`, `up`, `down`, `logout`, `status` | Supported | `up(ephemeral: true)` supports disposable CI/test nodes; `up()` resolves on the first stable state and quarantines a timed-out generation before returning. `logout()` is remote-first and preserves local state if revocation is indeterminate.
+Lifecycle | `init`, `up`, `down`, `logout`, `status` | Supported | `up(ephemeral: true)` supports disposable CI/test nodes; `up()` resolves on the first stable state and quarantines a timed-out generation before returning. `logout()` is remote-first: confirmed success removes the upstream profile, while both success and indeterminate failure preserve the lower-level StateStore container.
 Reactive state | `onStateChange`, `onError`, `onNodeChanges` | Supported | Go pushes updates to Dart; callers do not poll.
 Node identity | `nodes`, `nodeByIp`, `whois` | Supported | Use stable node IDs for durable references.
 Outbound HTTP | `http.client` | Supported | A normal `package:http` client routed through tsnet.

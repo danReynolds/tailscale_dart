@@ -64,13 +64,13 @@ but before delivery, rescue consumes the retained result instead: cleanup
 errors cannot be swallowed and a confirmed logout cannot be mislabeled as
 indeterminate.
 
-A failed Server close, Store close, startup unwind, or confirmed-logout state
-removal poisons lifecycle admission for the rest of the process with
+A failed Server close, Store close, or startup unwind poisons lifecycle
+admission for the rest of the process with
 `runtimeCleanupFailed`. Detachment is not reported as a clean `stopped`
 transition unless quiescence was proved. This intentionally requires process
-restart instead of opening a replacement over unknown resources or partially
-removed state. R4 replaces the process-local partial-removal guard with the
-durable encrypted-store reset marker.
+restart instead of opening a replacement over unknown resources. R4's explicit
+local-forget path adds a durable encrypted-store reset marker for destructive
+key/file cleanup; ordinary logout does not use it.
 
 Native status, error, and peer pushes carry their runtime token. Dart drops a
 push that is not owned by the worker's current/preparing token. `StopWatch`
@@ -78,11 +78,15 @@ cancels and joins both the IPN watcher and any in-flight debounced peer publish
 before teardown completes, so a replacement port cannot race an old source.
 
 Logout is remote-first. It reconstructs a temporary runtime from persisted
-state after `down()`, asks upstream to revoke, and deletes local state only
-after confirmed success. Failure or timeout closes the possibly-mutated
-runtime, retains recovery evidence, and returns `logoutIndeterminate`.
+state after `down()` and asks upstream to log out the current profile. Confirmed
+success and failure both preserve the lower-level StateStore container; only
+the upstream profile mutation differs. Failure or timeout closes the
+possibly-mutated runtime and returns `logoutIndeterminate`.
 That temporary runtime is not a public lifecycle transition: logout from an
 already stopped node emits `noState`, not a second synthetic `stopped`.
+That is an operation receipt, not a claim that the physical Store disappeared.
+Until R4 can authenticate and inspect the replacement Store, a later idle
+`status()` conservatively reports a retained SQLite container as `stopped`.
 Starting a fresh candidate first invalidates the cached reopen tuple; only a
 successful `Server.Start` records the exact hostname, control URL, and
 ephemeral setting it proved it applied. An abandoned late success therefore

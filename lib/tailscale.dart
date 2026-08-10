@@ -437,8 +437,8 @@ class Tailscale implements TailscaleClient {
     }
     // `stopped` is a transition only when the caller-visible runtime was active
     // and actually detached. A temporary runtime reconstructed by idle logout
-    // stays hidden. `noState` remains useful after confirmed deletion or a
-    // clean idle root, including a logout acknowledgement lost with the worker.
+    // stays hidden. `noState` remains useful after confirmed upstream logout
+    // or a clean idle root, including an acknowledgement lost with the worker.
     if (idleStatus.state == NodeState.noState) {
       _stateController.add(NodeState.noState);
     }
@@ -886,9 +886,10 @@ class Tailscale implements TailscaleClient {
   ///
   /// Set [ephemeral] to register this process as a short-lived node. Ephemeral
   /// nodes are removed from the tailnet automatically after they go inactive
-  /// by control-plane cleanup. Calling [logout] stops the local node and clears
-  /// local credentials, but tailnet removal still follows the control plane's
-  /// ephemeral-node cleanup behavior. Use this for CI jobs, preview
+  /// by control-plane cleanup. Calling [logout] stops the local node and asks
+  /// upstream Tailscale to remove the current profile, while preserving the
+  /// lower-level StateStore container. Tailnet removal still follows the
+  /// control plane's ephemeral-node cleanup behavior. Use this for CI jobs, preview
   /// environments, disposable tests, and other nodes whose identity should not
   /// outlive the process. This affects registration with the control plane; use
   /// a fresh or cleared `stateDir` passed to [Tailscale.init] when you need to
@@ -1171,10 +1172,12 @@ class Tailscale implements TailscaleClient {
   /// tailnet IPs, health warnings, and MagicDNS suffix. Node
   /// inventory is separate; call [nodes] when you need it.
   ///
-  /// Safe to call before [up] — returns [NodeState.stopped] when
-  /// recognized local state artifacts exist and [NodeState.noState] when they
-  /// don't. This is a conservative occupancy signal, not proof that the local
-  /// state is enrolled, valid, or sufficient to reconnect without an auth key.
+  /// Safe to call before [up]. Before the encrypted-store cutover, an idle
+  /// retained StateStore is conservatively reported as [NodeState.stopped]
+  /// even after a confirmed logout; [NodeState.noState] requires an absent
+  /// storage root. R4 replaces that filesystem probe with authenticated
+  /// logical-state classification. This occupancy signal is not proof that
+  /// the state is enrolled, valid, or sufficient to reconnect without a key.
   @override
   Future<TailscaleStatus> status() async {
     _requireInitialized();
@@ -1339,8 +1342,9 @@ class Tailscale implements TailscaleClient {
     }
   }
 
-  /// Revokes this node with the control plane, then clears local credentials
-  /// only after upstream confirms success.
+  /// Asks upstream Tailscale to revoke and remove the current logical profile.
+  /// The lower-level StateStore container remains in place for later enrollment;
+  /// physical storage destruction is a separate explicit local-reset concern.
   ///
   /// If the node was previously brought [down], logout temporarily reconstructs
   /// it from persisted state so revocation can still be attempted. A timeout or

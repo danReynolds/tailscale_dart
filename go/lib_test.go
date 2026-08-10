@@ -29,6 +29,8 @@ func publishLogoutRuntimeForTest(t *testing.T, token uint64, closer *recordingSt
 		t.Fatal("test requires an idle runtime controller")
 	}
 	runtimes.current = runtime
+	config := runtime.config
+	runtimes.lastConfig = &config
 	runtimes.mu.Unlock()
 	return runtime
 }
@@ -55,12 +57,15 @@ func logoutDependenciesForTest(
 		},
 		revokeNodeKey: revoke,
 		closeRuntime:  closeRuntimeForLogout,
-		removeAll:     os.RemoveAll,
 	}
 }
 
 func TestLogout_AbsentStateIsRemoteFreeNoOp(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
+	runtimes.mu.Lock()
+	staleConfig := runtimeConfig{hostname: "stale"}
+	runtimes.lastConfig = &staleConfig
+	runtimes.mu.Unlock()
 	remoteCalls := 0
 	deps := logoutDependenciesForTest(t, stateDir, func(*nodeRuntime) error {
 		remoteCalls++
@@ -76,6 +81,9 @@ func TestLogout_AbsentStateIsRemoteFreeNoOp(t *testing.T) {
 	}
 	if remoteCalls != 0 {
 		t.Fatalf("remote logout calls = %d, want 0", remoteCalls)
+	}
+	if _, configErr := lastRuntimeConfig(); !errors.Is(configErr, ErrConfigurationMismatch) {
+		t.Fatalf("absent logout retained stale reopen config: %v", configErr)
 	}
 }
 
@@ -127,17 +135,12 @@ func TestLogout_RemoteFailureClosesRuntimeAndRetainsState(t *testing.T) {
 	store := new(recordingStateStore)
 	runtime := publishLogoutRuntimeForTest(t, 102, store)
 	remoteFailure := errors.New("injected remote logout failure")
-	removeCalls := 0
 	deps := logoutDependenciesForTest(t, stateDir, func(got *nodeRuntime) error {
 		if got != runtime {
 			t.Fatalf("revoke runtime = %p, want %p", got, runtime)
 		}
 		return remoteFailure
 	})
-	deps.removeAll = func(string) error {
-		removeCalls++
-		return nil
-	}
 
 	result, err := logoutWithDependencies(runtime.token, "{}", deps)
 	if !errors.Is(err, ErrLogoutIndeterminate) || !errors.Is(err, remoteFailure) {
@@ -151,9 +154,6 @@ func TestLogout_RemoteFailureClosesRuntimeAndRetainsState(t *testing.T) {
 	}
 	if got := store.closeCalls.Load(); got != 1 {
 		t.Fatalf("store close calls = %d, want 1", got)
-	}
-	if removeCalls != 0 {
-		t.Fatalf("local remove calls = %d after failed logout, want 0", removeCalls)
 	}
 	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "recovery evidence" {
 		t.Fatalf("failed logout mutated recovery evidence: contents=%q err=%v", got, readErr)
@@ -193,12 +193,13 @@ func TestLogout_DispositionDoesNotClaimAnUnmatchedClose(t *testing.T) {
 	}
 }
 
-func TestLogout_ConfirmedSuccessRevokesThenClosesThenRemoves(t *testing.T) {
+func TestLogout_ConfirmedSuccessRevokesThenClosesAndPreservesStore(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "state.db"), []byte("state"), 0o600); err != nil {
+	marker := filepath.Join(stateDir, "state.db")
+	if err := os.WriteFile(marker, []byte("state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -209,10 +210,6 @@ func TestLogout_ConfirmedSuccessRevokesThenClosesThenRemoves(t *testing.T) {
 		events = append(events, "remote")
 		return nil
 	})
-	deps.removeAll = func(path string) error {
-		events = append(events, "remove")
-		return os.RemoveAll(path)
-	}
 
 	result, err := logoutWithDependencies(runtime.token, "{}", deps)
 	if err != nil {
@@ -221,42 +218,18 @@ func TestLogout_ConfirmedSuccessRevokesThenClosesThenRemoves(t *testing.T) {
 	if !result.Started || !result.EmitStopped || !result.NoState {
 		t.Fatalf("logout result = %+v, want public stop and noState", result)
 	}
-	if got := fmt.Sprint(events); got != "[remote close remove]" {
-		t.Fatalf("logout order = %s, want [remote close remove]", got)
+	if got := fmt.Sprint(events); got != "[remote close]" {
+		t.Fatalf("logout order = %s, want [remote close]", got)
 	}
-	if _, statErr := os.Stat(stateDir); !os.IsNotExist(statErr) {
-		t.Fatalf("confirmed logout retained state directory: %v", statErr)
+	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "state" {
+		t.Fatalf("confirmed logout removed the StateStore container: contents=%q err=%v", got, readErr)
 	}
-}
-
-func TestLogout_PartialStateRemovalPoisonsReplacementAdmission(t *testing.T) {
-	stateDir := configureFreshStateRootForTest(t)
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stateDir, "state.db"), []byte("state"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	const token uint64 = 111
-	runtime := publishLogoutRuntimeForTest(t, token, new(recordingStateStore))
-	removeFailure := errors.New("injected partial remove failure")
-	deps := logoutDependenciesForTest(t, stateDir, func(*nodeRuntime) error { return nil })
-	deps.removeAll = func(string) error { return removeFailure }
-
-	result, err := logoutWithDependencies(runtime.token, "{}", deps)
-	if !errors.Is(err, ErrRuntimeCleanupFailed) || !errors.Is(err, removeFailure) {
-		t.Fatalf("logout error = %v, want typed partial-removal failure", err)
-	}
-	if !result.Started || result.NoState || !result.CleanupFailed {
-		t.Fatalf("logout result = %+v, want started without confirmed noState", result)
-	}
-	if _, _, reserveErr := runtimes.reserve(112, runtimeConfig{}); !errors.Is(reserveErr, ErrRuntimeCleanupFailed) {
-		t.Fatalf("replacement reserve error = %v, want ErrRuntimeCleanupFailed", reserveErr)
+	if config, configErr := lastRuntimeConfig(); configErr != nil || config != runtime.config {
+		t.Fatalf("confirmed logout discarded the safe reopen config: config=%+v err=%v", config, configErr)
 	}
 }
 
-func TestLogout_BlocksReplacementAndRescueUntilStateDispositionCompletes(t *testing.T) {
+func TestLogout_BlocksReplacementAndRescueUntilRuntimeCloseCompletes(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -269,17 +242,19 @@ func TestLogout_BlocksReplacementAndRescueUntilStateDispositionCompletes(t *test
 	runtime := publishLogoutRuntimeForTest(t, logoutToken, new(recordingStateStore))
 	enteredRevoke := make(chan *nodeRuntime)
 	releaseRevoke := make(chan struct{})
-	enteredRemove := make(chan struct{})
-	releaseRemove := make(chan struct{})
+	enteredClose := make(chan struct{})
+	releaseClose := make(chan struct{})
 	deps := logoutDependenciesForTest(t, stateDir, func(got *nodeRuntime) error {
 		enteredRevoke <- got
 		<-releaseRevoke
 		return nil
 	})
-	deps.removeAll = func(path string) error {
-		close(enteredRemove)
-		<-releaseRemove
-		return os.RemoveAll(path)
+	closeRuntime := deps.closeRuntime
+	deps.closeRuntime = func(token uint64) (RuntimeCloseResult, error) {
+		result, err := closeRuntime(token)
+		close(enteredClose)
+		<-releaseClose
+		return result, err
 	}
 
 	type logoutOutcome struct {
@@ -299,12 +274,12 @@ func TestLogout_BlocksReplacementAndRescueUntilStateDispositionCompletes(t *test
 		t.Fatalf("replacement reserve during remote revoke = %v, want ErrLifecycleBusy", err)
 	}
 	close(releaseRevoke)
-	<-enteredRemove
+	<-enteredClose
 	if currentRuntime() != nil {
 		t.Fatal("logout runtime remained current after close")
 	}
 	if _, _, err := runtimes.reserve(108, runtimeConfig{}); !errors.Is(err, ErrLifecycleBusy) {
-		t.Fatalf("replacement reserve during state removal = %v, want ErrLifecycleBusy", err)
+		t.Fatalf("replacement reserve during logout close = %v, want ErrLifecycleBusy", err)
 	}
 
 	type abandonOutcome struct {
@@ -327,11 +302,11 @@ func TestLogout_BlocksReplacementAndRescueUntilStateDispositionCompletes(t *test
 	}
 	select {
 	case outcome := <-abandonDone:
-		t.Fatalf("rescue returned before state disposition: %+v", outcome)
+		t.Fatalf("rescue returned before logout close completed: %+v", outcome)
 	default:
 	}
 
-	close(releaseRemove)
+	close(releaseClose)
 	outcome := <-logoutDone
 	if outcome.err != nil || !outcome.result.Started || !outcome.result.NoState {
 		t.Fatalf("logout outcome = (%+v, %v), want confirmed cleanup", outcome.result, outcome.err)
@@ -339,6 +314,9 @@ func TestLogout_BlocksReplacementAndRescueUntilStateDispositionCompletes(t *test
 	abandoned := <-abandonDone
 	if abandoned.err != nil || !abandoned.result.Matched || !abandoned.result.Started || abandoned.result.Pending {
 		t.Fatalf("rescue outcome = (%+v, %v), want joined logout", abandoned.result, abandoned.err)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(stateDir, "state.db")); readErr != nil || string(got) != "state" {
+		t.Fatalf("logout removed the StateStore container: contents=%q err=%v", got, readErr)
 	}
 
 	candidate, active, err := runtimes.reserve(109, runtimeConfig{})
@@ -379,11 +357,6 @@ func TestLogout_ReconstructsRuntimeAfterDown(t *testing.T) {
 		publishLogoutRuntimeForTest(t, token, store)
 		return token, nil
 	}
-	deps.removeAll = func(path string) error {
-		events = append(events, "remove")
-		return os.RemoveAll(path)
-	}
-
 	result, err := logoutWithDependencies(104, "network-snapshot", deps)
 	if err != nil {
 		t.Fatalf("logoutWithDependencies: %v", err)
@@ -391,8 +364,11 @@ func TestLogout_ReconstructsRuntimeAfterDown(t *testing.T) {
 	if !result.Started || result.EmitStopped || !result.NoState {
 		t.Fatalf("logout result = %+v, want hidden temporary close and noState", result)
 	}
-	if got := fmt.Sprint(events); got != "[start remote close remove]" {
-		t.Fatalf("logout order = %s, want [start remote close remove]", got)
+	if got := fmt.Sprint(events); got != "[start remote close]" {
+		t.Fatalf("logout order = %s, want [start remote close]", got)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(stateDir, "state.db")); readErr != nil || string(got) != "state" {
+		t.Fatalf("idle logout removed the StateStore container: contents=%q err=%v", got, readErr)
 	}
 }
 
@@ -408,7 +384,6 @@ func TestLogout_IdleLegacyStateWithoutRecoverableConfigFailsClosed(t *testing.T)
 
 	remoteCalls := 0
 	startCalls := 0
-	removeCalls := 0
 	deps := logoutDependenciesForTest(t, stateDir, func(*nodeRuntime) error {
 		remoteCalls++
 		return nil
@@ -418,10 +393,6 @@ func TestLogout_IdleLegacyStateWithoutRecoverableConfigFailsClosed(t *testing.T)
 		startCalls++
 		return 0, nil
 	}
-	deps.removeAll = func(string) error {
-		removeCalls++
-		return nil
-	}
 
 	result, err := logoutWithDependencies(105, "network-snapshot", deps)
 	if !errors.Is(err, ErrConfigurationMismatch) {
@@ -430,8 +401,8 @@ func TestLogout_IdleLegacyStateWithoutRecoverableConfigFailsClosed(t *testing.T)
 	if result.Started || result.NoState {
 		t.Fatalf("logout result = %+v, want untouched legacy state", result)
 	}
-	if startCalls != 0 || remoteCalls != 0 || removeCalls != 0 {
-		t.Fatalf("unsafe logout work ran: start=%d remote=%d remove=%d", startCalls, remoteCalls, removeCalls)
+	if startCalls != 0 || remoteCalls != 0 {
+		t.Fatalf("unsafe logout work ran: start=%d remote=%d", startCalls, remoteCalls)
 	}
 	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "state" {
 		t.Fatalf("fail-closed logout mutated state: contents=%q err=%v", got, readErr)

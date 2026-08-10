@@ -24,7 +24,9 @@ part of 'worker.dart';
 // isolate.
 //
 // Concurrency is capped by the caller-isolate gate in
-// `native_offload_gate.dart`. HTTP native admission shares that same bound.
+// `native_offload_gate.dart`. HTTP native admission shares that same bound
+// only until its runtime's data plane is ready; after the one-time bootstrap
+// it calls native directly (see `http_fd_client.dart`).
 // Each in-flight offloaded call
 // pins an OS thread inside its synchronous cgo call for the call's whole
 // duration, and the Dart VM's thread pool does not shrink back after a helper

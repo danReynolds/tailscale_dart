@@ -326,6 +326,7 @@ Target layout:
     .tailscale-state.reset                 mode 0600, incomplete-reset intent
     tailscale/                             mode 0700, package-owned
     tailscaled.state.enc                 mode 0600, encrypted StateStore
+    .tailscaled.state.enc.tmp            mode 0600, transient pre-rename envelope
     tsnet/                               mode 0700, upstream runtime root
       tailscaled.log.conf                owner-only log-stream credential/config
       tailscaled.log1.txt / tailscaled.log2.txt
@@ -466,8 +467,9 @@ For each mutation:
 2. apply the write/delete to the candidate;
 3. serialize the candidate;
 4. generate a new nonce and encrypt;
-5. write a same-directory temporary file, enforce mode `0600`, fsync and close
-   it, then atomically rename it over the destination;
+5. exclusively create the same-directory
+   `.tailscaled.state.enc.tmp`, enforce mode `0600`, fsync and close it, then
+   atomically rename it over the destination;
 6. treat successful rename as the commit point and immediately replace the
    in-memory cache with the candidate;
 7. attempt to fsync the containing directory where supported. A failure here is
@@ -483,6 +485,23 @@ crash; a remaining DEK plus missing envelope is then the explicit orphan state
 and fails closed. There is no journal or rollback protection. This deliberately
 avoids mutating the cache before the atomic commit while acknowledging both the
 rename boundary and platform durability limit.
+
+Fresh creation has one prerequisite before this sequence: after creating and
+securing the new `tailscale/` directory, fsync its already-existing parent so
+the directory entry is durable before attempting the empty-envelope commit. A
+failure is pre-commit: remove the fresh directory, sync that removal, and report
+`envelopeNotCommitted` so custody can compensate the DEK. The Store constructors
+also require the R4c state lease; their check-then-rename no-clobber guarantee is
+defined under that exclusive-owner precondition.
+
+The fixed temporary name makes crash residue classifiable rather than leaving
+an open-ended random filename family. Normal returned pre-rename failures remove
+it. During R4d startup/probe, the lease owner may remove this exact path only
+after proving it is a current-user-owned regular file with mode `0600`; removal
+and directory-sync failure returns `atomicPersistenceFailure`. A symlink, wrong
+file type, ownership/mode failure, or any other similarly named entry fails
+closed as unexpected residue. The temporary envelope is never promoted during
+recovery because rename is the sole commit point.
 
 No `ExportableStore` implementation is needed because migration is out of
 scope.
@@ -849,8 +868,13 @@ do not expose the DEK, StateStore values, or auth key.
   symlinks, wrong file types, ownership mismatches where inspectable, and
   chmod/stat failures, and prove startup fails closed unless it can tighten and
   verify owner-only access;
+- fresh-directory creation fsyncs its parent before envelope commit; injected
+  parent-sync failure durably removes the uncommitted directory;
 - crash/fault injection before write, after temp write, after fsync, and before
   rename leaves the prior disk/cache state authoritative;
+- a returned pre-rename error removes `.tailscaled.state.enc.tmp`; simulated
+  crash residue has that one exact name and follows the verified R4d cleanup
+  rule above;
 - fault injection immediately after rename proves the new disk/cache state is
   authoritative even if directory fsync reports a durability diagnostic;
 - simulated crash/lost directory entry after unsupported/failed directory fsync

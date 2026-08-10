@@ -32,21 +32,21 @@ type UdpFdBinding struct {
 	LocalPort    int
 }
 
-// udpFdBindingRegistry tracks live UDP bridges so they can be torn down
-// explicitly. Keyed by a monotonically-assigned binding id (returned in the
-// bind response and passed back to UdpCloseBinding) rather than the Dart-side
-// fd: an fd is an OS number the kernel reuses, so an fd-keyed registry had a
-// whole displacement class — a binding dropped without close could be silently
-// overwritten by a later binding whose socketpair reused the number — that
-// monotonic ids make unrepresentable. A datagram socketpair peer-close does
-// NOT wake a goroutine parked in read on the other end (unlike a stream
-// socket), so without an explicit close the bridge goroutines, the tailnet
-// PacketConn (and its port), and two OS threads would leak until process exit.
-var (
-	udpFdBindingMu       sync.Mutex
-	udpFdBindingRegistry = map[int64]*udpBridge{}
-	udpBindingID         int64 // atomic
-)
+// The runtime's udpBridges registry tracks live UDP bridges so they can be
+// torn down explicitly. Keyed by a monotonically-assigned binding id (returned
+// in the bind response and passed back to UdpCloseBinding) rather than the
+// Dart-side fd: an fd is an OS number the kernel reuses, so an fd-keyed
+// registry had a whole displacement class — a binding dropped without close
+// could be silently overwritten by a later binding whose socketpair reused the
+// number — that monotonic ids make unrepresentable. A datagram socketpair
+// peer-close does NOT wake a goroutine parked in read on the other end (unlike
+// a stream socket), so without an explicit close the bridge goroutines, the
+// tailnet PacketConn (and its port), and two OS threads would leak until
+// process exit.
+//
+// udpBindingID allocates those ids (atomic); see fdRegistry for why the
+// counter stays process-global while the maps live on the runtime.
+var udpBindingID int64
 
 type udpBridge struct {
 	closeOnce sync.Once
@@ -64,48 +64,20 @@ func (b *udpBridge) close() { b.closeOnce.Do(b.closeFn) }
 // caller owns cleanup. Ids are monotonic and never reused, so an insert can
 // never displace an existing entry.
 func registerUdpBridge(gate nodeGate, id int64, bridge *udpBridge) bool {
-	udpFdBindingMu.Lock()
-	// Commit-point epoch check (see nodeGate): a bind that raced teardown must
-	// not land behind closeAllUdpBindings' sweep, where it would hold its
-	// tailnet port and two pump goroutines with no owner until process exit.
-	if !gate.stillCurrent() {
-		udpFdBindingMu.Unlock()
-		return false
-	}
-	udpFdBindingRegistry[id] = bridge
-	udpFdBindingMu.Unlock()
-	return true
+	// Commit-point check (see fdRegistry): a bind that raced teardown must not
+	// land behind the runtime sweep, where it would hold its tailnet port and
+	// two pump goroutines with no owner until process exit.
+	return gate.runtime.fd.udpBridges.commit(gate, id, bridge)
 }
 
 func deregisterUdpBridge(id int64, bridge *udpBridge) {
-	udpFdBindingMu.Lock()
-	if udpFdBindingRegistry[id] == bridge {
-		delete(udpFdBindingRegistry, id)
-	}
-	udpFdBindingMu.Unlock()
+	currentUdpBridges().removeMatching(id, bridge)
 }
 
 // UdpCloseBinding tears down the UDP bridge for [id] (from the bind response).
 // Idempotent and a no-op for an unknown id.
 func UdpCloseBinding(id int64) {
-	udpFdBindingMu.Lock()
-	bridge := udpFdBindingRegistry[id]
-	delete(udpFdBindingRegistry, id)
-	udpFdBindingMu.Unlock()
-	if bridge != nil {
-		bridge.close()
-	}
-}
-
-func closeAllUdpBindings() {
-	udpFdBindingMu.Lock()
-	bridges := make([]*udpBridge, 0, len(udpFdBindingRegistry))
-	for id, bridge := range udpFdBindingRegistry {
-		bridges = append(bridges, bridge)
-		delete(udpFdBindingRegistry, id)
-	}
-	udpFdBindingMu.Unlock()
-	for _, bridge := range bridges {
+	if bridge, ok := currentUdpBridges().take(id); ok {
 		bridge.close()
 	}
 }

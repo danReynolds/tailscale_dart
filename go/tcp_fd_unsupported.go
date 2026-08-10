@@ -35,9 +35,6 @@ func TcpAcceptFd(listenerID int64) (*TcpFdConn, bool, error) {
 func TcpCloseFdListener(listenerID int64) {
 }
 
-func closeAllTcpFdListeners() {
-}
-
 func newSocketPairConn() (int, net.Conn, error) {
 	return -1, nil, errors.New("socketpair is not supported on Windows")
 }

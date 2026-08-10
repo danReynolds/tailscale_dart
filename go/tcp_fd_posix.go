@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,11 +34,9 @@ type TcpFdListener struct {
 	LocalPort    int
 }
 
-var (
-	tcpFdListenerID       int64
-	tcpFdListenerRegistry = map[int64]net.Listener{}
-	tcpFdListenerMu       sync.Mutex
-)
+// tcpFdListenerID allocates monotonic listener ids; see fdRegistry for why
+// the counter stays process-global while the maps live on the runtime.
+var tcpFdListenerID int64
 
 // TcpDialFd opens an outbound TCP connection for the exact captured runtime
 // token and returns a POSIX fd connected to that tailnet stream.
@@ -185,17 +182,13 @@ func registerTcpFdListener(gate nodeGate, ln net.Listener, fallbackAddress strin
 	}
 
 	id := atomic.AddInt64(&tcpFdListenerID, 1)
-	tcpFdListenerMu.Lock()
-	// Commit-point epoch check (see nodeGate): a listen that raced teardown
-	// must not land in the registry behind closeAllTcpFdListeners' sweep,
-	// where it would hold its tailnet port with no owner until process exit.
-	if !gate.stillCurrent() {
-		tcpFdListenerMu.Unlock()
+	// Commit-point check (see fdRegistry): a listen that raced teardown must
+	// not land behind the runtime sweep, where it would hold its tailnet port
+	// with no owner until process exit.
+	if !gate.runtime.fd.tcpListeners.commit(gate, id, ln) {
 		ln.Close()
 		return nil, errors.New("tcp listen raced node teardown")
 	}
-	tcpFdListenerRegistry[id] = ln
-	tcpFdListenerMu.Unlock()
 
 	return &TcpFdListener{
 		ID:           id,
@@ -205,21 +198,16 @@ func registerTcpFdListener(gate nodeGate, ln net.Listener, fallbackAddress strin
 }
 
 func TcpAcceptFd(listenerID int64) (*TcpFdConn, bool, error) {
-	tcpFdListenerMu.Lock()
-	ln := tcpFdListenerRegistry[listenerID]
-	tcpFdListenerMu.Unlock()
-	if ln == nil {
+	listeners := currentTcpListeners()
+	ln, ok := listeners.get(listenerID)
+	if !ok {
 		return nil, true, nil
 	}
 
 	tailConn, err := ln.Accept()
 	if err != nil {
 		if errors.Is(err, net.ErrClosed) {
-			tcpFdListenerMu.Lock()
-			if tcpFdListenerRegistry[listenerID] == ln {
-				delete(tcpFdListenerRegistry, listenerID)
-			}
-			tcpFdListenerMu.Unlock()
+			listeners.removeMatching(listenerID, ln)
 			return nil, true, nil
 		}
 		return nil, false, fmt.Errorf("tailnet accept: %w", err)
@@ -250,25 +238,8 @@ func TcpAcceptFd(listenerID int64) (*TcpFdConn, bool, error) {
 }
 
 func TcpCloseFdListener(listenerID int64) {
-	tcpFdListenerMu.Lock()
-	ln := tcpFdListenerRegistry[listenerID]
-	delete(tcpFdListenerRegistry, listenerID)
-	tcpFdListenerMu.Unlock()
+	ln, _ := currentTcpListeners().take(listenerID)
 	if ln != nil {
-		ln.Close()
-	}
-}
-
-func closeAllTcpFdListeners() {
-	tcpFdListenerMu.Lock()
-	listeners := make([]net.Listener, 0, len(tcpFdListenerRegistry))
-	for id, ln := range tcpFdListenerRegistry {
-		listeners = append(listeners, ln)
-		delete(tcpFdListenerRegistry, id)
-	}
-	tcpFdListenerMu.Unlock()
-
-	for _, ln := range listeners {
 		ln.Close()
 	}
 }

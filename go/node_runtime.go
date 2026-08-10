@@ -85,6 +85,8 @@ type nodeRuntime struct {
 	httpMu              sync.Mutex
 	httpTransport       *http.Transport
 	httpTransportClosed bool
+
+	fd fdResources
 }
 
 // tailnetTransport returns this runtime's one outbound HTTP transport (an
@@ -201,9 +203,7 @@ func (r *nodeRuntime) closeOwnedResources(closeStartedServer, preserveBootstrapF
 			r.publication.shutdownBootstrap(preserveBootstrapFailure)
 			_ = r.publication.close()
 		}
-		closeAllTcpFdListeners()
-		closeAllHttpBindings()
-		closeAllUdpBindings()
+		r.fd.closeAll()
 		r.closeTailnetTransport()
 
 		if closeStartedServer && r.server != nil {

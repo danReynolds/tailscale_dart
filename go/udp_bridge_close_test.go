@@ -42,9 +42,9 @@ func TestUdpBindingIDsNeverDisplace(t *testing.T) {
 	if firstClosed.Load() {
 		t.Fatal("a new binding must not disturb an existing one")
 	}
-	udpFdBindingMu.Lock()
-	both := udpFdBindingRegistry[id1] == first && udpFdBindingRegistry[id2] == second
-	udpFdBindingMu.Unlock()
+	got1, _ := currentUdpBridges().get(id1)
+	got2, _ := currentUdpBridges().get(id2)
+	both := got1 == first && got2 == second
 	if !both {
 		t.Fatal("both bindings must coexist in the registry")
 	}
@@ -53,9 +53,9 @@ func TestUdpBindingIDsNeverDisplace(t *testing.T) {
 	if !firstClosed.Load() {
 		t.Fatal("UdpCloseBinding must close the addressed bridge")
 	}
-	udpFdBindingMu.Lock()
-	remaining := udpFdBindingRegistry[id2] == second && udpFdBindingRegistry[id1] == nil
-	udpFdBindingMu.Unlock()
+	kept, _ := currentUdpBridges().get(id2)
+	_, gonePresent := currentUdpBridges().get(id1)
+	remaining := kept == second && !gonePresent
 	if !remaining {
 		t.Fatal("closing one binding must not affect the other")
 	}
@@ -75,9 +75,7 @@ func TestRegisterUdpBridgeRefusesStaleGate(t *testing.T) {
 	if registerUdpBridge(stale, id, bridge) {
 		t.Fatal("a stale gate must be refused at the commit point")
 	}
-	udpFdBindingMu.Lock()
-	_, present := udpFdBindingRegistry[id]
-	udpFdBindingMu.Unlock()
+	_, present := currentUdpBridges().get(id)
 	if present {
 		t.Fatal("a refused registration must not land in the registry")
 	}
@@ -158,9 +156,7 @@ func TestUdpBridgeCloseReleasesResources(t *testing.T) {
 		t.Fatalf("live bridge registration: %v", err)
 	}
 
-	udpFdBindingMu.Lock()
-	_, registered := udpFdBindingRegistry[id]
-	udpFdBindingMu.Unlock()
+	_, registered := currentUdpBridges().get(id)
 	if !registered {
 		t.Fatal("bridge was not registered")
 	}
@@ -168,9 +164,7 @@ func TestUdpBridgeCloseReleasesResources(t *testing.T) {
 
 	UdpCloseBinding(id)
 
-	udpFdBindingMu.Lock()
-	_, stillRegistered := udpFdBindingRegistry[id]
-	udpFdBindingMu.Unlock()
+	_, stillRegistered := currentUdpBridges().get(id)
 	if stillRegistered {
 		t.Error("bridge still registered after UdpCloseBinding")
 	}
@@ -207,13 +201,11 @@ func TestCloseAllUdpBindingsTearsDownEveryBridge(t *testing.T) {
 		}
 	}()
 
-	closeAllUdpBindings()
+	runtime := currentRuntime()
+	runtime.fd.closeAll()
 
-	udpFdBindingMu.Lock()
-	remaining := len(udpFdBindingRegistry)
-	udpFdBindingMu.Unlock()
-	if remaining != 0 {
-		t.Fatalf("registry still holds %d bridges after closeAllUdpBindings", remaining)
+	if remaining := runtime.fd.udpBridges.size(); remaining != 0 {
+		t.Fatalf("registry still holds %d bridges after the runtime sweep", remaining)
 	}
 }
 

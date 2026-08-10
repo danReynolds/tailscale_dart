@@ -53,5 +53,3 @@ func HttpAccept(bindingID int64) (*HttpIncomingRequest, bool, error) {
 }
 
 func HttpCloseBinding(bindingID int64) {}
-
-func closeAllHttpBindings() {}

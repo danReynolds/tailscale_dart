@@ -155,11 +155,13 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 				return true
 			},
 			count: func() int {
-				tcpFdListenerMu.Lock()
-				defer tcpFdListenerMu.Unlock()
-				return len(tcpFdListenerRegistry)
+				return currentTcpListeners().size()
 			},
-			sweep: closeAllTcpFdListeners,
+			sweep: func() {
+				for _, ln := range currentTcpListeners().drain() {
+					_ = ln.Close()
+				}
+			},
 		},
 		{
 			name: "udp-bridge",
@@ -187,11 +189,13 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 				return true
 			},
 			count: func() int {
-				udpFdBindingMu.Lock()
-				defer udpFdBindingMu.Unlock()
-				return len(udpFdBindingRegistry)
+				return currentUdpBridges().size()
 			},
-			sweep: closeAllUdpBindings,
+			sweep: func() {
+				for _, bridge := range currentUdpBridges().drain() {
+					bridge.close()
+				}
+			},
 		},
 		{
 			name: "http-transport-slot",
@@ -240,11 +244,13 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 				return registerHttpBinding(gate, atomic.AddInt64(&httpBindingID, 1), state)
 			},
 			count: func() int {
-				httpBindingMu.Lock()
-				defer httpBindingMu.Unlock()
-				return len(httpBindingRegistry)
+				return currentHttpBindings().size()
 			},
-			sweep: closeAllHttpBindings,
+			sweep: func() {
+				for _, state := range currentHttpBindings().drain() {
+					state.close()
+				}
+			},
 		},
 	}
 

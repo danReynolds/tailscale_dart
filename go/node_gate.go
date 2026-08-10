@@ -199,19 +199,8 @@ func debugNodeState() nodeStateSnapshot {
 		runtime.httpMu.Lock()
 		snap.TransportCached = runtime.httpTransport != nil
 		runtime.httpMu.Unlock()
+		snap.TcpListeners, snap.UdpBridges, snap.HttpBindings = runtime.fd.census()
 	}
-
-	httpBindingMu.Lock()
-	snap.HttpBindings = len(httpBindingRegistry)
-	httpBindingMu.Unlock()
-
-	tcpFdListenerMu.Lock()
-	snap.TcpListeners = len(tcpFdListenerRegistry)
-	tcpFdListenerMu.Unlock()
-
-	udpFdBindingMu.Lock()
-	snap.UdpBridges = len(udpFdBindingRegistry)
-	udpFdBindingMu.Unlock()
 
 	return snap
 }

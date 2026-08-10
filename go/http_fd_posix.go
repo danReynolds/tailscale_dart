@@ -81,11 +81,9 @@ type httpBindingState struct {
 	once     sync.Once
 }
 
-var (
-	httpBindingID       int64
-	httpBindingRegistry = map[int64]*httpBindingState{}
-	httpBindingMu       sync.Mutex
-)
+// httpBindingID allocates monotonic binding ids; see fdRegistry for why the
+// counter stays process-global while the maps live on the runtime.
+var httpBindingID int64
 
 func HttpBind(tailnetPort int) (*HttpBinding, error) {
 	if tailnetPort < 0 || tailnetPort > 65535 {
@@ -129,14 +127,11 @@ func HttpBind(tailnetPort int) (*HttpBinding, error) {
 		return nil, fmt.Errorf("HttpBind raced with Stop or server replacement")
 	}
 
+	bindings := &gate.runtime.fd.httpBindings
 	go func() {
 		_ = state.server.Serve(ln)
 		state.close()
-		httpBindingMu.Lock()
-		if httpBindingRegistry[id] == state {
-			delete(httpBindingRegistry, id)
-		}
-		httpBindingMu.Unlock()
+		bindings.removeMatching(id, state)
 	}()
 
 	return &state.binding, nil
@@ -150,13 +145,7 @@ func HttpBind(tailnetPort int) (*HttpBinding, error) {
 // self-healed it; now the registration is airtight and the reap covers only
 // mid-lifecycle listener death).
 func registerHttpBinding(gate nodeGate, id int64, state *httpBindingState) bool {
-	httpBindingMu.Lock()
-	defer httpBindingMu.Unlock()
-	if !gate.stillCurrent() {
-		return false
-	}
-	httpBindingRegistry[id] = state
-	return true
+	return gate.runtime.fd.httpBindings.commit(gate, id, state)
 }
 
 func newHTTPBindingServer(state *httpBindingState) *http.Server {
@@ -170,10 +159,8 @@ func newHTTPBindingServer(state *httpBindingState) *http.Server {
 }
 
 func HttpAccept(bindingID int64) (*HttpIncomingRequest, bool, error) {
-	httpBindingMu.Lock()
-	state := httpBindingRegistry[bindingID]
-	httpBindingMu.Unlock()
-	if state == nil {
+	state, ok := currentHttpBindings().get(bindingID)
+	if !ok {
 		return nil, true, nil
 	}
 
@@ -189,25 +176,7 @@ func HttpAccept(bindingID int64) (*HttpIncomingRequest, bool, error) {
 }
 
 func HttpCloseBinding(id int64) {
-	httpBindingMu.Lock()
-	state := httpBindingRegistry[id]
-	delete(httpBindingRegistry, id)
-	httpBindingMu.Unlock()
-	if state != nil {
-		state.close()
-	}
-}
-
-func closeAllHttpBindings() {
-	httpBindingMu.Lock()
-	bindings := make([]*httpBindingState, 0, len(httpBindingRegistry))
-	for id, state := range httpBindingRegistry {
-		bindings = append(bindings, state)
-		delete(httpBindingRegistry, id)
-	}
-	httpBindingMu.Unlock()
-
-	for _, state := range bindings {
+	if state, ok := currentHttpBindings().take(id); ok {
 		state.close()
 	}
 }

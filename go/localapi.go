@@ -827,7 +827,6 @@ func validateServePort(name string, port int) (uint16, error) {
 	return uint16(port), nil
 }
 
-
 func normalizeServeLocalAddress(address string) (string, error) {
 	address = strings.TrimSpace(address)
 	if address == "" {

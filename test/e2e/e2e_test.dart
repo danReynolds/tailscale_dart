@@ -22,6 +22,7 @@ import 'package:test/test.dart';
 import 'support/native_asset_workaround.dart';
 import 'support/peer_process.dart';
 import 'support/state_waiters.dart';
+import 'support/test_keybay_backend.dart';
 
 void main() {
   final controlUrl = Platform.environment['HEADSCALE_URL'];
@@ -44,6 +45,7 @@ void main() {
     await warmUpNativeAssetForPeerSubprocesses();
 
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
+    installE2ETestKeybay(stateDir);
     Tailscale.init(
       stateDir: stateDir,
       appId: 'dev.tailscale.dart.test.e2e.primary',
@@ -55,6 +57,9 @@ void main() {
   tearDownAll(() async {
     try {
       await tsnet.down();
+    } catch (_) {}
+    try {
+      await tsnet.forgetLocalIdentity();
     } catch (_) {}
     try {
       Directory(stateDir).deleteSync(recursive: true);

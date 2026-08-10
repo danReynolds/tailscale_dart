@@ -61,6 +61,16 @@ func DuneBeginPersistentPreparation(requestToken C.ulonglong) *C.char {
 	return C.CString(`{"ok":true}`)
 }
 
+//export DuneInspectPersistentPreparation
+func DuneInspectPersistentPreparation(requestToken C.ulonglong) *C.char {
+	layout, err := tailscale.InspectPersistentPreparation(uint64(requestToken))
+	if err != nil {
+		return lifecycleError(err)
+	}
+	b, _ := json.Marshal(map[string]any{"layout": layout})
+	return C.CString(string(b))
+}
+
 //export DuneMarkCustodyActive
 func DuneMarkCustodyActive(requestToken C.ulonglong) *C.char {
 	if err := tailscale.MarkCustodyActive(uint64(requestToken)); err != nil {
@@ -77,6 +87,16 @@ func DuneMarkCustodyWriteAttempted(requestToken C.ulonglong) *C.char {
 	return C.CString(`{"ok":true}`)
 }
 
+//export DuneResolvePersistentCustody
+func DuneResolvePersistentCustody(requestToken C.ulonglong, dekPresent C.int) *C.char {
+	action, err := tailscale.ResolvePersistentCustody(uint64(requestToken), dekPresent != 0)
+	if err != nil {
+		return lifecycleError(err)
+	}
+	b, _ := json.Marshal(map[string]any{"action": action})
+	return C.CString(string(b))
+}
+
 //export DuneSupplyPreparedDEK
 func DuneSupplyPreparedDEK(requestToken C.ulonglong, key *C.uint8_t, keyLength C.longlong) *C.char {
 	if keyLength != C.longlong(32) || key == nil {
@@ -85,6 +105,53 @@ func DuneSupplyPreparedDEK(requestToken C.ulonglong, key *C.uint8_t, keyLength C
 	}
 	raw := unsafe.Slice((*byte)(unsafe.Pointer(key)), 32)
 	if err := tailscale.SupplyPreparedDEK(uint64(requestToken), raw); err != nil {
+		return lifecycleError(err)
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DunePreparePersistentState
+func DunePreparePersistentState(requestToken C.ulonglong) *C.char {
+	empty, err := tailscale.PreparePersistentState(uint64(requestToken))
+	if err != nil {
+		return lifecycleError(err)
+	}
+	b, _ := json.Marshal(map[string]any{"empty": empty})
+	return C.CString(string(b))
+}
+
+//export DuneCompletePersistentCustody
+func DuneCompletePersistentCustody(requestToken C.ulonglong) *C.char {
+	if err := tailscale.CompletePersistentCustody(uint64(requestToken)); err != nil {
+		return lifecycleError(err)
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneFinishPreparedPersistentState
+func DuneFinishPreparedPersistentState(requestToken C.ulonglong) *C.char {
+	if err := tailscale.FinishPreparedPersistentState(uint64(requestToken)); err != nil {
+		return lifecycleError(err)
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneBeginLocalReset
+func DuneBeginLocalReset(requestToken C.ulonglong) *C.char {
+	result, err := tailscale.BeginLocalReset(uint64(requestToken))
+	if err != nil {
+		return lifecycleErrorWithFields(err, map[string]any{
+			"token":   result.Token,
+			"stopped": result.Stopped,
+		})
+	}
+	b, _ := json.Marshal(result)
+	return C.CString(string(b))
+}
+
+//export DuneFinishLocalReset
+func DuneFinishLocalReset(requestToken C.ulonglong, custodyDeletionSucceeded C.int) *C.char {
+	if err := tailscale.FinishLocalReset(uint64(requestToken), custodyDeletionSucceeded != 0); err != nil {
 		return lifecycleError(err)
 	}
 	return C.CString(`{"ok":true}`)
@@ -393,16 +460,6 @@ func DuneDiagCheckUpdate() *C.char {
 	return C.CString(tailscale.DiagCheckUpdate())
 }
 
-//export DuneClassifyState
-func DuneClassifyState() *C.char {
-	state, err := tailscale.ClassifyConfiguredIdleState()
-	if err != nil {
-		return lifecycleError(err)
-	}
-	b, _ := json.Marshal(map[string]any{"state": state})
-	return C.CString(string(b))
-}
-
 //export DuneLogout
 func DuneLogout(requestToken C.ulonglong, hostNetworkSnapshot *C.char) *C.char {
 	result, err := tailscale.LogoutWithToken(uint64(requestToken), C.GoString(hostNetworkSnapshot))
@@ -428,6 +485,12 @@ func DuneAwaitRuntimeQuiescence(requestToken C.ulonglong) *C.char {
 	if err := tailscale.AwaitRuntimeQuiescence(uint64(requestToken)); err != nil {
 		return lifecycleError(err)
 	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneRetireAbandonedRuntimeToken
+func DuneRetireAbandonedRuntimeToken(requestToken C.ulonglong) *C.char {
+	tailscale.RetireAbandonedRuntimeToken(uint64(requestToken))
 	return C.CString(`{"ok":true}`)
 }
 
@@ -468,6 +531,28 @@ func lifecycleErrorJSON(err error, fields map[string]any) string {
 		m["code"] = "stateLeaseBusy"
 	case errors.Is(err, tailscale.ErrInvalidStateKey):
 		m["code"] = "invalidStateKey"
+	case errors.Is(err, tailscale.ErrMissingStateDEK):
+		m["code"] = "missingStateKey"
+	case errors.Is(err, tailscale.ErrOrphanedStateDEK):
+		m["code"] = "orphanedStateKey"
+	case errors.Is(err, tailscale.ErrLocalResetIncomplete):
+		m["code"] = "localResetIncomplete"
+	case errors.Is(err, tailscale.ErrConflictingStateFormats):
+		m["code"] = "conflictingStateFormats"
+	case errors.Is(err, tailscale.ErrLegacyStateUnsupported):
+		m["code"] = "legacyStateUnsupported"
+	case errors.Is(err, tailscale.ErrUnexpectedStateResidue):
+		m["code"] = "unexpectedStateResidue"
+	case errors.Is(err, tailscale.ErrAtomicPersistenceFailure):
+		m["code"] = "atomicPersistenceFailure"
+	case errors.Is(err, tailscale.ErrEncryptedStateAuthentication):
+		m["code"] = "stateAuthenticationFailed"
+	case errors.Is(err, tailscale.ErrEncryptedStateUnsupported):
+		m["code"] = "unsupportedStateFormat"
+	case errors.Is(err, tailscale.ErrEncryptedStateInvalidFormat),
+		errors.Is(err, tailscale.ErrEncryptedStateOversized),
+		errors.Is(err, tailscale.ErrEncryptedStatePathSecurity):
+		m["code"] = "invalidStateFormat"
 	}
 	b, _ := json.Marshal(m)
 	return string(b)

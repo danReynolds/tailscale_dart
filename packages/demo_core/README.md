@@ -25,6 +25,7 @@ dart run --enable-experiment=native-assets bin/demo_node.dart serve \
   --state-dir /tmp/dune-a \
   --hostname demo-a \
   --auth-key "$AUTH_KEY" \
+  --ephemeral \
   --control-url "$CONTROL_URL"
 ```
 
@@ -35,6 +36,7 @@ dart run --enable-experiment=native-assets bin/demo_node.dart probe \
   --state-dir /tmp/dune-b \
   --hostname demo-b \
   --auth-key "$AUTH_KEY" \
+  --ephemeral \
   --control-url "$CONTROL_URL" \
   --node 100.x.y.z
 ```
@@ -44,9 +46,15 @@ Run a two-process local loop:
 ```sh
 dart run --enable-experiment=native-assets bin/demo_node.dart pair \
   --auth-key "$AUTH_KEY" \
+  --ephemeral \
   --control-url "$CONTROL_URL"
 ```
 
 `pair` requires a reusable auth key because it joins two independent local
 processes. It is the fastest loop for debugging demo service/probe behavior
 before retesting Flutter on devices.
+
+These headless examples are explicitly ephemeral: they use an in-memory
+StateStore and never access Keybay. Persistent Linux nodes require a desktop
+session with `secret-tool` and an available, unlocked Secret Service; Keybay
+does not provide a supported persistent-custody contract for headless Linux.

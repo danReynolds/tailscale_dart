@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -21,13 +20,33 @@ import (
 type recordingStateStore struct {
 	closeCalls atomic.Int32
 	onClose    func()
+	mu         sync.Mutex
+	values     map[ipn.StateKey][]byte
 }
 
-func (*recordingStateStore) ReadState(ipn.StateKey) ([]byte, error) {
-	return nil, ipn.ErrStateNotExist
+func (s *recordingStateStore) ReadState(key ipn.StateKey) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.values[key]
+	if !ok {
+		return nil, ipn.ErrStateNotExist
+	}
+	return cloneStateBytes(value), nil
 }
 
-func (*recordingStateStore) WriteState(ipn.StateKey, []byte) error { return nil }
+func (s *recordingStateStore) WriteState(key ipn.StateKey, value []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if value == nil {
+		delete(s.values, key)
+		return nil
+	}
+	if s.values == nil {
+		s.values = make(map[ipn.StateKey][]byte)
+	}
+	s.values[key] = cloneStateBytes(value)
+	return nil
+}
 
 func (s *recordingStateStore) Close() error {
 	s.closeCalls.Add(1)
@@ -44,8 +63,37 @@ func constructionDependencies(
 	closeServer func(*tsnet.Server) error,
 ) runtimeStartDependencies {
 	return runtimeStartDependencies{
-		openStore: func(string) (ipn.StateStore, io.Closer, error) {
-			return store, store, nil
+		adoptPersistent: func(token uint64, config runtimeConfig) (*nodeRuntime, error) {
+			candidate, active, err := runtimes.reserve(token, config)
+			if err != nil {
+				return nil, err
+			}
+			if active != nil {
+				return nil, fmt.Errorf("test adoption unexpectedly found an active runtime")
+			}
+			root, expectedRoot, err := configuredStateRootSnapshot()
+			if err != nil {
+				_ = runtimes.release(candidate, nil)
+				return nil, err
+			}
+			lease, err := acquireStateLease(root, withExpectedStateLeaseRoot(expectedRoot))
+			if err != nil {
+				_ = runtimes.release(candidate, nil)
+				return nil, err
+			}
+			candidate.stateLease = lease
+			stateDir, err := configuredStateDir()
+			if err == nil {
+				err = ensurePrivateOwnedDirectory(stateDir)
+			}
+			if err != nil {
+				cleanupErr := candidate.closeUnstarted()
+				_ = runtimes.release(candidate, cleanupErr)
+				return nil, err
+			}
+			candidate.store = store
+			candidate.storeCloser = store
+			return candidate, nil
 		},
 		configureHostNetwork: ConfigureHostNetworkSnapshot,
 		startServer:          start,
@@ -84,6 +132,77 @@ func TestRuntimeConstruction_StartFailureNeverClosesServer(t *testing.T) {
 	}
 }
 
+func TestRuntimeConstruction_MetadataRequiresSuccessfulServerStart(t *testing.T) {
+	stateDir := configureFreshStateRootForTest(t)
+	oldConfig := runtimeConfig{hostname: "old-node", controlURL: "https://old.example/"}
+	newConfig := runtimeConfig{hostname: "new-node", controlURL: "https://new.example/"}
+	startFailure := errors.New("injected Start failure")
+
+	failedStore := new(recordingStateStore)
+	if err := saveRuntimeConfig(failedStore, oldConfig); err != nil {
+		t.Fatalf("seed old runtime metadata: %v", err)
+	}
+	failedDeps := constructionDependencies(
+		failedStore,
+		func(*tsnet.Server) error {
+			if _, err := loadRuntimeConfig(failedStore); !errors.Is(err, ipn.ErrStateNotExist) {
+				t.Fatalf("metadata visible during unproven Start: %v", err)
+			}
+			return startFailure
+		},
+		func(*tsnet.Server) (*local.Client, error) {
+			t.Fatal("LocalClient called after Start failure")
+			return nil, nil
+		},
+		func(*tsnet.Server) error { return nil },
+	)
+	if _, err := startRuntimeWithDependencies(
+		newConfig.hostname,
+		"",
+		newConfig.controlURL,
+		stateDir,
+		false,
+		"",
+		failedDeps,
+	); !errors.Is(err, startFailure) {
+		t.Fatalf("failed start error = %v, want %v", err, startFailure)
+	}
+	if _, err := loadRuntimeConfig(failedStore); !errors.Is(err, ipn.ErrStateNotExist) {
+		t.Fatalf("failed Start retained a trusted runtime tuple: %v", err)
+	}
+
+	successStore := new(recordingStateStore)
+	if err := saveRuntimeConfig(successStore, oldConfig); err != nil {
+		t.Fatalf("seed successful-path metadata: %v", err)
+	}
+	successDeps := constructionDependencies(
+		successStore,
+		func(*tsnet.Server) error {
+			if _, err := loadRuntimeConfig(successStore); !errors.Is(err, ipn.ErrStateNotExist) {
+				t.Fatalf("old metadata visible during fresh Start: %v", err)
+			}
+			return nil
+		},
+		func(*tsnet.Server) (*local.Client, error) { return &local.Client{}, nil },
+		func(*tsnet.Server) error { return nil },
+	)
+	alreadyActive, err := startRuntimeWithDependencies(
+		newConfig.hostname,
+		"",
+		newConfig.controlURL,
+		stateDir,
+		false,
+		"",
+		successDeps,
+	)
+	if err != nil || alreadyActive {
+		t.Fatalf("successful start = (%v, %v), want fresh success", alreadyActive, err)
+	}
+	if got, err := loadRuntimeConfig(successStore); err != nil || got != newConfig {
+		t.Fatalf("proven runtime metadata = (%+v, %v), want %+v", got, err, newConfig)
+	}
+}
+
 func TestRuntimeConstruction_PostStartFailureClosesServerBeforeStore(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
 	var mu sync.Mutex
@@ -94,6 +213,13 @@ func TestRuntimeConstruction_PostStartFailureClosesServerBeforeStore(t *testing.
 		mu.Unlock()
 	}
 	store := &recordingStateStore{onClose: func() { record("store") }}
+	if err := saveRuntimeConfig(store, runtimeConfig{hostname: "old-node"}); err != nil {
+		t.Fatalf("seed old runtime metadata: %v", err)
+	}
+	newConfig := runtimeConfig{
+		hostname:   "node",
+		controlURL: "https://control/",
+	}
 	clientFailure := errors.New("injected LocalClient failure")
 	deps := constructionDependencies(
 		store,
@@ -105,7 +231,15 @@ func TestRuntimeConstruction_PostStartFailureClosesServerBeforeStore(t *testing.
 		},
 	)
 
-	_, err := startRuntimeWithDependencies("node", "", "https://control/", stateDir, false, "", deps)
+	_, err := startRuntimeWithDependencies(
+		newConfig.hostname,
+		"",
+		newConfig.controlURL,
+		stateDir,
+		false,
+		"",
+		deps,
+	)
 	if !errors.Is(err, clientFailure) {
 		t.Fatalf("start error = %v, want LocalClient failure", err)
 	}
@@ -113,6 +247,14 @@ func TestRuntimeConstruction_PostStartFailureClosesServerBeforeStore(t *testing.
 	defer mu.Unlock()
 	if len(events) != 2 || events[0] != "server" || events[1] != "store" {
 		t.Fatalf("close order = %v, want [server store]", events)
+	}
+	if got, metadataErr := loadRuntimeConfig(store); metadataErr != nil || got != newConfig {
+		t.Fatalf(
+			"post-Start metadata = (%+v, %v), want proven tuple %+v",
+			got,
+			metadataErr,
+			newConfig,
+		)
 	}
 }
 
@@ -191,10 +333,6 @@ func TestRuntimeConstruction_AbandonedStartCannotCommitLateSuccess(t *testing.T)
 	}
 	if currentRuntime() != nil {
 		t.Fatal("abandoned late success became current")
-	}
-	config, configErr := lastRuntimeConfig()
-	if configErr != nil || config != (runtimeConfig{hostname: "node", controlURL: "https://control/"}) {
-		t.Fatalf("late-success reopen config = (%+v, %v), want exact applied tuple", config, configErr)
 	}
 	eventMu.Lock()
 	defer eventMu.Unlock()
@@ -366,14 +504,6 @@ func TestRuntimeConstruction_CachesPrivateDialClientBeforeCommit(t *testing.T) {
 	if _, err := closeCurrentRuntime(); err != nil {
 		t.Fatalf("closeCurrentRuntime: %v", err)
 	}
-	cachedConfig, err := lastRuntimeConfig()
-	if err != nil {
-		t.Fatalf("lastRuntimeConfig after down: %v", err)
-	}
-	wantConfig := runtimeConfig{hostname: "node", controlURL: "https://control/"}
-	if cachedConfig != wantConfig {
-		t.Fatalf("last runtime config after down = %+v, want %+v", cachedConfig, wantConfig)
-	}
 	closeMu.Lock()
 	defer closeMu.Unlock()
 	if len(closeEvents) != 2 || closeEvents[0] != "server" || closeEvents[1] != "store" {
@@ -383,7 +513,7 @@ func TestRuntimeConstruction_CachesPrivateDialClientBeforeCommit(t *testing.T) {
 
 func TestRuntimeConstruction_ProductionLocalClientUsesPrivateDial(t *testing.T) {
 	configureFreshStateRootForTest(t)
-	if _, err := StartRuntime("local-client-trust", "", "", false); err != nil {
+	if _, err := StartRuntime("local-client-trust", "test-auth-key", "", true); err != nil {
 		t.Fatalf("StartRuntime: %v", err)
 	}
 
@@ -490,7 +620,7 @@ func TestRuntimeConstruction_RestoresExactLogsEnvironment(t *testing.T) {
 			deps := constructionDependencies(
 				store,
 				func(*tsnet.Server) error {
-					if got := os.Getenv("TS_LOGS_DIR"); got != filepath.Join(stateDir, "logs") {
+					if got := os.Getenv("TS_LOGS_DIR"); got != filepath.Join(stateDir, "tsnet") {
 						t.Fatalf("TS_LOGS_DIR during Start = %q", got)
 					}
 					return tt.startErr
@@ -511,9 +641,9 @@ func TestRuntimeConstruction_RestoresExactLogsEnvironment(t *testing.T) {
 	}
 }
 
-func TestRuntimeConstruction_TightensExistingLogDirectory(t *testing.T) {
+func TestRuntimeConstruction_TightensExistingRuntimeDirectory(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
-	logDir := filepath.Join(stateDir, "logs")
+	logDir := filepath.Join(stateDir, "tsnet")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -541,10 +671,10 @@ func TestRuntimeConstruction_TightensExistingLogDirectory(t *testing.T) {
 }
 
 func TestRuntimeConstruction_RejectsSymlinkedOwnedDirectoriesWithoutTouchingTargets(t *testing.T) {
-	for _, component := range []string{"tailscale", "logs"} {
+	for _, component := range []string{"tailscale", "tsnet"} {
 		t.Run(component, func(t *testing.T) {
 			stateDir := configureFreshStateRootForTest(t)
-			if component == "logs" {
+			if component == "tsnet" {
 				if err := os.Mkdir(stateDir, 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -559,26 +689,21 @@ func TestRuntimeConstruction_RejectsSymlinkedOwnedDirectoriesWithoutTouchingTarg
 				t.Fatal(err)
 			}
 			link := stateDir
-			if component == "logs" {
-				link = filepath.Join(stateDir, "logs")
+			if component == "tsnet" {
+				link = filepath.Join(stateDir, "tsnet")
 			}
 			if err := os.Symlink(target, link); err != nil {
 				t.Skipf("symlinks unavailable: %v", err)
 			}
 
-			storeOpened := false
-			deps := runtimeStartDependencies{
-				openStore: func(string) (ipn.StateStore, io.Closer, error) {
-					storeOpened = true
-					return nil, nil, errors.New("store must not open")
-				},
-				configureHostNetwork: func(string) error { return nil },
-			}
+			deps := constructionDependencies(
+				new(recordingStateStore),
+				func(*tsnet.Server) error { return nil },
+				func(*tsnet.Server) (*local.Client, error) { return &local.Client{}, nil },
+				func(*tsnet.Server) error { return nil },
+			)
 			if _, err := startRuntimeWithDependencies("node", "", "", stateDir, false, "", deps); err == nil {
 				t.Fatal("start accepted a symlinked package-owned directory")
-			}
-			if storeOpened {
-				t.Fatal("store opened through a symlinked package-owned directory")
 			}
 			got, err := os.ReadFile(marker)
 			if err != nil || string(got) != "external" {
@@ -591,41 +716,36 @@ func TestRuntimeConstruction_RejectsSymlinkedOwnedDirectoriesWithoutTouchingTarg
 			if got := info.Mode().Perm(); got != 0o755 {
 				t.Fatalf("external target permissions = %04o, want untouched 0755", got)
 			}
-			if _, err := os.Stat(filepath.Join(target, "logs")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("external target gained package logs directory: %v", err)
+			if _, err := os.Stat(filepath.Join(target, "tsnet")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("external target gained package runtime directory: %v", err)
 			}
 		})
 	}
 }
 
 func TestRuntimeConstruction_RejectsWrongTypeOwnedDirectoriesBeforeStoreOpen(t *testing.T) {
-	for _, component := range []string{"tailscale", "logs"} {
+	for _, component := range []string{"tailscale", "tsnet"} {
 		t.Run(component, func(t *testing.T) {
 			stateDir := configureFreshStateRootForTest(t)
 			path := stateDir
-			if component == "logs" {
+			if component == "tsnet" {
 				if err := os.Mkdir(stateDir, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				path = filepath.Join(stateDir, "logs")
+				path = filepath.Join(stateDir, "tsnet")
 			}
 			if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
-			storeOpened := false
-			deps := runtimeStartDependencies{
-				openStore: func(string) (ipn.StateStore, io.Closer, error) {
-					storeOpened = true
-					return nil, nil, errors.New("store must not open")
-				},
-				configureHostNetwork: func(string) error { return nil },
-			}
+			deps := constructionDependencies(
+				new(recordingStateStore),
+				func(*tsnet.Server) error { return nil },
+				func(*tsnet.Server) (*local.Client, error) { return &local.Client{}, nil },
+				func(*tsnet.Server) error { return nil },
+			)
 			if _, err := startRuntimeWithDependencies("node", "", "", stateDir, false, "", deps); err == nil {
 				t.Fatal("start accepted a non-directory package-owned path")
-			}
-			if storeOpened {
-				t.Fatal("store opened through a non-directory package-owned path")
 			}
 			got, err := os.ReadFile(path)
 			if err != nil || string(got) != "not a directory" {

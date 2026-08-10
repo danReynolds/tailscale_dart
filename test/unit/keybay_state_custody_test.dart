@@ -1,5 +1,6 @@
 library;
 
+import 'package:keybay/keybay.dart';
 import 'package:tailscale/src/keybay_state_custody.dart';
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
@@ -59,6 +60,50 @@ void main() {
       expect(binding.hostAppId, 'com.example.myapp');
       expect(binding.keybayNamespace, 'com.example.myapp.tailscale');
       expect(factoryCalls, 0);
+    });
+
+    test('maps typed Keybay failures to stable custody codes', () {
+      final cases = <({Object error, TailscaleErrorCode code})>[
+        (
+          error: const KeystoreLocked('backend-specific locked detail'),
+          code: TailscaleErrorCode.secureStorageLocked,
+        ),
+        (
+          error: StoreBusy('/private/backend.lock', Duration.zero),
+          code: TailscaleErrorCode.secureStorageBusy,
+        ),
+        (
+          error: const KeystoreUnreachable(
+            'backend-specific unavailable detail',
+          ),
+          code: TailscaleErrorCode.secureStorageUnavailable,
+        ),
+      ];
+
+      for (final testCase in cases) {
+        final mapped = mapKeybayStateCustodyError(
+          testCase.error,
+          action: 'read the Tailscale state key',
+        );
+        expect(mapped.operation, 'state custody');
+        expect(mapped.code, testCase.code);
+        expect(mapped.cause, same(testCase.error));
+        expect(mapped.message, contains('read the Tailscale state key'));
+        expect(mapped.message, isNot(contains('backend-specific')));
+      }
+    });
+
+    test('preserves an existing package-level custody error', () {
+      const original = TailscaleOperationException(
+        'state custody',
+        'already classified',
+        code: TailscaleErrorCode.invalidStateKey,
+      );
+
+      expect(
+        mapKeybayStateCustodyError(original, action: 'read state'),
+        same(original),
+      );
     });
   });
 }

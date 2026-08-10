@@ -29,29 +29,18 @@ func publishLogoutRuntimeForTest(t *testing.T, token uint64, closer *recordingSt
 		t.Fatal("test requires an idle runtime controller")
 	}
 	runtimes.current = runtime
-	config := runtime.config
-	runtimes.lastConfig = &config
 	runtimes.mu.Unlock()
 	return runtime
 }
 
 func logoutDependenciesForTest(
 	t *testing.T,
-	stateDir string,
+	_ string,
 	revoke func(*nodeRuntime) error,
 ) runtimeLogoutDependencies {
 	t.Helper()
 	return runtimeLogoutDependencies{
-		configuredStateDir: func() (string, error) { return stateDir, nil },
-		classifyIdleState:  ClassifyIdleState,
-		loadRuntimeConfig: func() (runtimeConfig, error) {
-			return runtimeConfig{
-				hostname:   "saved-node",
-				controlURL: "https://control.example/",
-				ephemeral:  true,
-			}, nil
-		},
-		startRuntime: func(uint64, runtimeConfig, string) (uint64, error) {
+		prepareIdleRuntime: func(uint64, string) (uint64, error) {
 			t.Fatal("unexpected temporary logout runtime")
 			return 0, nil
 		},
@@ -60,30 +49,26 @@ func logoutDependenciesForTest(
 	}
 }
 
-func TestLogout_AbsentStateIsRemoteFreeNoOp(t *testing.T) {
+func TestLogout_IdleWithoutPreparedStateFailsClosed(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
-	runtimes.mu.Lock()
-	staleConfig := runtimeConfig{hostname: "stale"}
-	runtimes.lastConfig = &staleConfig
-	runtimes.mu.Unlock()
 	remoteCalls := 0
 	deps := logoutDependenciesForTest(t, stateDir, func(*nodeRuntime) error {
 		remoteCalls++
 		return nil
 	})
 
-	result, err := logoutWithDependencies(101, "{}", deps)
-	if err != nil {
-		t.Fatalf("logoutWithDependencies: %v", err)
+	deps.prepareIdleRuntime = func(uint64, string) (uint64, error) {
+		return 0, ErrRuntimeStale
 	}
-	if !result.NoState || result.Started {
-		t.Fatalf("logout result = %+v, want noState without a runtime", result)
+	result, err := logoutWithDependencies(101, "{}", deps)
+	if !errors.Is(err, ErrRuntimeStale) {
+		t.Fatalf("logoutWithDependencies error = %v, want ErrRuntimeStale", err)
+	}
+	if result.NoState || result.Started {
+		t.Fatalf("logout result = %+v, want untouched idle state", result)
 	}
 	if remoteCalls != 0 {
 		t.Fatalf("remote logout calls = %d, want 0", remoteCalls)
-	}
-	if _, configErr := lastRuntimeConfig(); !errors.Is(configErr, ErrConfigurationMismatch) {
-		t.Fatalf("absent logout retained stale reopen config: %v", configErr)
 	}
 }
 
@@ -94,10 +79,7 @@ func TestLogoutWithToken_PreBeginCleanupFailureMarksAndRetainsReceipt(t *testing
 		t.Fatal("unexpected remote logout after temporary-runtime failure")
 		return nil
 	})
-	deps.classifyIdleState = func(string) (IdleStateClass, error) {
-		return IdleStateLegacy, nil
-	}
-	deps.startRuntime = func(uint64, runtimeConfig, string) (uint64, error) {
+	deps.prepareIdleRuntime = func(uint64, string) (uint64, error) {
 		return 0, errors.Join(ErrRuntimeCleanupFailed, cleanupFailure)
 	}
 	previous := productionRuntimeLogoutDependencies
@@ -127,7 +109,7 @@ func TestLogout_RemoteFailureClosesRuntimeAndRetainsState(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(stateDir, "state.db")
+	marker := filepath.Join(stateDir, encryptedStateFileName)
 	if err := os.WriteFile(marker, []byte("recovery evidence"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +147,7 @@ func TestLogout_DispositionDoesNotClaimAnUnmatchedClose(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "state.db"), []byte("state"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, encryptedStateFileName), []byte("state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -198,7 +180,7 @@ func TestLogout_ConfirmedSuccessRevokesThenClosesAndPreservesStore(t *testing.T)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(stateDir, "state.db")
+	marker := filepath.Join(stateDir, encryptedStateFileName)
 	if err := os.WriteFile(marker, []byte("state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -224,9 +206,6 @@ func TestLogout_ConfirmedSuccessRevokesThenClosesAndPreservesStore(t *testing.T)
 	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "state" {
 		t.Fatalf("confirmed logout removed the StateStore container: contents=%q err=%v", got, readErr)
 	}
-	if config, configErr := lastRuntimeConfig(); configErr != nil || config != runtime.config {
-		t.Fatalf("confirmed logout discarded the safe reopen config: config=%+v err=%v", config, configErr)
-	}
 }
 
 func TestLogout_BlocksReplacementAndRescueUntilRuntimeCloseCompletes(t *testing.T) {
@@ -234,7 +213,7 @@ func TestLogout_BlocksReplacementAndRescueUntilRuntimeCloseCompletes(t *testing.
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "state.db"), []byte("state"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, encryptedStateFileName), []byte("state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -315,7 +294,7 @@ func TestLogout_BlocksReplacementAndRescueUntilRuntimeCloseCompletes(t *testing.
 	if abandoned.err != nil || !abandoned.result.Matched || !abandoned.result.Started || abandoned.result.Pending {
 		t.Fatalf("rescue outcome = (%+v, %v), want joined logout", abandoned.result, abandoned.err)
 	}
-	if got, readErr := os.ReadFile(filepath.Join(stateDir, "state.db")); readErr != nil || string(got) != "state" {
+	if got, readErr := os.ReadFile(filepath.Join(stateDir, encryptedStateFileName)); readErr != nil || string(got) != "state" {
 		t.Fatalf("logout removed the StateStore container: contents=%q err=%v", got, readErr)
 	}
 
@@ -331,7 +310,7 @@ func TestLogout_ReconstructsRuntimeAfterDown(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "state.db"), []byte("state"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, encryptedStateFileName), []byte("state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -341,16 +320,8 @@ func TestLogout_ReconstructsRuntimeAfterDown(t *testing.T) {
 		events = append(events, "remote")
 		return nil
 	})
-	deps.startRuntime = func(token uint64, config runtimeConfig, snapshot string) (uint64, error) {
+	deps.prepareIdleRuntime = func(token uint64, snapshot string) (uint64, error) {
 		events = append(events, "start")
-		wantConfig := runtimeConfig{
-			hostname:   "saved-node",
-			controlURL: "https://control.example/",
-			ephemeral:  true,
-		}
-		if config != wantConfig {
-			t.Fatalf("temporary logout config = %+v, want %+v", config, wantConfig)
-		}
 		if snapshot != "network-snapshot" {
 			t.Fatalf("host snapshot = %q, want network-snapshot", snapshot)
 		}
@@ -367,17 +338,17 @@ func TestLogout_ReconstructsRuntimeAfterDown(t *testing.T) {
 	if got := fmt.Sprint(events); got != "[start remote close]" {
 		t.Fatalf("logout order = %s, want [start remote close]", got)
 	}
-	if got, readErr := os.ReadFile(filepath.Join(stateDir, "state.db")); readErr != nil || string(got) != "state" {
+	if got, readErr := os.ReadFile(filepath.Join(stateDir, encryptedStateFileName)); readErr != nil || string(got) != "state" {
 		t.Fatalf("idle logout removed the StateStore container: contents=%q err=%v", got, readErr)
 	}
 }
 
-func TestLogout_IdleLegacyStateWithoutRecoverableConfigFailsClosed(t *testing.T) {
+func TestLogout_IdlePreparationFailureIsRemoteFree(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(stateDir, "state.db")
+	marker := filepath.Join(stateDir, encryptedStateFileName)
 	if err := os.WriteFile(marker, []byte("state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -388,21 +359,20 @@ func TestLogout_IdleLegacyStateWithoutRecoverableConfigFailsClosed(t *testing.T)
 		remoteCalls++
 		return nil
 	})
-	deps.loadRuntimeConfig = lastRuntimeConfig
-	deps.startRuntime = func(uint64, runtimeConfig, string) (uint64, error) {
+	deps.prepareIdleRuntime = func(uint64, string) (uint64, error) {
 		startCalls++
-		return 0, nil
+		return 0, ErrLegacyStateUnsupported
 	}
 
 	result, err := logoutWithDependencies(105, "network-snapshot", deps)
-	if !errors.Is(err, ErrConfigurationMismatch) {
-		t.Fatalf("logout error = %v, want recoverable-config failure", err)
+	if !errors.Is(err, ErrLegacyStateUnsupported) {
+		t.Fatalf("logout error = %v, want prepared-state failure", err)
 	}
 	if result.Started || result.NoState {
 		t.Fatalf("logout result = %+v, want untouched legacy state", result)
 	}
-	if startCalls != 0 || remoteCalls != 0 {
-		t.Fatalf("unsafe logout work ran: start=%d remote=%d", startCalls, remoteCalls)
+	if startCalls != 1 || remoteCalls != 0 {
+		t.Fatalf("unsafe logout work ran: prepare=%d remote=%d", startCalls, remoteCalls)
 	}
 	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "state" {
 		t.Fatalf("fail-closed logout mutated state: contents=%q err=%v", got, readErr)
@@ -504,7 +474,7 @@ func TestStart_AppliesEphemeralFlag(t *testing.T) {
 	t.Setenv("TS_LOGS_DIR", "embedding-app-log-dir")
 
 	stateDir := configureFreshStateRootForTest(t)
-	if err := Start("ephemeral-test", "", "", true); err != nil {
+	if err := Start("ephemeral-test", "test-auth-key", "", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 
@@ -521,8 +491,12 @@ func TestStart_AppliesEphemeralFlag(t *testing.T) {
 	if got := os.Getenv("TS_ENABLE_RAW_DISCO"); got != "false" {
 		t.Fatalf("TS_ENABLE_RAW_DISCO = %q, want compatibility value false", got)
 	}
-	if info, err := os.Stat(filepath.Join(stateDir, "logs")); err != nil || !info.IsDir() {
-		t.Fatalf("runtime log directory missing: info=%v err=%v", info, err)
+	scratch := runtime.scratchDirectory()
+	if info, err := os.Stat(scratch); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("ephemeral scratch invalid: path=%q info=%v err=%v", scratch, info, err)
+	}
+	if _, err := os.Lstat(stateDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral startup created persistent state: %v", err)
 	}
 }
 

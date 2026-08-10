@@ -32,9 +32,8 @@ const (
 )
 
 // persistentPreparation is the native owner between secure-state admission
-// and either a future R4d runtime commit or token-qualified abandonment. R4c
-// leaves this path latent: production DuneStart continues to use SQLite until
-// the complete storage matrix switches atomically in R4d.
+// and either runtime adoption, a completed idle probe, or token-qualified
+// abandonment.
 type persistentPreparation struct {
 	token    uint64
 	baseRoot string
@@ -46,7 +45,20 @@ type persistentPreparation struct {
 	acquisitionSettled    bool
 	abandoned             bool
 	custodyActive         bool
+	custodyCompleted      bool
 	custodyWriteAttempted bool
+	layoutInspected       bool
+	layout                PersistentStateLayout
+	custodyResolved       bool
+	custodyDEKPresent     bool
+	custodyResolveErr     error
+	action                PersistentPreparationAction
+	storeEmpty            bool
+	statePrepareAttempted bool
+	operationInFlight     bool
+	operationDone         chan struct{}
+	finishing             bool
+	adopted               bool
 	envelopeOutcome       envelopeWriteOutcome
 	writeDone             chan struct{}
 
@@ -62,6 +74,53 @@ type persistentPreparation struct {
 	cleanupErr         error
 }
 
+func (p *persistentPreparation) beginOperation(name string) (func() error, error) {
+	p.phaseMu.Lock()
+	if p.finishing || p.adopted {
+		p.phaseMu.Unlock()
+		return nil, fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, p.token)
+	}
+	if p.abandoned {
+		p.phaseMu.Unlock()
+		return nil, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, p.token)
+	}
+	if !p.acquisitionSettled || p.lease == nil {
+		p.phaseMu.Unlock()
+		return nil, fmt.Errorf("%w: state lease acquisition has not completed", ErrLifecycleBusy)
+	}
+	if p.operationInFlight {
+		p.phaseMu.Unlock()
+		return nil, fmt.Errorf("%w: another state preparation operation is active", ErrLifecycleBusy)
+	}
+	lease := p.lease
+	if err := lease.validatePaths(); err != nil {
+		p.phaseMu.Unlock()
+		return nil, fmt.Errorf("%s lease boundary: %w", name, err)
+	}
+	done := make(chan struct{})
+	p.operationInFlight = true
+	p.operationDone = done
+	p.phaseMu.Unlock()
+
+	var once sync.Once
+	var finishErr error
+	return func() error {
+		once.Do(func() {
+			if err := lease.validatePaths(); err != nil {
+				finishErr = fmt.Errorf("%s completion lease boundary: %w", name, err)
+			}
+			p.phaseMu.Lock()
+			if p.operationDone == done {
+				p.operationInFlight = false
+				p.operationDone = nil
+				close(done)
+			}
+			p.phaseMu.Unlock()
+		})
+		return finishErr
+	}, nil
+}
+
 func newPersistentPreparation(token uint64, baseRoot string) *persistentPreparation {
 	return &persistentPreparation{
 		token:    token,
@@ -71,10 +130,12 @@ func newPersistentPreparation(token uint64, baseRoot string) *persistentPreparat
 }
 
 func (p *persistentPreparation) complete(err error) {
-	p.phaseMu.Lock()
-	p.terminalErr = err
-	p.phaseMu.Unlock()
-	p.doneOnce.Do(func() { close(p.done) })
+	p.doneOnce.Do(func() {
+		p.phaseMu.Lock()
+		p.terminalErr = err
+		close(p.done)
+		p.phaseMu.Unlock()
+	})
 }
 
 func (p *persistentPreparation) result() error {
@@ -132,11 +193,15 @@ func BeginPersistentPreparation(token uint64) error {
 		return err
 	}
 	if _, abandoned := runtimes.abandonedTokens[token]; abandoned {
+		// This Begin call consumed the pre-dispatch tombstone. It cannot proceed
+		// to any later phase for the same token after returning this error.
+		delete(runtimes.abandonedTokens, token)
 		runtimes.mu.Unlock()
 		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
 	}
 	if runtimes.persistentPreparation != nil || runtimes.candidate != nil ||
-		runtimes.current != nil || runtimes.draining != nil || runtimes.logout != nil {
+		runtimes.current != nil || runtimes.draining != nil || runtimes.logout != nil ||
+		runtimes.reset != nil {
 		runtimes.mu.Unlock()
 		return fmt.Errorf("%w: another node lifecycle transition is in progress", ErrLifecycleBusy)
 	}
@@ -194,8 +259,14 @@ func MarkCustodyActive(token uint64) error {
 	if preparation.abandoned {
 		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
 	}
+	if preparation.finishing || preparation.adopted {
+		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
+	}
 	if !preparation.acquisitionSettled || preparation.lease == nil {
 		return fmt.Errorf("%w: state lease acquisition has not completed", ErrLifecycleBusy)
+	}
+	if preparation.custodyActive || preparation.custodyCompleted {
+		return fmt.Errorf("%w: state custody was already activated for token %d", ErrLifecycleBusy, token)
 	}
 	preparation.custodyActive = true
 	return nil
@@ -212,6 +283,9 @@ func MarkCustodyWriteAttempted(token uint64) error {
 	defer preparation.phaseMu.Unlock()
 	if preparation.abandoned {
 		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
+	}
+	if preparation.finishing || preparation.adopted {
+		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
 	}
 	if !preparation.custodyActive {
 		return fmt.Errorf("custody is not active for preparation token %d", token)
@@ -235,6 +309,9 @@ func SupplyPreparedDEK(token uint64, raw []byte) error {
 	defer preparation.phaseMu.Unlock()
 	if preparation.abandoned {
 		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
+	}
+	if preparation.finishing || preparation.adopted {
+		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
 	}
 	if !preparation.custodyActive {
 		return fmt.Errorf("custody is not active for preparation token %d", token)
@@ -265,6 +342,10 @@ func runInitialEnvelopeWrite(
 	if preparation.abandoned {
 		preparation.phaseMu.Unlock()
 		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, preparation.token)
+	}
+	if preparation.finishing || preparation.adopted {
+		preparation.phaseMu.Unlock()
+		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, preparation.token)
 	}
 	if !preparation.custodyWriteAttempted || !preparation.dekSupplied {
 		preparation.phaseMu.Unlock()
@@ -316,9 +397,9 @@ func runInitialEnvelopeWrite(
 	return writeErr
 }
 
-// createInitialPreparedEnvelope is intentionally unexported and unwired in
-// R4c. It proves the barrier against R4b's real post-rename callback so R4d can
-// later call the already-reviewed primitive without inventing new ordering.
+// createInitialPreparedEnvelope binds fresh provisioning to the encrypted
+// store's post-rename commit callback so abandonment can preserve or compensate
+// the Keybay/file pair without guessing.
 func createInitialPreparedEnvelope(preparation *persistentPreparation) error {
 	if preparation == nil {
 		return fmt.Errorf("persistent preparation is nil")
@@ -326,6 +407,7 @@ func createInitialPreparedEnvelope(preparation *persistentPreparation) error {
 	path := filepath.Join(preparation.baseRoot, ownedStateSubdirectory, encryptedStateFileName)
 	return runInitialEnvelopeWrite(preparation, func(key *[encryptedStateKeySize]byte, recordCommitted func()) (*encryptedStateStore, error) {
 		options := defaultEncryptedStateStoreOptions()
+		options.validateRootPath = preparation.lease.validatePaths
 		options.recordInitialCommit = recordCommitted
 		return createEncryptedStateStoreWithOptions(path, *key, options)
 	})
@@ -339,7 +421,9 @@ func (p *persistentPreparation) abandonDisposition() (bool, <-chan struct{}, Cus
 		return false, nil, CustodyDispositionNone
 	}
 	var wait <-chan struct{}
-	if p.envelopeOutcome == envelopeWriteInFlight {
+	if p.operationInFlight {
+		wait = p.operationDone
+	} else if p.envelopeOutcome == envelopeWriteInFlight {
 		wait = p.writeDone
 	}
 	return p.custodyActive, wait, p.custodyDispositionLocked()
@@ -373,9 +457,14 @@ func FinishCustody(token uint64, cleanupSucceeded bool) error {
 	preparation.phaseMu.Lock()
 	abandoned := preparation.abandoned
 	custodyActive := preparation.custodyActive
+	operationInFlight := preparation.operationInFlight
+	writeInFlight := preparation.envelopeOutcome == envelopeWriteInFlight
 	preparation.phaseMu.Unlock()
 	if !abandoned || !custodyActive {
 		return fmt.Errorf("%w: token %d does not own abandoned custody", ErrRuntimeStale, token)
+	}
+	if operationInFlight || writeInFlight {
+		return fmt.Errorf("%w: state custody operation is still active for token %d", ErrLifecycleBusy, token)
 	}
 	if !cleanupSucceeded {
 		// Retain the lease/admission, but do not retain key material merely
@@ -396,6 +485,23 @@ func finishPersistentPreparation(preparation *persistentPreparation, primary err
 	if preparation == nil {
 		return primary
 	}
+	preparation.phaseMu.Lock()
+	if preparation.adopted {
+		preparation.phaseMu.Unlock()
+		return errors.Join(primary, fmt.Errorf("%w: preparation token %d was adopted", ErrRuntimeStale, preparation.token))
+	}
+	if preparation.finishing {
+		done := preparation.done
+		preparation.phaseMu.Unlock()
+		<-done
+		return errors.Join(primary, preparation.result())
+	}
+	preparation.finishing = true
+	preparation.phaseMu.Unlock()
+	return finishClaimedPersistentPreparation(preparation, primary)
+}
+
+func finishClaimedPersistentPreparation(preparation *persistentPreparation, primary error) error {
 	cleanupErr := preparation.cleanupResources()
 	err := errors.Join(primary, cleanupErr)
 	if cleanupErr != nil {

@@ -131,6 +131,7 @@ class _SmokeHomeState extends State<SmokeHome> {
         appId: 'dev.tailscale.dart.demo.smoke',
         hostname: config.hostname,
         authKey: config.authKey,
+        ephemeral: true,
         controlUrl: Uri.parse(config.controlUrl),
         logLevel: TailscaleLogLevel.error,
       );
@@ -203,8 +204,8 @@ class _SmokeHomeState extends State<SmokeHome> {
 
   Future<String> _stateDir(String stateSuffix) async {
     try {
-      final docs = await getApplicationDocumentsDirectory();
-      return p.join(docs.path, 'dune_smoke', stateSuffix);
+      final temporary = await getTemporaryDirectory();
+      return p.join(temporary.path, 'dune_smoke', stateSuffix);
     } catch (_) {
       return p.join(
         Directory.systemTemp.path,

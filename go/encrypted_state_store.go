@@ -72,6 +72,7 @@ type encryptedStateStoreOptions struct {
 	random               io.Reader
 	files                encryptedStateStoreFileOps
 	fault                func(encryptedStateWriteStage) error
+	validateRootPath     func() error
 	syncDirectory        func(string) error
 	recordInitialCommit  func()
 	reportDurabilityLoss func(error)
@@ -110,6 +111,7 @@ func defaultEncryptedStateStoreOptions() encryptedStateStoreOptions {
 		limits:              defaultEncryptedStateStoreLimits,
 		random:              rand.Reader,
 		files:               defaultEncryptedStateStoreFileOps(),
+		validateRootPath:    func() error { return nil },
 		syncDirectory:       syncStateDirectory,
 		recordInitialCommit: func() {},
 		reportDurabilityLoss: func(err error) {
@@ -124,7 +126,8 @@ func (o encryptedStateStoreOptions) validate() error {
 		o.limits.maxPlaintextBytes <= 0 {
 		return fmt.Errorf("invalid encrypted StateStore size limits")
 	}
-	if o.random == nil || o.syncDirectory == nil || o.recordInitialCommit == nil || o.reportDurabilityLoss == nil {
+	if o.random == nil || o.validateRootPath == nil || o.syncDirectory == nil ||
+		o.recordInitialCommit == nil || o.reportDurabilityLoss == nil {
 		return fmt.Errorf("invalid encrypted StateStore dependencies")
 	}
 	if o.files.openTemp == nil || o.files.chmod == nil || o.files.stat == nil ||
@@ -148,9 +151,8 @@ type encryptedStateEnvelopeJSON struct {
 	Ciphertext []byte `json:"ciphertext"`
 }
 
-// encryptedStateStore is a whole-map authenticated ipn.StateStore. R4b leaves
-// it deliberately unwired; R4d replaces SQLite only after custody, lease, and
-// lifecycle behavior can switch atomically.
+// encryptedStateStore is the whole-map authenticated ipn.StateStore used by
+// persistent runtimes.
 type encryptedStateStore struct {
 	ipn.EncryptedStateStore
 
@@ -171,7 +173,7 @@ var (
 )
 
 // createEncryptedStateStore creates the authenticated empty envelope required
-// after a fresh DEK is committed. The caller must hold R4c's exclusive state
+// after a fresh DEK is committed. The caller must hold the exclusive state
 // lease; under that precondition this never replaces an existing destination.
 func createEncryptedStateStore(path string, key [encryptedStateKeySize]byte) (*encryptedStateStore, error) {
 	defer wipeBytes(key[:])
@@ -249,7 +251,8 @@ func cleanupFreshEncryptedStateDirectory(
 
 // openEncryptedStateStore opens an existing envelope. A missing file is an
 // explicit error because callers invoke this only after obtaining an existing
-// DEK; R4c/d classify that pair as orphaned rather than silently starting over.
+// DEK; the secure-state matrix classifies that pair as orphaned rather than
+// silently starting over.
 func openEncryptedStateStore(path string, key [encryptedStateKeySize]byte) (*encryptedStateStore, error) {
 	defer wipeBytes(key[:])
 	return openEncryptedStateStoreWithOptions(path, key, defaultEncryptedStateStoreOptions())
@@ -739,6 +742,13 @@ func (s *encryptedStateStore) WriteState(id ipn.StateKey, value []byte) error {
 		s.mu.Unlock()
 		return errEncryptedStateClosed
 	}
+	// Even an otherwise-no-op write is a StateStore lifecycle boundary. Do not
+	// let an unchanged cached value hide that the configured root was replaced
+	// after preparation but before runtime adoption/start.
+	if err := s.validatePersistenceRoot(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	current, present := s.cache[id]
 	if value == nil && !present {
 		s.mu.Unlock()
@@ -806,6 +816,19 @@ func (s *encryptedStateStore) persistEnvelopeLocked(
 	envelope []byte,
 	candidate map[ipn.StateKey][]byte,
 ) (diagnostics []error, resultErr error) {
+	if err := s.validatePersistenceRoot(); err != nil {
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if err := s.validatePersistenceRoot(); err != nil {
+			if committed {
+				diagnostics = append(diagnostics, fmt.Errorf("after encrypted StateStore persistence: %w", err))
+			} else {
+				resultErr = errors.Join(resultErr, err)
+			}
+		}
+	}()
 	if err := s.runFault(encryptedStateBeforeWrite); err != nil {
 		return nil, err
 	}
@@ -865,12 +888,16 @@ func (s *encryptedStateStore) persistEnvelopeLocked(
 	if err := s.runFault(encryptedStateBeforeRename); err != nil {
 		return nil, err
 	}
+	if err := s.validatePersistenceRoot(); err != nil {
+		return nil, err
+	}
 	if err := s.validateDestination(); err != nil {
 		return nil, err
 	}
 	if err := s.options.files.rename(tempPath, s.path); err != nil {
 		return nil, fmt.Errorf("commit encrypted StateStore file: %w", err)
 	}
+	committed = true
 
 	// Rename is the commit point. Publish the new cache immediately; every
 	// subsequent problem is a durability diagnostic, never a returned failure
@@ -892,6 +919,13 @@ func (s *encryptedStateStore) persistEnvelopeLocked(
 		diagnostics = append(diagnostics, fmt.Errorf("sync encrypted StateStore directory: %w", err))
 	}
 	return diagnostics, nil
+}
+
+func (s *encryptedStateStore) validatePersistenceRoot() error {
+	if err := s.options.validateRootPath(); err != nil {
+		return fmt.Errorf("%w: validate persistent state root: %w", errEncryptedStatePathSecurity, err)
+	}
+	return nil
 }
 
 func (s *encryptedStateStore) validateDestination() error {

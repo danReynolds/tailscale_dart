@@ -23,6 +23,7 @@ minimal and machine-driven:
 - no admin auth-key UI
 - no manual node browser
 - no long-lived debugging workflow
+- no persistent node identity or Keybay access
 - no assertions beyond "this Flutter runtime can join and move traffic"
 
 For manual validation, use `packages/demo_flutter`. For reusable validation
@@ -40,8 +41,9 @@ The runner:
 
 1. starts Docker Headscale
 2. creates a reusable Headscale auth key
-3. starts one headless `demo_core` peer
-4. runs this Flutter app on each selected platform target
+3. starts one explicitly ephemeral headless `demo_core` peer
+4. runs this Flutter app as an explicitly ephemeral node on each selected
+   platform target
 5. receives the result over `POST /result`
 6. tears down Headscale and any emulator it launched, unless told to keep them
 
@@ -57,6 +59,13 @@ tool/smoke/run_matrix.sh --targets android --android-avd Resizable_API_33 \
 Android runs in Flutter profile mode by default because the debug APK is much
 larger and slower to install. Use `--android-run-mode debug` only when debugging
 Flutter startup behavior.
+
+Both sides use `ephemeral: true`: their StateStores are in memory, their tsnet
+runtime files live in owner-only temporary scratch directories, and neither
+side reads, writes, or deletes Keybay. The smoke app uses a timestamp-scoped
+temporary `stateDir` only for lifecycle admission/occupancy coordination. This
+matrix validates the private data plane; it is not a persistent-Keybay restart
+receipt.
 
 ## Result Semantics
 

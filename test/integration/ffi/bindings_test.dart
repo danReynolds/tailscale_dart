@@ -36,47 +36,13 @@ void main() {
     );
   });
 
-  tearDownAll(() {
-    clearProcessIntegrationState(configuredStateBaseDir);
+  tearDownAll(() async {
+    await forgetProcessIntegrationState(configuredStateBaseDir);
   });
 
   group('symbol resolution', () {
     test('duneStart is callable', () {
       expect(native.duneStart, isNotNull);
-    });
-  });
-
-  group('duneClassifyState', () {
-    test('reports absent without creating package state', () {
-      clearProcessIntegrationState(configuredStateBaseDir);
-      final resultPtr = native.duneClassifyState();
-      final result = jsonDecode(resultPtr.toDartString());
-      native.duneFree(resultPtr);
-
-      expect(result, {'state': 'absent'});
-      expect(
-        Directory(
-          p.join(configuredStateBaseDir.path, 'tailscale'),
-        ).existsSync(),
-        isFalse,
-      );
-    });
-
-    test('recognizes an exact legacy artifact without opening it', () {
-      clearProcessIntegrationState(configuredStateBaseDir);
-      final ownedDir = Directory(
-        p.join(configuredStateBaseDir.path, 'tailscale'),
-      )..createSync();
-      final artifact = File(p.join(ownedDir.path, 'state.db'))
-        ..writeAsStringSync('opaque');
-      addTearDown(() => clearProcessIntegrationState(configuredStateBaseDir));
-
-      final resultPtr = native.duneClassifyState();
-      final result = jsonDecode(resultPtr.toDartString());
-      native.duneFree(resultPtr);
-
-      expect(result, {'state': 'legacy'});
-      expect(artifact.readAsStringSync(), 'opaque');
     });
   });
 
@@ -118,11 +84,16 @@ void main() {
       final abandon = jsonDecode(abandonPtr.toDartString());
       native.duneFree(abandonPtr);
 
+      final retirePtr = native.duneRetireAbandonedRuntimeToken(525252);
+      final retirement = jsonDecode(retirePtr.toDartString());
+      native.duneFree(retirePtr);
+
       final awaitPtr = native.duneAwaitRuntimeQuiescence(525252);
       final quiescence = jsonDecode(awaitPtr.toDartString());
       native.duneFree(awaitPtr);
 
       expect(abandon, containsPair('token', 525252));
+      expect(retirement, {'ok': true});
       expect(quiescence, {'ok': true});
     });
 
@@ -233,7 +204,7 @@ void main() {
         hostname,
         authKey,
         controlUrl,
-        0,
+        1,
         hostNetworkSnapshot,
       );
       final resultJson = resultPtr.toDartString();

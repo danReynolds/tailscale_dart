@@ -2,19 +2,21 @@
 
 ## Status
 
-**Current implementation reference, not the target architecture.** See the
-[accepted rearchitecture plan](rearchitecture-plan.md),
-[runtime lifecycle ADR](adr-runtime-ownership-and-lifecycle.md), and
-[encrypted-state ADR](adr-encrypted-node-state.md) for the implementation target
-adopted on 2026-08-09.
+**Current implementation reference.** The runtime/fail-safe foundations and R4d
+secure-state cutover are reflected here. See the [accepted rearchitecture
+plan](rearchitecture-plan.md), [runtime lifecycle
+ADR](adr-runtime-ownership-and-lifecycle.md), and [encrypted-state
+ADR](adr-encrypted-node-state.md) for implemented invariants plus the remaining
+target work and release gates.
 
 This documents the current v1 direction after replacing the earlier
 authenticated loopback session design with fd-backed local capabilities.
 
 The implementation is no longer a throwaway spike. HTTP, TCP, and UDP are
 implemented and validated through unit tests, package tests, Flutter demo tests,
-and Headscale E2E. It is still pre-production/beta until the remaining
-hardening work is complete.
+and Headscale E2E. The R4d secure-state implementation has focused Go and Dart
+coverage, but it remains pre-production/beta until the platform Keybay,
+backup-exclusion, sidecar-inventory, and remaining rearchitecture gates pass.
 
 ## Summary
 
@@ -24,6 +26,8 @@ The app becomes its own tailnet node.
 Go owns:
 
 - Tailscale control-plane login and node state
+- the synchronous persistent encrypted StateStore or ephemeral in-memory Store
+- the active runtime's in-memory DEK copy and persistent-state lease
 - WireGuard/magicsock/tailnet routing
 - ACL enforcement
 - peer/node identity from Tailscale
@@ -32,7 +36,8 @@ Go owns:
 Dart owns:
 
 - public package API
-- app-facing lifecycle
+- app-facing lifecycle and supervision
+- lifecycle-scoped Keybay custody of the persistent StateStore DEK
 - byte-stream consumption and production
 - HTTP request handling
 - demo/UI/application code
@@ -40,11 +45,13 @@ Dart owns:
 The core architecture is:
 
 ```text
-Dart app
+Dart app / caller-isolate supervisor
+  |
+  | Keybay custody for one 32-byte DEK (persistent nodes only)
   |
   | control calls over FFI
   v
-Go tsnet runtime
+Go nodeRuntime + encrypted/in-memory StateStore
   |
   | tailnet traffic
   v
@@ -86,6 +93,47 @@ Control operations remain request/response FFI calls through a worker isolate:
 - listener/binding setup and teardown
 
 These are not high-volume data paths.
+
+Persistent preparation is intentionally split across the caller isolate and Go
+rather than making synchronous StateStore callbacks enter Dart. Native code
+acquires the state lease and reports only filesystem layout facts; the caller
+isolate reads or provisions the exact Keybay DEK; native code then authenticates
+or creates the encrypted Store and transfers Store/DEK/lease ownership to the
+runtime. Timeout and worker-exit rescue retain the same token until any
+non-cancellable custody operation and compensation settle.
+
+### State Persistence and Local Reset
+
+Persistent nodes store the complete logical `ipn.StateStore` map as one
+authenticated encrypted envelope at
+`<stateDir>/tailscale/tailscaled.state.enc`. One random 32-byte DEK is stored in
+the dedicated `<appId>.tailscale` Keybay namespace. Go keeps a runtime-scoped
+copy so routine StateStore reads and atomic replacements do not call Dart or
+Keybay. Idle `status()` and idle `logout()` reacquire the lease and authenticate
+the envelope before classifying or reopening it.
+
+There is no migration from the pre-launch SQLite or plaintext FileStore
+layouts. Recognized legacy state and key/file, permission, format, tamper, or
+reset-marker inconsistencies fail closed. `logout()` is remote-first and keeps
+the StateStore container and DEK. `forgetLocalIdentity()` is the separate,
+irreversible local-only reset; it records durable intent, deletes the exact DEK,
+and removes only the package-owned `tailscale/` subtree. It does not remove the
+remote control-plane node.
+
+Encryption applies to logical StateStore data, not the complete subtree.
+Upstream logs, credential-bearing log configuration, and TLS/certificate
+sidecars remain outside that encryption boundary and still need owner-only
+enforcement and backup exclusion.
+
+Ephemeral mode requires an auth key, rejects filesystem-visible persistent
+package state, and never accesses Keybay. It gives tsnet an in-memory StateStore
+and a fresh owner-only temporary runtime directory, removed on normal close.
+
+Persistent custody is supported where Keybay is supported: iOS and macOS;
+Android 12 / API 31+; and Linux desktop with `secret-tool` plus an available,
+unlocked Secret Service. Older Android and headless Linux use explicit
+ephemeral mode; persistent startup fails closed rather than falling back to
+plaintext.
 
 ### TCP
 
@@ -395,6 +443,10 @@ The validated probe surface includes:
 - TCP echo
 - UDP echo
 
+These data-plane receipts do not certify persistent Keybay restart behavior,
+backup exclusion, or the complete plaintext sidecar inventory; those remain R6
+release gates.
+
 ## Current Maturity
 
 This is beta/pre-production.
@@ -403,11 +455,13 @@ It is production-shaped in architecture, but not yet production-hardened.
 
 Known remaining work:
 
-- Linux real-tailnet validation.
+- Real Keybay restart, failure, backup-exclusion, and full sidecar-inventory
+  receipts on each persistent platform.
+- Runtime-owned Serve/Funnel publication convergence and remaining R7 ownership
+  moves.
 - Windows support decision.
 - More HTTP fd server lifecycle/error tests.
 - More stress tests for backpressure and resource limits.
-- Clear docs around unsupported platforms and shutdown semantics.
 - Decide whether a Shelf adapter should be public API or documentation-only.
 - Decide whether WebSocket/hijack support belongs in v1, later, or never.
 

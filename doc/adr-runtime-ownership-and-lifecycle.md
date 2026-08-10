@@ -2,18 +2,23 @@
 
 ## Status
 
-**Accepted for implementation — 2026-08-09.**
+**Accepted; implemented through R4d in current source — 2026-08-10.**
 
-This ADR defines the target lifecycle. It does not describe the current
-process-global implementation on `main`.
+R2/R3 now provide `nodeRuntime`, generation-bound supervision, and fail-safe
+teardown; R4a-R4d add Keybay custody, the encrypted/in-memory StateStores,
+state-lease/reset ownership, and explicit local forget. The R5 publication
+bootstrap and R7 migration of the remaining process-global transport/watcher
+registries are still target behavior. R6/R10 evidence gates also remain.
 
 ## Context
 
-One public Tailscale instance currently fans out across a process-global
+Before R2, one public Tailscale instance fanned out across a process-global
 `*tsnet.Server`, SQLite store, watcher, HTTP transport, publication managers,
-listener registries, and subsystem locks. The node epoch correctly prevents
-slow work from committing into a later lifecycle, but ownership is implicit and
-teardown has to discover resources across the package.
+listener registries, and subsystem locks. The node epoch prevented slow work
+from committing into a later lifecycle, but ownership was implicit and teardown
+had to discover resources across the package. R2-R4d moved the Server, Store,
+DEK, state lease, and ephemeral scratch to `nodeRuntime`; the epoch still guards
+the registries awaiting R7.
 
 That has produced several classes of risk:
 
@@ -21,10 +26,8 @@ That has produced several classes of risk:
 - every new registry must remember to participate in the stop sweep;
 - a Dart timeout abandons a Future but does not cancel the native operation;
 - an unexpected worker-isolate exit is not a fully specified lifecycle event;
-- the current startup error cleanup calls `Server.Close` even when
-  `Server.Start` failed;
-- providing an auth key to a running node currently tears it down and deletes
-  its identity;
+- startup error cleanup called `Server.Close` even when `Server.Start` failed;
+- providing an auth key to a running node tore it down and deleted its identity;
 - Serve and Funnel have separate locks despite mutating the same upstream
   configuration;
 - the first `Server.Up` can clear a Serve mapping installed earlier in the same
@@ -43,7 +46,7 @@ Upstream v1.102.2 gives us important hard boundaries:
 
 ## Decision
 
-Introduce one `nodeRuntime` for one successful `tsnet.Server` lifecycle and a
+R2 introduced one `nodeRuntime` for one successful `tsnet.Server` lifecycle and a
 small process-global `runtimeController` that coordinates candidates, the
 current runtime, generation changes, and close.
 
@@ -75,8 +78,8 @@ type runtimeCandidate struct {
     serverStarted bool // guarded by phaseMu; true only after Start returns nil
     store         ipn.StateStore
     closeStore    func()
-    stateLease    stateLeaseHandle // nil until the encrypted-state slice
-    secrets       secretOwner      // nil until the encrypted-state slice
+    stateLease    stateLeaseHandle // persistent preparation only
+    secrets       secretOwner      // persistent preparation only
 }
 
 type nodeRuntime struct {
@@ -105,18 +108,17 @@ Names and field grouping may change during implementation. The ownership and
 ordering contracts may not.
 
 The pseudocode is the final shape, expressed through storage-neutral ownership
-slots so workstream R2 is independently landable with the current Store treated
-as an opaque interface plus closer. R4 fills the lease/secret slots and replaces
-the Store without first repairing SQLite. R7a moves the existing HTTP cache
-behind the `http` slot; R2 temporarily continues to use and sweep the legacy
-cache.
+slots. R2 first landed with the then-current Store treated as an opaque
+interface plus closer; R4 filled the lease/secret slots and replaced SQLite
+without repairing it first. R7a still needs to move the existing HTTP cache
+behind the `http` slot; the temporary owner-keyed cache/sweep remains.
 
 ## Lifecycle state machine
 
 ```text
 idle
   |
-  | reserve generation (and, after R4c, persistent-state lease)
+  | reserve generation (plus the persistent-state lease in persistent mode)
   v
 preparing ---- validation/key/store error ----> cleanup ----> idle
   |
@@ -170,23 +172,21 @@ or close operations.
 
 ### 2. Acquire persistent state safely
 
-R2 introduces the final `idleStateClassifier` seam without a SQLite query. Its
-temporary policy uses non-opening `lstat`/exact-name recognition: a clean root
-is absent, while any recognized `state.db`/WAL/SHM occupancy is conservative
-legacy persisted state, never evidence of enrollment. R3 uses that seam for
-post-quarantine truth. R4d swaps in the authenticated secure matrix while
-retaining the same seam and legacy-layout recognizer.
+R2 introduced the `idleStateClassifier` seam without a SQLite query. Its
+temporary policy used non-opening `lstat`/exact-name recognition: a clean root
+was absent, while recognized `state.db`/WAL/SHM occupancy was conservative
+legacy persisted state, never evidence of enrollment. R4d now uses the
+authenticated secure matrix while retaining the legacy-layout recognizer.
 
-In the final persistent design, the candidate acquires the external state lease
+In the current persistent design, the candidate acquires the external state lease
 before any state probe or Keybay operation. The caller isolate performs key
 custody; the worker and Go receive only bytes. Detailed ordering is in
 [the encrypted-state ADR](adr-encrypted-node-state.md).
 
-The in-memory StateStore and scratch-directory behavior for ephemeral nodes is
-part of the R4d storage cutover, not R2. R2 preserves today's persistence
-behavior so its ownership refactor is behavior-neutral. In the final design an
-ephemeral node uses an in-memory upstream StateStore and does not acquire or
-inspect a persistent key.
+R4d also replaced the temporary R2 ephemeral behavior. An ephemeral node now
+requires an auth key, takes the base-root lease only for a filesystem occupancy
+check, never acquires or inspects a persistent key, and uses an in-memory
+upstream StateStore plus a fresh locked scratch directory.
 
 ### 3. Construct and start one Server
 
@@ -232,27 +232,27 @@ temporary compatibility bridge. R7a constructs the transport once on the
 runtime and deletes that legacy cache. In both phases, no pooled connection may
 survive a generation change.
 
-When R4 lands, the candidate transfers its DEK into the encrypted Store and
+R4 transfers the candidate's DEK into the encrypted Store and
 wipes its temporary key buffer before commit. `nodeRuntime` does not retain a
 second long-lived DEK copy; the Store is the sole long-lived in-process owner.
 
 ### Process-global upstream environment
 
-The current bridge sets `TS_ENABLE_RAW_DISCO=false` and leaves
-`TS_LOGS_DIR=<stateBaseDir>/tailscale/logs` in the process environment. Both are
-global state outside runtime ownership. R2 centralizes and audits the raw-disco
-compatibility assignment but does not remove or narrow it: R1 never calls
-`Server.Start` and is not evidence for that change. R10 removes it only after a
-v1.102.2 source/unit conformance test proves raw discovery stays opt-in with the
-variable absent and a real Android `Server.Start`/reconnect/stop receipt shows
-no `SIGSYS`.
+The current bridge still sets `TS_ENABLE_RAW_DISCO=false`; R2 centralized and
+audited that compatibility assignment but did not remove or narrow it. R1 never
+calls `Server.Start` and is not evidence for that change. R10 removes it only
+after a v1.102.2 source/unit conformance test proves raw discovery stays opt-in
+with the variable absent and a real Android `Server.Start`/reconnect/stop
+receipt shows no `SIGSYS`.
 
 Upstream still consults `TS_LOGS_DIR` while constructing the LocalBackend's
 sockstat logger and exposes no per-Server field for it. Until that gap is fixed
-upstream, candidate start uses one narrowly scoped package environment guard:
+upstream, current candidate start uses one narrowly scoped package environment
+guard rather than leaving the pre-R2
+`<stateBaseDir>/tailscale/logs` value installed:
 
 1. precreate the runtime-owned log directory at mode `0700`—the persistent
-   Server Dir, or after R4d the ephemeral scratch Server Dir;
+   Server Dir or the R4d ephemeral scratch Server Dir;
 2. capture whether `TS_LOGS_DIR` was absent and its exact prior value;
 3. set it to that runtime directory only around `Server.Start`, serializing all
    package starts through the guard;
@@ -621,27 +621,26 @@ need state held only by the worker. `abandon(token)`:
 
 The supervisor does not immediately spawn a replacement worker. It waits for
 native quarantine/close completion, then permits a deliberate later `up()` to
-create a new worker and runtime. The current `late final` Worker becomes a
-replaceable supervisor-owned instance, and public calls resolve the current
+create a new worker and runtime. R3 replaced the former `late final` Worker with
+a replaceable supervisor-owned instance, and public calls resolve the current
 instance at call time so ports are rebound after recovery.
 
 The supervisor is the sole public event authority. It completes every pending
 worker RPC promptly with a worker-exit error and removes every stale live or
 transitional view (`starting`, `needsLogin`, `needsMachineAuth`, or `running`).
-After native quarantine/close, it runs the `idleStateClassifier`: R3 uses R2's
-non-opening layout policy and R4d replaces it with the secure policy. It then
-emits exactly one structured incident error. If classification failed, that
-same incident includes the non-secret probe code/cause and caches the typed
-failure for subsequent `status()`; it does not emit a second `onError`. On a
-successful classification it publishes `noState` or stopped-with-persisted-state
-as truthful. It emits a `stopped` transition only when a started runtime
-actually became stopped. The dead worker and rescue path never publish events.
+After native quarantine/close, a runtime that had already started can publish
+`stopped`: its Store was authenticated before runtime publication, so rescue
+does not make a second Keybay call. A preparation that never published emits no
+terminal transition. The next explicit idle `status()` takes the lease and runs
+R4d's secure probe, caching/surfacing any typed custody or layout failure there.
+Unexpected exit emits exactly one structured incident error. The dead worker
+and native rescue path never publish events directly.
 
 The observable incident order is: mark token abandoned and block new work;
-fail pending RPCs/remove stale running; await native quarantine/close and idle
-classification; emit the one incident error (including any probe failure); then
-emit `stopped` if and only if a started runtime actually became stopped. A
-replacement worker is bound only after quarantine completes.
+fail pending RPCs/remove stale running; await native quarantine/close and any
+retained custody settlement; emit the one incident error; then emit `stopped`
+if and only if a started runtime actually became stopped. A replacement worker
+is bound only after quarantine completes.
 
 Expected worker termination is tagged in the supervisor with the exact worker
 instance and generation before normal close, but **every** `onExit` still calls
@@ -666,8 +665,8 @@ but cannot be relied upon to make R3 safe.
 
 ### `up()` timeout
 
-Dart `Future.timeout` is not cancellation. The target implementation replaces
-the current abandon-only behavior:
+Dart `Future.timeout` is not cancellation. R3 replaced the former abandon-only
+behavior:
 
 - the supervisor marks that exact generation abandoned;
 - cancellable Go contexts are canceled;
@@ -792,12 +791,12 @@ private paths unnecessarily.
 - Prove worker failure preserves persisted identity and does not invoke remote
   logout.
 - Prove every pending RPC fails, exactly one runtime error is emitted, no stale
-  live/transitional state remains, and the R2 layout policy publishes absent or
-  persisted/error truth after quarantine; rerun the same suite against the R4d
-  secure classifier's `noState`, stopped/persisted, and typed-error outcomes.
-- Force the post-quarantine classifier itself to fail; its code/cause is folded
-  into the single worker incident and cached for `status()`, with no second
-  `onError`.
+  live/transitional state remains, and successful quarantine publishes
+  `stopped` only for a runtime that had already started and authenticated its
+  Store. An unpublished preparation emits no terminal transition.
+- After quarantine, force the next explicit idle secure probe to fail; its typed
+  custody/layout error is surfaced by `status()` without a second asynchronous
+  worker incident.
 - Prove pre-Start and post-Start deaths obey the event order and that a
   generation-tagged expected worker exit emits no incident error. Force exit
   between shutdown-intent tagging and native-close acknowledgement and prove

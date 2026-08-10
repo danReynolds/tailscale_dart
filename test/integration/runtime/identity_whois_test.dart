@@ -139,10 +139,7 @@ void main() {
     });
 
     tearDownAll(() async {
-      try {
-        await Tailscale.instance.down();
-      } catch (_) {}
-      clearProcessIntegrationState(stateDir);
+      await forgetProcessIntegrationState(stateDir);
     });
 
     test('rejects obviously-invalid IPs', () async {

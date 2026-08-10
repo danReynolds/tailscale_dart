@@ -22,10 +22,7 @@ void main() {
   });
 
   tearDownAll(() async {
-    try {
-      await Tailscale.instance.down();
-    } catch (_) {}
-    clearProcessIntegrationState(configuredStateBaseDir);
+    await forgetProcessIntegrationState(configuredStateBaseDir);
   });
 
   group('before up()', () {

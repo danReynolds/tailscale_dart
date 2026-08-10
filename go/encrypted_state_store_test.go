@@ -955,6 +955,66 @@ func TestEncryptedStateStorePostRenameDiagnosticsKeepNewAuthority(t *testing.T) 
 	}
 }
 
+func TestEncryptedStateStoreValidatesRootBeforeAndAfterPersistence(t *testing.T) {
+	path := encryptedStoreTestPath(t)
+	key := encryptedStoreTestKey(31)
+	injected := errors.New("state root was replaced")
+	var validationErr error
+	validationCalls := 0
+	failAfterRename := false
+	var diagnostics []error
+	options := defaultEncryptedStateStoreOptions()
+	options.validateRootPath = func() error {
+		validationCalls++
+		return validationErr
+	}
+	options.fault = func(stage encryptedStateWriteStage) error {
+		if failAfterRename && stage == encryptedStateAfterRename {
+			validationErr = injected
+		}
+		return nil
+	}
+	options.reportDurabilityLoss = func(err error) {
+		diagnostics = append(diagnostics, err)
+	}
+	store, err := createEncryptedStateStoreWithOptions(path, key, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.WriteState("root-check", []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+
+	validationCalls = 0
+	validationErr = injected
+	if err := store.WriteState("root-check", []byte("blocked")); !errors.Is(err, injected) || !errors.Is(err, errEncryptedStatePathSecurity) {
+		t.Fatalf("pre-persistence validation error = %v", err)
+	}
+	if validationCalls != 1 {
+		t.Fatalf("pre-persistence validation calls = %d, want 1", validationCalls)
+	}
+	if got, err := store.ReadState("root-check"); err != nil || string(got) != "old" {
+		t.Fatalf("cache after rejected root = %q, %v; want old", got, err)
+	}
+
+	validationCalls = 0
+	validationErr = nil
+	failAfterRename = true
+	if err := store.WriteState("root-check", []byte("committed")); err != nil {
+		t.Fatalf("post-commit root diagnostic became returned failure: %v", err)
+	}
+	if validationCalls < 3 {
+		t.Fatalf("persistence validation calls = %d, want entry, pre-rename, and completion", validationCalls)
+	}
+	if len(diagnostics) != 1 || !errors.Is(diagnostics[0], injected) || !errors.Is(diagnostics[0], errEncryptedStatePathSecurity) {
+		t.Fatalf("post-persistence diagnostics = %v, want root validation failure", diagnostics)
+	}
+	if got, err := store.ReadState("root-check"); err != nil || string(got) != "committed" {
+		t.Fatalf("cache after committed root diagnostic = %q, %v; want committed", got, err)
+	}
+}
+
 func TestEncryptedStateStoreReportsTempCleanupFailure(t *testing.T) {
 	path := encryptedStoreTestPath(t)
 	key := encryptedStoreTestKey(18)

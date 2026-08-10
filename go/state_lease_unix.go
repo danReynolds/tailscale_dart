@@ -20,17 +20,23 @@ func acquireStateLease(baseRoot string, option ...stateLeaseOption) (*stateLease
 	if strings.TrimSpace(baseRoot) == "" {
 		return nil, fmt.Errorf("persistent state root is empty")
 	}
-	options := stateLeaseOptions{stateLeaseTestHooks: stateLeaseTestHooks{
-		lock: func(fd int) error {
-			return unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
+	options := stateLeaseOptions{
+		stateLeaseTestHooks: stateLeaseTestHooks{
+			lock: func(fd int) error {
+				return unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
+			},
+			unlock: func(fd int) error {
+				return unix.Flock(fd, unix.LOCK_UN)
+			},
+			close: func(file *os.File) error {
+				return file.Close()
+			},
+			closeRoot: func(file *os.File) error {
+				return file.Close()
+			},
 		},
-		unlock: func(fd int) error {
-			return unix.Flock(fd, unix.LOCK_UN)
-		},
-		close: func(file *os.File) error {
-			return file.Close()
-		},
-	}}
+		validateRelease: true,
+	}
 	for _, apply := range option {
 		if apply != nil {
 			apply(&options)
@@ -85,41 +91,51 @@ func acquireStateLease(baseRoot string, option ...stateLeaseOption) (*stateLease
 	if err != nil {
 		return nil, err
 	}
+	abandon := func(file *os.File, locked bool, acquireErr error) error {
+		rootOpen = false
+		return abandonStateLeaseAcquisition(
+			rootID,
+			admission,
+			file,
+			root,
+			options,
+			locked,
+			acquireErr,
+		)
+	}
 
 	fd, err := unix.Openat(int(root.Fd()), stateLeaseFilename, unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
-		finishStateLeaseAdmission(rootID, admission, nil)
-		return nil, fmt.Errorf("open persistent state lease: %w", err)
+		return nil, abandon(nil, false, fmt.Errorf("open persistent state lease: %w", err))
 	}
 	lockFile := os.NewFile(uintptr(fd), filepath.Join(baseRoot, stateLeaseFilename))
 	if lockFile == nil {
 		_ = unix.Close(fd)
-		finishStateLeaseAdmission(rootID, admission, nil)
-		return nil, fmt.Errorf("open persistent state lease: invalid file descriptor")
+		return nil, abandon(nil, false, fmt.Errorf("open persistent state lease: invalid file descriptor"))
 	}
 
 	lockInfo, err := lockFile.Stat()
 	if err != nil {
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, false, fmt.Errorf("stat persistent state lease: %w", err))
+		return nil, abandon(lockFile, false, fmt.Errorf("stat persistent state lease: %w", err))
 	}
 	if !lockInfo.Mode().IsRegular() {
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, false, fmt.Errorf("persistent state lease is not a regular file"))
+		return nil, abandon(lockFile, false, fmt.Errorf("persistent state lease is not a regular file"))
 	}
 	if err := verifyCurrentUserOwns(lockInfo); err != nil {
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, false, fmt.Errorf("verify persistent state lease ownership: %w", err))
+		return nil, abandon(lockFile, false, fmt.Errorf("verify persistent state lease ownership: %w", err))
 	}
 	if err := lockFile.Chmod(0o600); err != nil {
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, false, fmt.Errorf("secure persistent state lease: %w", err))
+		return nil, abandon(lockFile, false, fmt.Errorf("secure persistent state lease: %w", err))
 	}
 	lockInfo, err = lockFile.Stat()
 	if err != nil {
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, false, fmt.Errorf("verify persistent state lease: %w", err))
+		return nil, abandon(lockFile, false, fmt.Errorf("verify persistent state lease: %w", err))
 	}
 	if got := lockInfo.Mode().Perm(); got != 0o600 {
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, false, fmt.Errorf("persistent state lease permissions are %04o, want 0600", got))
+		return nil, abandon(lockFile, false, fmt.Errorf("persistent state lease permissions are %04o, want 0600", got))
 	}
 	if err := verifyStateLeasePath(int(root.Fd()), lockInfo); err != nil {
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, false, err)
+		return nil, abandon(lockFile, false, err)
 	}
 
 	if err := options.lock(int(lockFile.Fd())); err != nil {
@@ -127,10 +143,10 @@ func acquireStateLease(baseRoot string, option ...stateLeaseOption) (*stateLease
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
 			acquireErr = &stateLeaseBusyError{Root: baseRoot}
 		}
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, false, acquireErr)
+		return nil, abandon(lockFile, false, acquireErr)
 	}
 	if err := verifyStateLeasePath(int(root.Fd()), lockInfo); err != nil {
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, true, err)
+		return nil, abandon(lockFile, true, err)
 	}
 	if currentRoot, err := os.Stat(baseRoot); err != nil || !os.SameFile(rootInfo, currentRoot) {
 		if err == nil {
@@ -138,20 +154,53 @@ func acquireStateLease(baseRoot string, option ...stateLeaseOption) (*stateLease
 		} else {
 			err = fmt.Errorf("revalidate persistent state root: %w", err)
 		}
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, true, err)
-	}
-	if err := root.Close(); err != nil {
-		rootOpen = false
-		return nil, abandonStateLeaseAcquisition(rootID, admission, lockFile, options, true, fmt.Errorf("close persistent state root: %w", err))
+		return nil, abandon(lockFile, true, err)
 	}
 	rootOpen = false
 
 	return &stateLease{
 		file:      lockFile,
+		root:      root,
+		rootPath:  baseRoot,
 		rootID:    rootID,
 		admission: admission,
 		options:   options,
 	}, nil
+}
+
+func (lease *stateLease) validatePathsLocked() error {
+	if lease.root == nil || lease.file == nil {
+		return fmt.Errorf("persistent state lease descriptors are unavailable")
+	}
+	rootInfo, err := lease.root.Stat()
+	if err != nil {
+		return fmt.Errorf("stat pinned persistent state root: %w", err)
+	}
+	if !rootInfo.IsDir() {
+		return fmt.Errorf("pinned persistent state root is not a directory")
+	}
+	rootID, err := stateLeaseIdentity(rootInfo)
+	if err != nil {
+		return fmt.Errorf("identify pinned persistent state root: %w", err)
+	}
+	if rootID != lease.rootID {
+		return fmt.Errorf("pinned persistent state root identity changed")
+	}
+	currentRoot, err := os.Stat(lease.rootPath)
+	if err != nil {
+		return fmt.Errorf("%w: revalidate persistent state root: %v", ErrConfigurationMismatch, err)
+	}
+	if !os.SameFile(rootInfo, currentRoot) {
+		return fmt.Errorf("%w: persistent state root was replaced", ErrConfigurationMismatch)
+	}
+	lockInfo, err := lease.file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat pinned persistent state lease: %w", err)
+	}
+	if !lockInfo.Mode().IsRegular() {
+		return fmt.Errorf("pinned persistent state lease is not a regular file")
+	}
+	return verifyStateLeasePath(int(lease.root.Fd()), lockInfo)
 }
 
 func stateLeaseIdentity(info os.FileInfo) (stateLeaseRootID, error) {

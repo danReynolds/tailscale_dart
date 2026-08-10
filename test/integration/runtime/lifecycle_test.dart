@@ -289,8 +289,8 @@ void main() {
     );
   });
 
-  tearDownAll(() {
-    clearProcessIntegrationState(configuredStateBaseDir);
+  tearDownAll(() async {
+    await forgetProcessIntegrationState(configuredStateBaseDir);
   });
 
   group('init validation', () {
@@ -877,10 +877,8 @@ void main() {
 
         expect(
           status.state,
-          NodeState.stopped,
-          reason:
-              'the retained SQLite container is conservatively classified '
-              'as stopped until R4 can authenticate logical state',
+          logoutError == null ? NodeState.noState : NodeState.stopped,
+          reason: 'idle status authenticates the retained encrypted Store',
         );
         expect(
           incidents.where(
@@ -893,22 +891,44 @@ void main() {
         expect(
           states.last,
           logoutError == null ? NodeState.noState : NodeState.stopped,
-          reason:
-              'confirmed noState is an operation receipt; idle status still '
-              'classifies the retained Store as stopped',
+          reason: 'the terminal stream agrees with the authenticated result',
         );
+      },
+    );
+
+    test(
+      'lost idle logout response releases its prepared state lease',
+      () async {
+        await Tailscale.instance.up(
+          hostname: 'idle-logout-response-loss',
+          authKey: 'tskey-fake-key',
+          controlUrl: Uri.parse('http://127.0.0.1:1/'),
+        );
+        await Tailscale.instance.down();
+        await Tailscale.instance
+            .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
+
+        try {
+          await Tailscale.instance.logout();
+        } on TailscaleLogoutException catch (error) {
+          expect(error.code, TailscaleErrorCode.logoutIndeterminate);
+        }
+
+        final status = await Tailscale.instance.status().timeout(
+          const Duration(seconds: 10),
+        );
+        expect(status.state, anyOf(NodeState.stopped, NodeState.noState));
       },
     );
 
     test(
       'absent logout preserves root siblings without creating owned state',
       () async {
+        await Tailscale.instance.forgetLocalIdentity();
         final ownedStateDir = Directory(
           p.join(configuredStateBaseDir.path, 'tailscale'),
         );
-        if (ownedStateDir.existsSync()) {
-          ownedStateDir.deleteSync(recursive: true);
-        }
+        expect(ownedStateDir.existsSync(), isFalse);
 
         final preservedFile = File(
           p.join(configuredStateBaseDir.path, 'keep.txt'),
@@ -922,34 +942,79 @@ void main() {
       },
     );
 
-    test(
-      'lost confirmed logout response for absent state uses its receipt',
-      () async {
-        final ownedStateDir = Directory(
-          p.join(configuredStateBaseDir.path, 'tailscale'),
-        );
-        if (ownedStateDir.existsSync()) {
-          ownedStateDir.deleteSync(recursive: true);
-        }
+    test('repeated absent logout remains a no-op', () async {
+      await Tailscale.instance.forgetLocalIdentity();
+      final ownedStateDir = Directory(
+        p.join(configuredStateBaseDir.path, 'tailscale'),
+      );
+      expect(ownedStateDir.existsSync(), isFalse);
 
-        final states = <NodeState>[];
-        final stateSub = Tailscale.instance.onStateChange.listen(states.add);
-        addTearDown(stateSub.cancel);
+      final states = <NodeState>[];
+      final stateSub = Tailscale.instance.onStateChange.listen(states.add);
+      addTearDown(stateSub.cancel);
 
-        await Tailscale.instance
-            .debugTerminateWorkerAfterNextLifecycleNativeResultForTesting();
-        await expectLater(Tailscale.instance.logout(), completes);
-        expect((await Tailscale.instance.status()).state, NodeState.noState);
-        expect(ownedStateDir.existsSync(), isFalse);
-        expect(
-          states.where((state) => state == NodeState.noState),
-          hasLength(1),
-        );
-      },
-    );
+      await expectLater(Tailscale.instance.logout(), completes);
+      expect((await Tailscale.instance.status()).state, NodeState.noState);
+      expect(ownedStateDir.existsSync(), isFalse);
+      expect(states.where((state) => state == NodeState.noState), hasLength(1));
+    });
 
     test('logout() twice does not throw', () async {
       await expectLater(Tailscale.instance.logout(), completes);
+    });
+  });
+
+  group('forgetLocalIdentity', () {
+    test('failed custody deletion leaves a resumable reset marker', () async {
+      await Tailscale.instance.up(
+        hostname: 'forget-retry',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+      await Tailscale.instance.down();
+      failNextProcessIntegrationCustodyDelete();
+
+      await expectLater(
+        Tailscale.instance.forgetLocalIdentity(),
+        throwsA(
+          isA<TailscaleForgetLocalIdentityException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.localResetIncomplete,
+          ),
+        ),
+      );
+      await expectLater(
+        Tailscale.instance.status(),
+        throwsA(
+          isA<TailscaleStatusException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.localResetIncomplete,
+          ),
+        ),
+      );
+
+      await Tailscale.instance.forgetLocalIdentity();
+      expect((await Tailscale.instance.status()).state, NodeState.noState);
+      expect(
+        Directory(
+          p.join(configuredStateBaseDir.path, 'tailscale'),
+        ).existsSync(),
+        isFalse,
+      );
+    });
+
+    test('active reset stops and removes the exact local identity', () async {
+      await Tailscale.instance.up(
+        hostname: 'forget-active',
+        authKey: 'tskey-fake-key',
+        controlUrl: Uri.parse('http://127.0.0.1:1/'),
+      );
+
+      await Tailscale.instance.forgetLocalIdentity();
+
+      expect((await Tailscale.instance.status()).state, NodeState.noState);
     });
   });
 }

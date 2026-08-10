@@ -80,6 +80,152 @@ void main() {
       expect(coordinator.ownsToken(121), isFalse);
     });
 
+    test(
+      'successful completion wipes and releases the caller session',
+      () async {
+        final events = <String>[];
+        final backend = _FakeBackend()..values[stateStoreDekEntry] = _testKey();
+        final coordinator = _coordinator(events);
+        final session = await coordinator.begin(
+          token: 123,
+          binding: _binding(backend),
+        );
+        final key = (await session.readDek())!;
+
+        await coordinator.complete(123);
+
+        expect(key, everyElement(0));
+        expect(coordinator.ownsToken(123), isFalse);
+        expect(events, <String>['mark-active:123', 'complete:123']);
+      },
+    );
+
+    test('failed completion retains custody for abandonment', () async {
+      final events = <String>[];
+      final backend = _FakeBackend()..values[stateStoreDekEntry] = _testKey();
+      final coordinator = StateCustodyCoordinator(
+        markActive: (token) async => events.add('mark-active:$token'),
+        markWriteAttempted: (_) async {},
+        complete: (token) async {
+          events.add('complete:$token');
+          throw StateError('native completion failed');
+        },
+        finish: (token, {required cleanupSucceeded}) async =>
+            events.add('finish:$token:$cleanupSucceeded'),
+      );
+      final session = await coordinator.begin(
+        token: 124,
+        binding: _binding(backend),
+      );
+      final key = (await session.readDek())!;
+
+      await expectLater(coordinator.complete(124), throwsStateError);
+      expect(coordinator.ownsToken(124), isTrue);
+      expect(key, isNot(everyElement(0)));
+
+      await coordinator.settleAbandonment(
+        token: 124,
+        disposition: StateCustodyDisposition.none,
+      );
+      expect(key, everyElement(0));
+      expect(coordinator.ownsToken(124), isFalse);
+      expect(events, <String>[
+        'mark-active:124',
+        'complete:124',
+        'finish:124:true',
+      ]);
+    });
+
+    test(
+      'abandonment can settle before a raced completion error arrives',
+      () async {
+        final events = <String>[];
+        final completionStarted = Completer<void>();
+        final releaseCompletion = Completer<void>();
+        final backend = _FakeBackend()..values[stateStoreDekEntry] = _testKey();
+        final coordinator = StateCustodyCoordinator(
+          markActive: (token) async => events.add('mark-active:$token'),
+          markWriteAttempted: (_) async {},
+          complete: (token) async {
+            events.add('complete:$token');
+            completionStarted.complete();
+            await releaseCompletion.future;
+            throw TailscaleOperationException(
+              'state custody',
+              'Native abandonment won the custody race.',
+              code: TailscaleErrorCode.startupAbandoned,
+            );
+          },
+          finish: (token, {required cleanupSucceeded}) async =>
+              events.add('finish:$token:$cleanupSucceeded'),
+        );
+        final session = await coordinator.begin(
+          token: 125,
+          binding: _binding(backend),
+        );
+        final key = (await session.readDek())!;
+
+        final completion = coordinator.complete(125);
+        final completionExpectation = expectLater(
+          completion,
+          throwsA(
+            isA<TailscaleOperationException>().having(
+              (error) => error.code,
+              'code',
+              TailscaleErrorCode.startupAbandoned,
+            ),
+          ),
+        );
+        await completionStarted.future;
+
+        await coordinator.settleAbandonment(
+          token: 125,
+          disposition: StateCustodyDisposition.none,
+        );
+        expect(key, everyElement(0));
+        expect(coordinator.ownsToken(125), isFalse);
+
+        releaseCompletion.complete();
+        await completionExpectation;
+        expect(events, <String>[
+          'mark-active:125',
+          'complete:125',
+          'finish:125:true',
+        ]);
+      },
+    );
+
+    test('terminal discard handles a lost completion response', () async {
+      final events = <String>[];
+      final backend = _FakeBackend()..values[stateStoreDekEntry] = _testKey();
+      final coordinator = StateCustodyCoordinator(
+        markActive: (token) async => events.add('mark-active:$token'),
+        markWriteAttempted: (_) async {},
+        complete: (token) async {
+          events.add('complete:$token');
+          throw StateError('native response lost after completion');
+        },
+        finish: (token, {required cleanupSucceeded}) async =>
+            events.add('finish:$token:$cleanupSucceeded'),
+      );
+      final session = await coordinator.begin(
+        token: 126,
+        binding: _binding(backend),
+      );
+      final key = (await session.readDek())!;
+
+      await expectLater(coordinator.complete(126), throwsStateError);
+      expect(coordinator.ownsToken(126), isTrue);
+
+      // The caller invokes this only after quarantine reports custodyHeld=false,
+      // proving native completion committed despite the lost response.
+      await coordinator.discardTerminalSession(126);
+      await coordinator.discardTerminalSession(126);
+      expect(key, everyElement(0));
+      expect(coordinator.ownsToken(126), isFalse);
+      expect(events, <String>['mark-active:126', 'complete:126']);
+    });
+
     test('fresh write requires a confirmed absent read', () async {
       final coordinator = _coordinator(<String>[]);
       final session = await coordinator.begin(
@@ -162,7 +308,16 @@ void main() {
         expect(await session.readDek(), isNull);
 
         final key = _testKey();
-        await expectLater(session.writeFreshDek(key), throwsStateError);
+        await expectLater(
+          session.writeFreshDek(key),
+          throwsA(
+            isA<TailscaleOperationException>().having(
+              (error) => error.code,
+              'code',
+              TailscaleErrorCode.secureStorageUnavailable,
+            ),
+          ),
+        );
         expect(key, everyElement(0));
         expect(backend.values, contains(stateStoreDekEntry));
         await coordinator.settleAbandonment(
@@ -339,6 +494,53 @@ void main() {
 
       expect(backend.deletedKeys, <String>[stateStoreDekEntry]);
       expect(events.where((event) => event == 'finish:141:true'), hasLength(1));
+    });
+
+    test('completed settlement receipts stay bounded under stress', () async {
+      const firstToken = 2000;
+      const settlementCount = 1024;
+      var finishCalls = 0;
+      final coordinator = StateCustodyCoordinator(
+        markActive: (_) async {},
+        markWriteAttempted: (_) async {},
+        complete: (_) async {},
+        finish: (_, {required cleanupSucceeded}) async => finishCalls++,
+      );
+      final binding = _binding(_FakeBackend());
+
+      for (var offset = 0; offset < settlementCount; offset++) {
+        final token = firstToken + offset;
+        await coordinator.begin(token: token, binding: binding);
+        await coordinator.settleAbandonment(
+          token: token,
+          disposition: StateCustodyDisposition.none,
+        );
+      }
+
+      expect(coordinator.retainedSettlementReceiptCount, 256);
+      expect(finishCalls, settlementCount);
+
+      await coordinator.settleAbandonment(
+        token: firstToken + settlementCount - 1,
+        disposition: StateCustodyDisposition.none,
+      );
+      expect(finishCalls, settlementCount);
+
+      await expectLater(
+        coordinator.settleAbandonment(
+          token: firstToken,
+          disposition: StateCustodyDisposition.none,
+        ),
+        throwsA(
+          isA<TailscaleOperationException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.runtimeCleanupFailed,
+          ),
+        ),
+      );
+      expect(finishCalls, settlementCount + 1);
+      expect(coordinator.retainedSettlementReceiptCount, 256);
     });
 
     test('late read is joined and wiped before admission releases', () async {
@@ -522,6 +724,7 @@ StateCustodyCoordinator _coordinator(List<String> events) =>
     StateCustodyCoordinator(
       markActive: (token) async => events.add('mark-active:$token'),
       markWriteAttempted: (token) async => events.add('mark-write:$token'),
+      complete: (token) async => events.add('complete:$token'),
       finish: (token, {required cleanupSucceeded}) async =>
           events.add('finish:$token:$cleanupSucceeded'),
     );

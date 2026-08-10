@@ -29,6 +29,8 @@ import 'dart:io';
 
 import 'package:tailscale/tailscale.dart';
 
+import 'support/test_keybay_backend.dart';
+
 Future<void> main(List<String> args) async {
   // Warmup mode: triggered by the test's setUpAll to populate the package's
   // native-asset cache before the parent process loads the .so. Exit
@@ -46,6 +48,11 @@ Future<void> main(List<String> args) async {
   final advertisedRoutes = _optionalCsvEnv('ADVERTISED_ROUTES');
   final responseBody =
       Platform.environment['RESPONSE_BODY'] ?? 'hello from peer';
+
+  final testKeybayDir = Platform.environment['TAILSCALE_TEST_KEYBAY_DIR'];
+  if (testKeybayDir != null && testKeybayDir.isNotEmpty) {
+    installE2ETestKeybay(testKeybayDir);
+  }
 
   Tailscale.init(stateDir: stateDir, appId: appId);
   final tsnet = Tailscale.instance;

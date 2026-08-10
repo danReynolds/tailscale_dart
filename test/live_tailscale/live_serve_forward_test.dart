@@ -95,7 +95,9 @@ void main() {
       clearProcessIntegrationState(processStateRoot);
       stateDir = processStateRoot.path;
       final authKey = await api!.createAuthKey();
+      final restartAuthKey = await api!.createAuthKey();
       final clientAuthKey = await api!.createAuthKey();
+      final cleanupPathClientAuthKey = await api!.createAuthKey();
       final cleanupClientAuthKey = await api!.createAuthKey();
 
       Tailscale.init(stateDir: stateDir!, appId: processIntegrationAppId);
@@ -166,7 +168,10 @@ void main() {
           stateDir: clientStateDir!,
           appId: 'dev.tailscale.dart.live.serve.client',
           hostname: clientHostname,
-          authKey: clientAuthKey,
+          // Ephemeral clients do not retain identity, and live auth keys are
+          // intentionally single-use. Each subprocess therefore needs a new
+          // key even when the scratch directory and hostname are reused.
+          authKey: cleanupPathClientAuthKey,
           controlUrl: controlUrl,
           url: cleanupUrl,
         );
@@ -186,7 +191,7 @@ void main() {
           NodeState.running,
           () => tsnet!.up(
             hostname: hostname,
-            authKey: authKey,
+            authKey: restartAuthKey,
             ephemeral: true,
             controlUrl: controlUri(),
             timeout: const Duration(seconds: 120),

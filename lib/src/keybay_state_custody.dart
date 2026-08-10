@@ -24,6 +24,60 @@ typedef KeybayStorageFactory = SecretStorage Function({required String appId});
 SecretStorage _createKeybayStorage({required String appId}) =>
     SecretStorage(appId: appId);
 
+KeybayStorageFactory? _debugStorageFactory;
+
+/// Installs an isolate-local Keybay backend factory before package
+/// initialization.
+///
+/// This is a test seam only. Production callers always use Keybay's fixed
+/// platform policy, while native integration tests use an in-memory backend so
+/// headless Linux CI can exercise persistent lifecycle orchestration without
+/// pretending it has a desktop credential service.
+@visibleForTesting
+void debugOverrideKeybayStorageFactory(KeybayStorageFactory? factory) {
+  _debugStorageFactory = factory;
+}
+
+/// Maps Keybay's platform-specific taxonomy to stable package-level outcomes
+/// without exposing backend text as the primary public error message.
+@internal
+TailscaleOperationException mapKeybayStateCustodyError(
+  Object error, {
+  required String action,
+}) {
+  if (error is TailscaleOperationException) return error;
+  if (error is KeystoreLocked) {
+    return TailscaleOperationException(
+      'state custody',
+      'Secure storage is locked; unlock it and retry $action.',
+      code: TailscaleErrorCode.secureStorageLocked,
+      cause: error,
+    );
+  }
+  if (error is StoreBusy) {
+    return TailscaleOperationException(
+      'state custody',
+      'Secure storage is busy; retry $action after the current writer exits.',
+      code: TailscaleErrorCode.secureStorageBusy,
+      cause: error,
+    );
+  }
+  if (error is SecretStoreException || error is ArgumentError) {
+    return TailscaleOperationException(
+      'state custody',
+      'Secure storage is unavailable; $action could not be completed safely.',
+      code: TailscaleErrorCode.secureStorageUnavailable,
+      cause: error,
+    );
+  }
+  return TailscaleOperationException(
+    'state custody',
+    'Secure storage failed unexpectedly while attempting to $action.',
+    code: TailscaleErrorCode.secureStorageUnavailable,
+    cause: error,
+  );
+}
+
 /// The frozen, lazy Keybay binding for Tailscale's encrypted StateStore DEK.
 ///
 /// Constructing this object performs no platform storage work. The Keybay
@@ -33,9 +87,10 @@ SecretStorage _createKeybayStorage({required String appId}) =>
 final class KeybayStateCustodyBinding {
   KeybayStateCustodyBinding({
     required this.hostAppId,
-    KeybayStorageFactory storageFactory = _createKeybayStorage,
+    KeybayStorageFactory? storageFactory,
   }) : keybayNamespace = deriveKeybayAppId(hostAppId),
-       _storageFactory = storageFactory;
+       _storageFactory =
+           storageFactory ?? _debugStorageFactory ?? _createKeybayStorage;
 
   /// Stable identifier supplied by the embedding application.
   final String hostAppId;
@@ -46,9 +101,6 @@ final class KeybayStateCustodyBinding {
   final KeybayStorageFactory _storageFactory;
 
   /// Resolves the production Keybay container on the calling isolate.
-  ///
-  /// R4a intentionally leaves this unwired. R4c calls it once at the custody
-  /// boundary and owns the resulting container for that lifecycle.
   SecretStorage createStorage() => _storageFactory(appId: keybayNamespace);
 }
 
@@ -86,7 +138,9 @@ String deriveKeybayAppId(String hostAppId) {
 @internal
 Uint8List generateStateStoreDek() {
   final random = Random.secure();
-  return Uint8List.fromList(
-    List<int>.generate(stateStoreDekLength, (_) => random.nextInt(256)),
-  );
+  final key = Uint8List(stateStoreDekLength);
+  for (var index = 0; index < key.length; index++) {
+    key[index] = random.nextInt(256);
+  }
+  return key;
 }

@@ -27,23 +27,29 @@ typedef NativeResponseFree = void Function(ffi.Pointer<Utf8> pointer);
 
 /// Caller-isolate owner for non-cancellable Keybay custody operations.
 ///
-/// R4c installs and tests this coordinator but does not call [begin] from
-/// public startup. R4d connects it only after native format classification.
+/// Public persistent operations call [begin] only after native keyless format
+/// classification has acquired the exact state lease.
 @internal
 final class StateCustodyCoordinator {
   StateCustodyCoordinator({
     CustodyTokenCall markActive = markNativeCustodyActive,
     CustodyTokenCall markWriteAttempted = markNativeCustodyWriteAttempted,
+    CustodyTokenCall complete = completeNativePersistentCustody,
     FinishCustodyCall finish = finishNativeCustody,
   }) : _markActive = markActive,
        _markWriteAttempted = markWriteAttempted,
+       _complete = complete,
        _finish = finish;
 
   final CustodyTokenCall _markActive;
   final CustodyTokenCall _markWriteAttempted;
+  final CustodyTokenCall _complete;
   final FinishCustodyCall _finish;
   final Map<int, StateCustodySession> _sessions = <int, StateCustodySession>{};
   final Map<int, Future<void>> _settlementReceipts = <int, Future<void>>{};
+  final Queue<int> _completedSettlementOrder = Queue<int>();
+
+  static const int _maximumCompletedSettlementReceipts = 256;
 
   /// Binds one native preparation token to the package-owned Keybay namespace.
   Future<StateCustodySession> begin({
@@ -84,6 +90,23 @@ final class StateCustodyCoordinator {
     }
   }
 
+  /// Releases a successful lifecycle-scoped session only after native has
+  /// recorded that no abandonment compensation can still be required.
+  Future<void> complete(int token) async {
+    final session = _sessions[token];
+    if (session == null) {
+      throw TailscaleOperationException(
+        'state custody',
+        'State custody session $token is unavailable.',
+        code: TailscaleErrorCode.staleRuntime,
+      );
+    }
+    await session._awaitSettledOperation();
+    await _complete(token);
+    session._wipeLiveBuffers();
+    _sessions.remove(token);
+  }
+
   /// Joins late custody, performs the exact compensation requested by native,
   /// then releases admission. A missing session or failed delete is fail-closed.
   Future<void> settleAbandonment({
@@ -101,7 +124,22 @@ final class StateCustodyCoordinator {
     // Runtime tokens are never reused, so replaying the same Future is safer
     // than a late duplicate poisoning an already-settled generation.
     _settlementReceipts[token] = settlement;
+    settlement.then<void>(
+      (_) => _recordCompletedSettlement(token, settlement),
+      onError: (Object _, StackTrace _) =>
+          _recordCompletedSettlement(token, settlement),
+    );
     return settlement;
+  }
+
+  void _recordCompletedSettlement(int token, Future<void> settlement) {
+    if (!identical(_settlementReceipts[token], settlement)) return;
+    _completedSettlementOrder.addLast(token);
+    while (_completedSettlementOrder.length >
+        _maximumCompletedSettlementReceipts) {
+      final expired = _completedSettlementOrder.removeFirst();
+      _settlementReceipts.remove(expired);
+    }
   }
 
   Future<void> _settleAbandonmentOnce({
@@ -153,8 +191,26 @@ final class StateCustodyCoordinator {
     }
   }
 
+  /// Drops caller-side custody after native quarantine proves it is terminal
+  /// and no longer retains custody for [token].
+  ///
+  /// This is the response-loss counterpart to [complete]: native completion
+  /// may commit even when its response Future fails on the caller isolate.
+  @internal
+  Future<void> discardTerminalSession(int token) async {
+    final session = _sessions[token];
+    if (session == null) return;
+    await session._awaitSettledOperation();
+    if (!identical(_sessions[token], session)) return;
+    session._wipeLiveBuffers();
+    _sessions.remove(token);
+  }
+
   @visibleForTesting
   bool ownsToken(int token) => _sessions.containsKey(token);
+
+  @visibleForTesting
+  int get retainedSettlementReceiptCount => _settlementReceipts.length;
 }
 
 /// One lifecycle-scoped Keybay container and its mutable DEK buffers.
@@ -188,7 +244,17 @@ final class StateCustodySession {
         await markActive(token);
         _nativeCustodyMarked = true;
         if (_abandoning) throw _abandonedError();
-        _storage = binding.createStorage();
+        try {
+          _storage = binding.createStorage();
+        } catch (error, stackTrace) {
+          Error.throwWithStackTrace(
+            mapKeybayStateCustodyError(
+              error,
+              action: 'resolve the Tailscale key container',
+            ),
+            stackTrace,
+          );
+        }
       });
 
   SecretStorage get _requiredStorage {
@@ -216,7 +282,18 @@ final class StateCustodySession {
     }
     _readAttempted = true;
     return _runOperation<Uint8List?>(() async {
-      final received = await _requiredStorage.read(stateStoreDekEntry);
+      late final Uint8List? received;
+      try {
+        received = await _requiredStorage.read(stateStoreDekEntry);
+      } catch (error, stackTrace) {
+        Error.throwWithStackTrace(
+          mapKeybayStateCustodyError(
+            error,
+            action: 'read the Tailscale state key',
+          ),
+          stackTrace,
+        );
+      }
       if (received == null) {
         if (_abandoning) throw _abandonedError();
         _readCompleted = true;
@@ -294,11 +371,21 @@ final class StateCustodySession {
         await _markWriteAttempted(token);
         final owned = Uint8List.fromList(key);
         try {
-          await _requiredStorage.write(
-            stateStoreDekEntry,
-            owned,
-            label: stateStoreDekLabel,
-          );
+          try {
+            await _requiredStorage.write(
+              stateStoreDekEntry,
+              owned,
+              label: stateStoreDekLabel,
+            );
+          } catch (error, stackTrace) {
+            Error.throwWithStackTrace(
+              mapKeybayStateCustodyError(
+                error,
+                action: 'write the Tailscale state key',
+              ),
+              stackTrace,
+            );
+          }
         } finally {
           _wipe(owned);
         }
@@ -375,9 +462,22 @@ final class StateCustodySession {
 
     // If constructor resolution itself failed after native marked custody,
     // retry resolution once for compensation. Failure remains fail-closed.
-    final storage = _storage ?? binding.createStorage();
-    await storage.delete(stateStoreDekEntry);
+    late final SecretStorage storage;
+    try {
+      storage = _storage ?? binding.createStorage();
+      await storage.delete(stateStoreDekEntry);
+    } catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        mapKeybayStateCustodyError(
+          error,
+          action: 'remove the Tailscale state key',
+        ),
+        stackTrace,
+      );
+    }
   }
+
+  Future<void> _awaitSettledOperation() => _custodyTail;
 
   void _wipeLiveBuffers() {
     for (final bytes in _liveBuffers) {
@@ -387,7 +487,7 @@ final class StateCustodySession {
   }
 }
 
-/// Materializes a transferred DEK on the worker isolate, copies it into a
+/// Materializes a transferred DEK on the caller isolate, copies it into a
 /// bounded native allocation, and wipes both mutable buffers in `finally`.
 @internal
 void supplyTransferredDekToNative({

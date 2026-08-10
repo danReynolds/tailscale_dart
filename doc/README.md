@@ -8,9 +8,9 @@ the checked-in code until their workstream lands.
 
 | Document | Status | Purpose |
 | --- | --- | --- |
-| [Rearchitecture plan](rearchitecture-plan.md) | Accepted target | North Star, decisions, live PR disposition, implementation order, and release gates. |
-| [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | Accepted target | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
-| [Encrypted node state ADR](adr-encrypted-node-state.md) | Accepted target | Direct Keybay custody binding, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
+| [Rearchitecture plan](rearchitecture-plan.md) | In progress; R4d code present, release gates pending | North Star, decisions, live PR disposition, implementation order, and release gates. |
+| [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | Implemented through R4d; R5/R7 pending | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
+| [Encrypted node state ADR](adr-encrypted-node-state.md) | Implemented through R4d; R6 evidence pending | Direct Keybay custody binding, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
 | [Current architecture and API feedback](current-architecture-and-api-feedback.md) | Current implementation | Existing Go/Dart/fd ownership and public API shape. |
 | [Concurrency model](concurrency.md) | Current implementation | Existing epoch, registries, lock order, and teardown commit protocol. |
 | [API status](api-status.md) | Current public surface | Namespace-by-namespace callable API and platform qualifications. |
@@ -23,7 +23,8 @@ When documents disagree:
 1. Checked-in source and executable tests describe current behavior.
 2. `api-status.md`, `current-architecture-and-api-feedback.md`, and
    `concurrency.md` should describe that current behavior.
-3. Accepted ADRs define decisions for code not yet merged.
+3. Accepted ADRs define both implemented invariants and decisions for later
+   work; use each ADR's status section to distinguish them.
 4. `rearchitecture-plan.md` defines sequencing and acceptance gates.
 5. Historical RFCs and readiness notes explain earlier decisions but do not
    override a newer accepted ADR.
@@ -52,17 +53,17 @@ Every rearchitecture PR should:
 
 ## Security wording
 
-Until the encrypted-state workstream lands, the current release stores node
-StateStore data in SQLite, creates its paths with owner-only modes, and attempts
-to tighten existing modes best-effort. It relies on the application sandbox,
-permissions, and backup exclusion and does not yet fail closed when chmod
-verification is unavailable. The accepted target replaces that database with
-authenticated whole-map encryption, an externally custodied key, and
-fail-closed permission verification.
+Persistent nodes now store the complete logical StateStore map in one
+authenticated encrypted Go envelope. One random 32-byte DEK is held by Keybay,
+and storage/custody inconsistencies fail closed. Pre-launch SQLite and plaintext
+FileStore layouts are recognized but not migrated; callers must explicitly run
+`forgetLocalIdentity()` to discard them. Ephemeral nodes use an in-memory
+StateStore and temporary scratch directory and never access Keybay.
 
-Even after that work lands, documentation must not say that the entire tsnet
-directory is encrypted: on non-Kubernetes paths, upstream ACME/TLS private-key
-sidecars, a credential-bearing log config, and sensitive logs can bypass
-StateStore. Current direct `ListenTLS`/`ListenFunnel` are unsupported on mobile;
-target ServeConfig Funnel remains unqualified until real-device and sidecar
-receipts pass, while `tls.bind` requires an alternate certificate path.
+Documentation must not say that the entire package or tsnet subtree is
+encrypted: on non-Kubernetes paths, upstream ACME/TLS private-key sidecars, a
+credential-bearing log config, and sensitive logs can bypass StateStore. The
+whole state root still needs owner-only permissions and backup exclusion.
+Current direct `ListenTLS`/`ListenFunnel` are unsupported on mobile; target
+ServeConfig Funnel remains unqualified until real-device and sidecar receipts
+pass, while `tls.bind` requires an alternate certificate path.

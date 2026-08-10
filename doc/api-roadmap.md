@@ -4,13 +4,15 @@ The launch-critical architecture work is tracked in the
 [accepted rearchitecture plan](rearchitecture-plan.md). Its runtime ownership,
 auth conformance, encrypted StateStore, fail-safe teardown, publication
 convergence, and platform-proof work takes priority over new feature breadth.
-The plan describes the target; this roadmap continues to describe public API
-priorities.
+The plan now records both R4d code that is present and the remaining target;
+this roadmap continues to describe public API priorities.
 
 This package is consumer-first rather than full Tailscale CLI parity. The
 current public spine is already useful for embedded Dart and Flutter apps:
 
 - node lifecycle, auth, status, inventory, and pushed state streams
+- Keybay-backed encrypted persistence, explicit local forget, and Keybay-free
+  ephemeral nodes
 - outbound HTTP through `http.client`
 - inbound HTTP with `http.bind`
 - raw TCP, UDP, and TLS-terminated listeners
@@ -19,13 +21,16 @@ current public spine is already useful for embedded Dart and Flutter apps:
 
 Windows remains out of scope for this release. The POSIX data plane depends on
 fd capabilities plus kqueue/epoll; Windows needs a separate backend decision.
+Persistent support also follows Keybay's platform boundary: Android API 31+ and
+Linux desktop with `secret-tool` plus an available, unlocked Secret Service.
+Older Android and headless Linux use explicit ephemeral mode.
 
 ## Remaining feature priorities
 
 | Priority | Area | Why it matters | Current stance |
 | --- | --- | --- | --- |
-| P0 | Runtime and lifecycle conformance | One `nodeRuntime`, non-destructive enrollment, and automatic fail-safe teardown are the ownership foundation for every public namespace. | Accepted design; implement R2 and R3, then the R4 secure-state cutover, before adding lifecycle-bound features. |
-| P0 | Encrypted node state | Persistent node identity must resist state-directory/backup copying without rebuilding platform custody already provided by Keybay. | Accepted whole-map encrypted StateStore with Keybay directly integrated in core as the required production custody path, package-internal fake-backend tests, and no SQLite migration. |
+| P0 | Runtime and lifecycle conformance | One `nodeRuntime`, non-destructive enrollment, and automatic fail-safe teardown are the ownership foundation for every public namespace. | R2/R3 foundations and the R4 integration are present in current source. Continue lifecycle regression hardening, R7 ownership moves, and the R10 integrated gate before declaring the rearchitecture complete. |
+| P0 | Encrypted node state | Persistent node identity must resist state-directory/backup copying without rebuilding platform custody already provided by Keybay. | R4d is implemented: one whole-map encrypted Go StateStore, direct Keybay custody, no legacy migration, explicit local forget, and in-memory ephemeral mode. R6 real-platform custody, backup, crash, permission, and full sidecar-inventory receipts remain release gates. |
 | P0 | Serve/Funnel and mobile truth | Serve and Funnel share upstream state, while default tsnet certificate fetching is disabled on iOS/Android. | Repair #89 on #90 with one first-Up/config authority. Keep current direct ListenTLS/ListenFunnel unsupported; keep `tls.bind` blocked on an alternate cert path and ServeConfig Funnel unqualified until separate device/sidecar receipts pass. |
 | P0 | Publishing readiness | Users need accurate README, changelog, platform metadata, package contents, and repeatable validation commands before public release. | Historical `0.3.x` gate completed; R10 in the rearchitecture plan is the next launch gate. |
 | P1 | Windows backend decision | Windows is the only major platform gap. Supporting it likely requires either a Windows-native handle/reactor backend or a separate fallback carrier. | Deferred intentionally; do not expose as supported until designed. |

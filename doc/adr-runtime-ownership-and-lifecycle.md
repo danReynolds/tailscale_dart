@@ -116,6 +116,21 @@ interface plus closer; R4 filled the lease/secret slots and replaced SQLite
 without repairing it first. R7a still needs to move the existing HTTP cache
 behind the `http` slot; the temporary owner-keyed cache/sweep remains.
 
+Implemented mapping (current source, `go/node_runtime.go`): there is no
+distinct `runtimeCandidate` type. The controller's `candidate` slot holds a
+not-yet-published `*nodeRuntime`, and the sketch's candidate-local
+`phaseMu`/`candidatePhase`/`startDone` synchronization is realized as an
+`abandoned` bit guarded by the controller lock plus token-qualified receipts:
+rescue only marks and cancels a candidate whose `Start` may still be in
+flight, and the startup owner re-checks abandonment after each fallible step
+and again at atomic commit, so `Close` is never concurrent with `Start`. The
+`phaseMu`/`writeDone` phase-barrier machinery lives on R4c's
+`persistentPreparation` (`go/state_preparation.go`), whose prepared Store and
+lease the persistent start path atomically adopts into the candidate. The
+controller additionally tracks draining/logout/reset/preparation slots, and
+the process `nodeEpoch` atomic is the generation. The ownership and ordering
+contracts stated here are unchanged by this mapping.
+
 ## Lifecycle state machine
 
 ```text
@@ -197,9 +212,9 @@ Populate all immutable Server fields before its first method call. Invoke
 `Server.Start` without a package lock held.
 
 The startup owner is the only goroutine allowed to close candidate resources
-until `Start` returns. Candidate phase, abandonment, and `serverStarted` are
-protected by `phaseMu`; `startDone` closes exactly once after the Start result is
-recorded. Rescue locks only long enough to mark abandonment/cancel context. If
+until `Start` returns. Abandonment is marked under the controller lock and the
+Start outcome is recorded exactly once — the sketch's `phaseMu`/`startDone`.
+Rescue locks only long enough to mark abandonment/cancel context. If
 Start is still in flight it never reads an unsynchronized result or calls
 `Close`; the startup owner observes abandonment after recording the result and
 performs the ordered cleanup. If Start already returned, cleanup is scheduled
@@ -606,14 +621,17 @@ before accepting lifecycle work.
 
 ### Unexpected worker exit
 
-Before dispatching preparation to the worker, the supervisor creates and
-retains a unique opaque request-generation token. The worker calls
-`beginPreparation(token, stateRoot, mode)`, and native code binds the candidate
-and any lease to that already-known token before blocking work. This guarantees
-that worker death between native acquisition and response delivery cannot
-strand a reservation that rescue cannot name. The worker's
-`startPrepared(token, config, keyBytes)` and every response carry it. Late
-responses for an abandoned token are ignored.
+Before dispatching preparation, the supervisor creates and retains a unique
+opaque request-generation token. The caller isolate drives persistent
+preparation through short-lived helper isolates against token-bound native
+state: `beginPersistentPreparation(token)` binds the lease for the
+already-configured root to that already-known token before blocking work, and
+the DEK is staged by a direct caller-isolate `supplyPreparedDEK(token, ...)`
+call. The long-lived worker performs only the token-qualified final start that
+adopts the prepared state. This guarantees that worker or helper death between
+native acquisition and response delivery cannot strand a reservation that
+rescue cannot name. Every response carries the token. Late responses for an
+abandoned token are ignored.
 
 On unexpected exit, the supervisor invokes a small rescue FFI entry point from
 a live helper isolate so teardown cannot block the UI isolate. Rescue does not
@@ -715,8 +733,9 @@ must establish the no-late-commit invariant before returning.
 - State lease acquisition and Keybay operations occur with no controller or
   registry lock held.
 - Callbacks and close functions run after the owning registry lock is released.
-- `runtimeCandidate.phaseMu` is a leaf lock. No caller waits on `startDone` or
-  calls Server/Store cleanup while holding it.
+- `persistentPreparation.phaseMu` is a leaf lock. No caller waits on its
+  operation/write-outcome barriers or calls Server/Store cleanup while holding
+  it.
 
 The existing detailed lock graph in [`concurrency.md`](concurrency.md) remains
 the current-state reference. Each registry migration updates it; the final

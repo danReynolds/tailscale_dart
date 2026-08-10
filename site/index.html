@@ -278,7 +278,9 @@ print(res.statusCode);</code></pre>
             local HTTP server the app already owns. The
             <a href="https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md">accepted target plan</a>
             also specifies Keybay-custodied encrypted node state; that secure
-            storage cutover is not yet present in the current release.
+            storage cutover is in the current source, with upstream log/TLS
+            sidecars outside the encryption boundary and mobile platform and
+            backup-exclusion receipts still pending.
           </p>
         </div>
         <div class="architecture-grid">

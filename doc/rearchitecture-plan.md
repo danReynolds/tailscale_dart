@@ -630,6 +630,16 @@ For each resource family:
 Do not introduce a generic registry framework unless at least three migrated
 families demonstrate the same useful abstraction.
 
+Two process-globals are accounted for as sanctioned permanent bridge
+infrastructure rather than R7 migration targets. The fd-reactor registry
+(`go/reactor.go`) maps reactor ids to their kqueue/epoll pollers for the
+Dart-owned reactor isolates; it is part of the retained POSIX fd capability
+bridge and holds no identity-bound state. The Android host-network snapshot
+cache (`go/netmon_snapshot.go`) backs upstream
+`netmon.RegisterInterfaceGetter`, a register-once process-global hook, so the
+latest host-supplied interface snapshot must stay readable across runtime
+generations.
+
 Identity-bound Dart capabilities participate in the same gate. R5 already makes
 every `TailscalePublishedService` token/epoch-conditional and runtime-owned.
 R5 also gives each returned HTTP client a runtime token and closed bit, so an

@@ -724,7 +724,7 @@ func (s *encryptedStateStore) ReadState(id ipn.StateKey) ([]byte, error) {
 	if !ok {
 		return nil, ipn.ErrStateNotExist
 	}
-	return cloneStateBytes(value), nil
+	return bytes.Clone(value), nil
 }
 
 // WriteState implements ipn.StateStore. A nil write deletes; a non-nil empty
@@ -764,7 +764,7 @@ func (s *encryptedStateStore) WriteState(id ipn.StateKey, value []byte) error {
 		wipeBytes(candidate[id])
 		delete(candidate, id)
 	} else {
-		candidate[id] = cloneStateBytes(value)
+		candidate[id] = bytes.Clone(value)
 	}
 	diagnostics, err := s.commitCandidateLocked(candidate)
 	if err != nil {
@@ -985,19 +985,10 @@ func syncStateDirectory(path string) error {
 	return dir.Close()
 }
 
-func cloneStateBytes(value []byte) []byte {
-	if value == nil {
-		return nil
-	}
-	cloned := make([]byte, len(value))
-	copy(cloned, value)
-	return cloned
-}
-
 func cloneStateMap(state map[ipn.StateKey][]byte) map[ipn.StateKey][]byte {
 	cloned := make(map[ipn.StateKey][]byte, len(state))
 	for key, value := range state {
-		cloned[key] = cloneStateBytes(value)
+		cloned[key] = bytes.Clone(value)
 	}
 	return cloned
 }

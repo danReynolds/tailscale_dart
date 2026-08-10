@@ -49,11 +49,8 @@ func InspectPersistentPreparation(token uint64) (layout PersistentStateLayout, r
 	}
 	preparation.phaseMu.Lock()
 	defer preparation.phaseMu.Unlock()
-	if preparation.abandoned {
-		return "", fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
-	}
-	if preparation.finishing || preparation.adopted {
-		return "", fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
+	if err := preparation.requireLiveLocked(); err != nil {
+		return "", err
 	}
 	if preparation.layoutInspected && preparation.layout != layout {
 		return "", fmt.Errorf("%w: persistent layout changed during preparation", ErrUnexpectedStateResidue)
@@ -73,11 +70,8 @@ func ResolvePersistentCustody(token uint64, dekPresent bool) (PersistentPreparat
 	}
 	preparation.phaseMu.Lock()
 	defer preparation.phaseMu.Unlock()
-	if preparation.abandoned {
-		return "", fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
-	}
-	if preparation.finishing || preparation.adopted {
-		return "", fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
+	if err := preparation.requireLiveLocked(); err != nil {
+		return "", err
 	}
 	if !preparation.custodyActive || preparation.custodyCompleted {
 		return "", fmt.Errorf("state custody is not active for preparation token %d", token)
@@ -220,11 +214,8 @@ func CompletePersistentCustody(token uint64) error {
 	}
 	preparation.phaseMu.Lock()
 	defer preparation.phaseMu.Unlock()
-	if preparation.abandoned {
-		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
-	}
-	if preparation.finishing || preparation.adopted {
-		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
+	if err := preparation.requireLiveLocked(); err != nil {
+		return err
 	}
 	if preparation.operationInFlight {
 		return fmt.Errorf("%w: state preparation operation is still active", ErrLifecycleBusy)
@@ -302,13 +293,9 @@ func (c *runtimeController) adoptPersistentPreparation(token uint64, config runt
 		)
 	}
 	preparation.phaseMu.Lock()
-	if preparation.abandoned {
+	if err := preparation.requireLiveLocked(); err != nil {
 		preparation.phaseMu.Unlock()
-		return nil, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
-	}
-	if preparation.finishing || preparation.adopted {
-		preparation.phaseMu.Unlock()
-		return nil, fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
+		return nil, err
 	}
 	if preparation.operationInFlight || preparation.custodyActive || !preparation.custodyCompleted {
 		preparation.phaseMu.Unlock()

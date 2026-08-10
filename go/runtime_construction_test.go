@@ -1,6 +1,7 @@
 package tailscale
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -31,7 +32,7 @@ func (s *recordingStateStore) ReadState(key ipn.StateKey) ([]byte, error) {
 	if !ok {
 		return nil, ipn.ErrStateNotExist
 	}
-	return cloneStateBytes(value), nil
+	return bytes.Clone(value), nil
 }
 
 func (s *recordingStateStore) WriteState(key ipn.StateKey, value []byte) error {
@@ -44,7 +45,7 @@ func (s *recordingStateStore) WriteState(key ipn.StateKey, value []byte) error {
 	if s.values == nil {
 		s.values = make(map[ipn.StateKey][]byte)
 	}
-	s.values[key] = cloneStateBytes(value)
+	s.values[key] = bytes.Clone(value)
 	return nil
 }
 
@@ -290,7 +291,7 @@ func TestRuntimeConstruction_AbandonedStartCannotCommitLateSuccess(t *testing.T)
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, _, err := startRuntimeWithDependenciesForToken(
+		_, _, err := startRuntimeWithDependenciesForTokenAndDeadline(
 			token,
 			"node",
 			"",
@@ -299,6 +300,7 @@ func TestRuntimeConstruction_AbandonedStartCannotCommitLateSuccess(t *testing.T)
 			false,
 			"",
 			deps,
+			time.Time{},
 		)
 		startDone <- err
 	}()
@@ -367,7 +369,7 @@ func TestRuntimeConstruction_AbandonedStartFailureNeverClosesServer(t *testing.T
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, _, err := startRuntimeWithDependenciesForToken(
+		_, _, err := startRuntimeWithDependenciesForTokenAndDeadline(
 			token,
 			"node",
 			"",
@@ -376,6 +378,7 @@ func TestRuntimeConstruction_AbandonedStartFailureNeverClosesServer(t *testing.T
 			false,
 			"",
 			deps,
+			time.Time{},
 		)
 		startDone <- err
 	}()
@@ -424,7 +427,7 @@ func TestRuntimeConstruction_QuiescenceReportsLateCloseFailure(t *testing.T) {
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, _, err := startRuntimeWithDependenciesForToken(
+		_, _, err := startRuntimeWithDependenciesForTokenAndDeadline(
 			token,
 			"node",
 			"",
@@ -433,6 +436,7 @@ func TestRuntimeConstruction_QuiescenceReportsLateCloseFailure(t *testing.T) {
 			false,
 			"",
 			deps,
+			time.Time{},
 		)
 		startDone <- err
 	}()

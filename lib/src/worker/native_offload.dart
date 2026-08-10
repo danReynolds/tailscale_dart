@@ -148,125 +148,94 @@ RuntimeQuarantineResult _execRuntimeQuarantine(int token) {
   );
 }
 
-Future<void> beginNativePersistentPreparation(int token) => Isolate.run(() {
-  _callNativeJson(
-    () => native.duneBeginPersistentPreparation(token),
-    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-        TailscaleOperationException(
-          'state preparation',
-          message,
-          code: code,
-          statusCode: statusCode,
-        ),
-  );
-});
+/// Shared skeleton for the persistent-lifecycle natives.
+///
+/// Decodes [invoke]'s JSON envelope and maps a native error payload onto a
+/// [TailscaleOperationException] carrying [operation]; [parse] projects the
+/// successful result map and is omitted by the void wrappers. With [offload]
+/// (the default) the call runs on a short-lived helper isolate because the
+/// native side can block on I/O or another owner's settlement. The custody
+/// flag flips pass `offload: false` and run via direct FFI on the caller
+/// isolate: those natives only take a mutex and flip admission flags — never
+/// block, no I/O — matching [supplyTransferredDekToNative], which already
+/// calls into the same phase of the same sequence directly.
+Future<T> _lifecycleNative<T>(
+  String operation,
+  ffi.Pointer<Utf8> Function() invoke, {
+  bool offload = true,
+  T Function(Map<String, dynamic> result)? parse,
+}) {
+  T run() {
+    final result = _callNativeJson(
+      invoke,
+      onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+          TailscaleOperationException(
+            operation,
+            message,
+            code: code,
+            statusCode: statusCode,
+          ),
+    );
+    final project = parse;
+    // Void wrappers ignore the decoded envelope; `null as T` reifies cleanly
+    // because a void type argument admits any value.
+    if (project == null) return null as T;
+    return project(result as Map<String, dynamic>);
+  }
 
-Future<String> inspectNativePersistentPreparation(int token) => Isolate.run(() {
-  final result =
-      _callNativeJson(
-            () => native.duneInspectPersistentPreparation(token),
-            onError:
-                (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-                    TailscaleOperationException(
-                      'state preparation',
-                      message,
-                      code: code,
-                      statusCode: statusCode,
-                    ),
-          )
-          as Map<String, dynamic>;
-  return result['layout'] as String? ?? '';
-});
+  return offload ? Isolate.run(run) : Future<T>.sync(run);
+}
 
-Future<void> markNativeCustodyActive(int token) => Isolate.run(() {
-  _callNativeJson(
-    () => native.duneMarkCustodyActive(token),
-    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-        TailscaleOperationException(
-          'state custody',
-          message,
-          code: code,
-          statusCode: statusCode,
-        ),
-  );
-});
+Future<void> beginNativePersistentPreparation(int token) => _lifecycleNative(
+  'state preparation',
+  () => native.duneBeginPersistentPreparation(token),
+);
 
-Future<void> markNativeCustodyWriteAttempted(int token) => Isolate.run(() {
-  _callNativeJson(
-    () => native.duneMarkCustodyWriteAttempted(token),
-    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-        TailscaleOperationException(
-          'state custody',
-          message,
-          code: code,
-          statusCode: statusCode,
-        ),
-  );
-});
+Future<String> inspectNativePersistentPreparation(int token) =>
+    _lifecycleNative(
+      'state preparation',
+      () => native.duneInspectPersistentPreparation(token),
+      parse: (result) => result['layout'] as String? ?? '',
+    );
+
+Future<void> markNativeCustodyActive(int token) => _lifecycleNative(
+  'state custody',
+  () => native.duneMarkCustodyActive(token),
+  offload: false,
+);
+
+Future<void> markNativeCustodyWriteAttempted(int token) => _lifecycleNative(
+  'state custody',
+  () => native.duneMarkCustodyWriteAttempted(token),
+  offload: false,
+);
 
 Future<String> resolveNativePersistentCustody(
   int token, {
   required bool dekPresent,
-}) => Isolate.run(() {
-  final result =
-      _callNativeJson(
-            () =>
-                native.duneResolvePersistentCustody(token, dekPresent ? 1 : 0),
-            onError:
-                (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-                    TailscaleOperationException(
-                      'state custody',
-                      message,
-                      code: code,
-                      statusCode: statusCode,
-                    ),
-          )
-          as Map<String, dynamic>;
-  return result['action'] as String? ?? '';
-});
+}) => _lifecycleNative(
+  'state custody',
+  () => native.duneResolvePersistentCustody(token, dekPresent ? 1 : 0),
+  offload: false,
+  parse: (result) => result['action'] as String? ?? '',
+);
 
-Future<bool> prepareNativePersistentState(int token) => Isolate.run(() {
-  final result =
-      _callNativeJson(
-            () => native.dunePreparePersistentState(token),
-            onError:
-                (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-                    TailscaleOperationException(
-                      'state preparation',
-                      message,
-                      code: code,
-                      statusCode: statusCode,
-                    ),
-          )
-          as Map<String, dynamic>;
-  return result['empty'] == true;
-});
+Future<bool> prepareNativePersistentState(int token) => _lifecycleNative(
+  'state preparation',
+  () => native.dunePreparePersistentState(token),
+  parse: (result) => result['empty'] == true,
+);
 
-Future<void> completeNativePersistentCustody(int token) => Isolate.run(() {
-  _callNativeJson(
-    () => native.duneCompletePersistentCustody(token),
-    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-        TailscaleOperationException(
-          'state custody',
-          message,
-          code: code,
-          statusCode: statusCode,
-        ),
-  );
-});
+Future<void> completeNativePersistentCustody(int token) => _lifecycleNative(
+  'state custody',
+  () => native.duneCompletePersistentCustody(token),
+  offload: false,
+);
 
-Future<void> finishNativePreparedPersistentState(int token) => Isolate.run(() {
-  _callNativeJson(
-    () => native.duneFinishPreparedPersistentState(token),
-    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-        TailscaleOperationException(
-          'state preparation',
-          message,
-          code: code,
-          statusCode: statusCode,
-        ),
-  );
-});
+Future<void> finishNativePreparedPersistentState(int token) => _lifecycleNative(
+  'state preparation',
+  () => native.duneFinishPreparedPersistentState(token),
+);
 
 /// Receipt from the pre-Keybay half of an explicit local reset. [stopped]
 /// remains available even when [error] is non-null so Dart can retire the
@@ -306,66 +275,26 @@ Future<NativeLocalResetBeginResult> beginNativeLocalReset(int token) =>
 Future<void> finishNativeLocalReset(
   int token, {
   required bool custodyDeletionSucceeded,
-}) => Isolate.run(() {
-  _callNativeJson(
-    () => native.duneFinishLocalReset(token, custodyDeletionSucceeded ? 1 : 0),
-    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-        TailscaleOperationException(
-          'forget local identity',
-          message,
-          code: code,
-          statusCode: statusCode,
-        ),
-  );
-});
+}) => _lifecycleNative(
+  'forget local identity',
+  () => native.duneFinishLocalReset(token, custodyDeletionSucceeded ? 1 : 0),
+);
 
 Future<void> finishNativeCustody(int token, {required bool cleanupSucceeded}) =>
-    Isolate.run(() {
-      _callNativeJson(
-        () => native.duneFinishCustody(token, cleanupSucceeded ? 1 : 0),
-        onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-            TailscaleOperationException(
-              'state custody',
-              message,
-              code: code,
-              statusCode: statusCode,
-            ),
-      );
-    });
+    _lifecycleNative(
+      'state custody',
+      () => native.duneFinishCustody(token, cleanupSucceeded ? 1 : 0),
+    );
 
-Future<void> awaitNativeRuntimeQuiescence(int token) => Isolate.run(() {
-  _callNativeJson(
-    () => native.duneAwaitRuntimeQuiescence(token),
-    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-        TailscaleOperationException(
-          'runtime quarantine',
-          message,
-          code: code,
-          statusCode: statusCode,
-        ),
-  );
-});
+Future<void> awaitNativeRuntimeQuiescence(int token) => _lifecycleNative(
+  'runtime quarantine',
+  () => native.duneAwaitRuntimeQuiescence(token),
+);
 
-Future<void> retireNativeAbandonedRuntimeToken(int token) => Isolate.run(() {
-  _callNativeJson(
-    () => native.duneRetireAbandonedRuntimeToken(token),
-    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
-        TailscaleOperationException(
-          'runtime quarantine',
-          message,
-          code: code,
-          statusCode: statusCode,
-        ),
-  );
-});
-
-/// Runs [nativeOp] on a fresh short-lived isolate and returns its result,
-/// subject to the concurrency cap. [nativeOp] must be a top-level/static call
-/// capturing only sendable state and returning sendable data; thrown exceptions
-/// propagate to the caller with their type and fields intact.
-Future<T> _offloadNativeCall<T>(T Function() nativeOp) async {
-  return runCappedNativeOffload(nativeOp);
-}
+Future<void> retireNativeAbandonedRuntimeToken(int token) => _lifecycleNative(
+  'runtime quarantine',
+  () => native.duneRetireAbandonedRuntimeToken(token),
+);
 
 /// Test seam: runs [tasks] short tasks through a fresh [_Semaphore] with the
 /// given [permits] and returns the peak observed concurrency. Guards that the
@@ -388,7 +317,7 @@ offloadTcpDial({
   required String host,
   required int port,
   Duration? timeout,
-}) => _offloadNativeCall(
+}) => runCappedNativeOffload(
   () => _execTcpDial(runtimeToken, host, port, timeout?.inMilliseconds ?? 0),
 );
 
@@ -439,7 +368,7 @@ Future<PingResult> offloadDiagPing({
   required String ip,
   Duration? timeout,
   required String pingType,
-}) => _offloadNativeCall(
+}) => runCappedNativeOffload(
   () => _execDiagPing(runtimeToken, ip, timeout?.inMilliseconds ?? 0, pingType),
 );
 
@@ -493,7 +422,7 @@ Future<ServeForwardResult> offloadServeForward({
     runtimeToken: runtimeToken,
     funnel: funnel,
     dispatch: () => guardPublicationResultDeliveryForTesting(
-      dispatch: () => _offloadNativeCall(
+      dispatch: () => runCappedNativeOffload(
         () => _execServeForward(
           runtimeToken,
           payload,
@@ -519,9 +448,7 @@ ServeForwardResult _execServeForward(
     final result =
         _callNativeJson(
               () => native.duneServeForward(runtimeToken, payloadPtr),
-              onError: funnel
-                  ? TailscaleFunnelException.new
-                  : TailscaleServeException.new,
+              onError: _publicationException(funnel),
             )
             as Map<String, dynamic>;
     return validateServeForwardResultForTesting(
@@ -675,48 +602,44 @@ void _execAcknowledgePublication(
       publication.generation,
       publication.mappingToken,
     ),
-    onError: funnel
-        ? TailscaleFunnelException.new
-        : TailscaleServeException.new,
+    onError: _publicationException(funnel),
   );
 }
 
 void _execFailPublicationDelivery(int runtimeToken, bool funnel) {
   _callNativeJson(
     () => native.duneFailPublicationDelivery(runtimeToken),
-    onError: funnel
-        ? TailscaleFunnelException.new
-        : TailscaleServeException.new,
+    onError: _publicationException(funnel),
   );
 }
+
+/// Constructor shape shared by [TailscaleFunnelException] and
+/// [TailscaleServeException]; what [_publicationException] returns.
+typedef _PublicationExceptionFactory =
+    TailscaleOperationException Function(
+      String message, {
+      TailscaleErrorCode code,
+      int? statusCode,
+      Object? cause,
+    });
+
+/// Selects the Serve or Funnel exception flavor for one publication-path
+/// failure, so every site derives its type from the same `funnel` flag.
+_PublicationExceptionFactory _publicationException(bool funnel) =>
+    funnel ? TailscaleFunnelException.new : TailscaleServeException.new;
 
 TailscaleOperationException _publicationDeliveryException(
   bool funnel,
   String message, {
   Object? cause,
-}) => funnel
-    ? TailscaleFunnelException(
-        message,
-        code: TailscaleErrorCode.publicationCommitIndeterminate,
-        cause: cause,
-      )
-    : TailscaleServeException(
-        message,
-        code: TailscaleErrorCode.publicationCommitIndeterminate,
-        cause: cause,
-      );
+}) => _publicationException(funnel)(
+  message,
+  code: TailscaleErrorCode.publicationCommitIndeterminate,
+  cause: cause,
+);
 
-Never _throwInvalidPublicationResult(bool funnel) {
-  const message =
-      'Native runtime returned a publication without a valid exact handle.';
-  if (funnel) {
-    throw const TailscaleFunnelException(
-      message,
+Never _throwInvalidPublicationResult(bool funnel) =>
+    throw _publicationException(funnel)(
+      'Native runtime returned a publication without a valid exact handle.',
       code: TailscaleErrorCode.publicationCommitIndeterminate,
     );
-  }
-  throw const TailscaleServeException(
-    message,
-    code: TailscaleErrorCode.publicationCommitIndeterminate,
-  );
-}

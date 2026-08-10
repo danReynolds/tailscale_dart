@@ -427,9 +427,9 @@ void _workerEntrypoint(SendPort sendPort) {
             try {
               _callNativeJson(
                 () => native.duneServeClear(payloadPtr),
-                onError: request.operation == _WorkerOperation.funnelClear
-                    ? TailscaleFunnelException.new
-                    : TailscaleServeException.new,
+                onError: _publicationException(
+                  request.operation == _WorkerOperation.funnelClear,
+                ),
               );
               sendPort.send(_WorkerAckResponse(request.operation));
             } finally {
@@ -522,56 +522,20 @@ void _workerEntrypoint(SendPort sendPort) {
 }
 
 // ---------------------------------------------------------------------------
-// FFI helpers — called exclusively on the worker isolate.
+// FFI helpers — thin delegates to the shared native envelope decoder in
+// `native_error_code.dart`, kept so worker call sites stay short.
 // ---------------------------------------------------------------------------
-
-String _callNativeString(ffi.Pointer<Utf8> Function() fn) {
-  final ptr = fn();
-  // Free the Go-allocated buffer even if decoding throws — `toDartString`
-  // rejects malformed UTF-8, and Go error strings can carry raw remote-supplied
-  // bytes, so without the finally a bad response would leak native memory.
-  try {
-    return ptr.toDartString();
-  } finally {
-    native.duneFree(ptr);
-  }
-}
 
 /// Calls a native function that returns JSON, decodes it, and checks for an
 /// `error` key if the result is a map. Throws via [onError] if an error key is
 /// present; otherwise returns the decoded value.
-/// Factory that wraps a native error-response message with the right
-/// operation-specific exception subtype. `code` + `statusCode` plumb
-/// through from the Go-side error classification in
-/// [tailscale.classifyLocalAPIError] so callers can pattern-match on
-/// [TailscaleErrorCode].
-typedef _ErrorFactory =
-    TailscaleException Function(
-      String message, {
-      TailscaleErrorCode code,
-      int? statusCode,
-    });
-
 dynamic _callNativeJson(
   ffi.Pointer<Utf8> Function() fn, {
-  required _ErrorFactory onError,
-}) {
-  final result = _decodeNativeJson(fn);
-  if (result is Map<String, dynamic>) {
-    final error = result['error'] as String?;
-    if (error != null) {
-      throw onError(
-        error,
-        code: parseTailscaleErrorCode(result['code'] as String?),
-        statusCode: result['statusCode'] as int?,
-      );
-    }
-  }
-  return result;
-}
+  required NativeEnvelopeErrorFactory onError,
+}) => decodeNativeEnvelope(fn, onError: onError);
 
 dynamic _decodeNativeJson(ffi.Pointer<Utf8> Function() fn) =>
-    jsonDecode(_callNativeString(fn));
+    decodeNativeEnvelope(fn);
 
 @visibleForTesting
 TailscaleErrorCode parseTailscaleErrorCode(String? raw) =>

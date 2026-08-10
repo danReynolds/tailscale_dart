@@ -86,6 +86,31 @@ type LogoutResult struct {
 	receiptStored bool
 }
 
+// sortedPeers flattens a Status peer map into upstream's stable peer order.
+func sortedPeers(status *ipnstate.Status) []*ipnstate.PeerStatus {
+	peers := make([]*ipnstate.PeerStatus, 0, len(status.Peer))
+	for _, peer := range status.Peer {
+		peers = append(peers, peer)
+	}
+	ipnstate.SortPeers(peers)
+	return peers
+}
+
+// closeReceipt converts a logout disposition into the retained lifecycle
+// receipt shape shared by the initiating call and rescue recovery. Keep its
+// field mapping in sync with the ADR's logout disposition table.
+func (r LogoutResult) closeReceipt() RuntimeCloseResult {
+	return RuntimeCloseResult{
+		Token:         r.Token,
+		Operation:     lifecycleOperationLogout,
+		Matched:       true,
+		Started:       r.Started,
+		EmitStopped:   r.EmitStopped,
+		NoState:       r.NoState,
+		CleanupFailed: r.CleanupFailed,
+	}
+}
+
 type runtimeLogoutDependencies struct {
 	prepareIdleRuntime func(uint64, string) (uint64, error)
 	revokeNodeKey      func(*nodeRuntime) error
@@ -170,18 +195,7 @@ func LogoutWithToken(requestToken uint64, hostNetworkSnapshot string) (result Lo
 		result.CleanupFailed = true
 	}
 	if !result.receiptStored {
-		runtimes.recordLifecycleReceipt(lifecycleReceipt{
-			result: RuntimeCloseResult{
-				Token:         result.Token,
-				Operation:     lifecycleOperationLogout,
-				Matched:       true,
-				Started:       result.Started,
-				EmitStopped:   result.EmitStopped,
-				NoState:       result.NoState,
-				CleanupFailed: result.CleanupFailed,
-			},
-			err: err,
-		})
+		runtimes.recordLifecycleReceipt(lifecycleReceipt{result: result.closeReceipt(), err: err})
 	}
 	return result, err
 }
@@ -264,20 +278,13 @@ func Start(hostname, authKey, controlURL string, ephemeral bool) error {
 // is true only for an idempotent active-runtime call with the same immutable
 // configuration; authKey is enrollment input and never forces replacement.
 func StartRuntime(hostname, authKey, controlURL string, ephemeral bool) (alreadyActive bool, err error) {
-	return StartRuntimeWithHostNetwork(hostname, authKey, controlURL, ephemeral, "")
-}
-
-// StartRuntimeWithHostNetwork applies the Android host-network snapshot only
-// after reserving a fresh candidate. Active no-ops and configuration mismatches
-// therefore cannot mutate the current runtime before their config is checked.
-func StartRuntimeWithHostNetwork(hostname, authKey, controlURL string, ephemeral bool, hostNetworkSnapshot string) (alreadyActive bool, err error) {
 	alreadyActive, _, err = StartRuntimeWithToken(
 		nextDirectRuntimeToken(),
 		hostname,
 		authKey,
 		controlURL,
 		ephemeral,
-		hostNetworkSnapshot,
+		"",
 	)
 	return alreadyActive, err
 }
@@ -340,22 +347,8 @@ func startRuntimeWithTokenDeadline(requestToken uint64, hostname, authKey, contr
 }
 
 func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string, ephemeral bool, hostNetworkSnapshot string, dependencies runtimeStartDependencies) (alreadyActive bool, err error) {
-	alreadyActive, _, err = startRuntimeWithDependenciesForToken(
+	alreadyActive, _, err = startRuntimeWithDependenciesForTokenAndDeadline(
 		nextDirectRuntimeToken(),
-		hostname,
-		authKey,
-		controlURL,
-		stateDir,
-		ephemeral,
-		hostNetworkSnapshot,
-		dependencies,
-	)
-	return alreadyActive, err
-}
-
-func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey, controlURL, stateDir string, ephemeral bool, hostNetworkSnapshot string, dependencies runtimeStartDependencies) (alreadyActive bool, runtimeToken uint64, err error) {
-	return startRuntimeWithDependenciesForTokenAndDeadline(
-		requestToken,
 		hostname,
 		authKey,
 		controlURL,
@@ -365,6 +358,7 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 		dependencies,
 		time.Time{},
 	)
+	return alreadyActive, err
 }
 
 func startRuntimeWithDependenciesForTokenAndDeadline(requestToken uint64, hostname, authKey, controlURL, stateDir string, ephemeral bool, hostNetworkSnapshot string, dependencies runtimeStartDependencies, bootstrapDeadline time.Time) (alreadyActive bool, runtimeToken uint64, err error) {
@@ -666,11 +660,7 @@ func DunePeers() string {
 		return localAPIError(err)
 	}
 
-	peers := make([]*ipnstate.PeerStatus, 0, len(status.Peer))
-	for _, peer := range status.Peer {
-		peers = append(peers, peer)
-	}
-	ipnstate.SortPeers(peers)
+	peers := sortedPeers(status)
 
 	jsonBytes, err := json.Marshal(peers)
 	if err != nil {

@@ -72,10 +72,17 @@ Ephemeral nodes use an in-memory StateStore and do not create a DEK or
 persistent StateStore. Because tsnet still requires a writable `Server.Dir` for
 logs and possible certificate sidecars, each ephemeral runtime receives a fresh
 random `0700` scratch directory in an app cache/temporary location, never the
-persistent state root. Normal close removes it. Startup may sweep an old
-package-prefixed scratch directory only after validating ownership and age and
-acquiring that directory's nonblocking live lock; age alone can never authorize
-deleting a suspended or still-running process's directory. A crash can leave
+persistent state root. The Dart side supplies the platform's writable
+temporary directory as the scratch parent at initialization
+(`SetEphemeralScratchParent`), because Go's own `os.TempDir()` fallback is not
+app-writable on Android (`/data/local/tmp` is shell-only — the 2026-08-10
+arm64 emulator receipt caught ephemeral startup failing exactly there).
+Binding scratch to an explicitly app-owned no-backup cache location remains
+the platform backup-exclusion receipt's R6 concern. Normal close removes it. Startup may
+sweep an old package-prefixed scratch directory only after validating
+ownership and age and acquiring that directory's nonblocking live lock; age
+alone can never authorize deleting a suspended or still-running process's
+directory. A crash can leave
 owner-only scratch, so that location must also be excluded from backup.
 
 This cutover belongs to R4d. Its persistent-root occupancy check is strictly
@@ -259,22 +266,40 @@ probe race-free without pretending a mandatory lock file is not a write.
 
 ### Preparation and custody token protocol
 
-The multi-phase Dart/worker/Go flow is explicit:
+The multi-phase caller/worker/Go flow is explicit:
 
 1. Before dispatching work, the supervisor creates and retains a unique opaque
    request-generation token and installs worker-exit observation.
-2. The worker calls `beginPreparation(token, stateRoot, mode)`. The native
-   controller binds its candidate and bounded lease to that pre-existing token;
-   a worker cannot acquire an anonymous reservation that rescue cannot name.
-3. The native probe returns only format/presence facts. The supervisor marks the
-   token's custody phase active, then awaits the caller-isolate custodian
-   `read`/`write` Future.
-4. The worker calls `startPrepared(token, config, keyPointer, keyLength)`.
-5. Native state resolves the empty-envelope write barrier and records the rename
-   outcome on the token before any success response can be delivered. Every
+2. The caller isolate drives keyless preparation through short-lived helper
+   isolates against token-bound native state.
+   `beginPersistentPreparation(token)` binds the bounded lease for the
+   already-configured canonical state root to that pre-existing token — the
+   root and Keybay namespace were frozen by `init`, so the call carries no
+   per-request state root or mode, and no isolate can acquire an anonymous
+   reservation that rescue cannot name.
+3. `inspectPersistentPreparation(token)` returns only format/presence facts.
+   The supervisor marks the token's custody phase active with
+   `markCustodyActive(token)` before awaiting the caller-isolate custodian
+   `read` Future, then records key presence through
+   `resolvePersistentCustody(token, dekPresent)`.
+4. The DEK never rides a worker message. For fresh provisioning the supervisor
+   marks `custodyWriteAttempted` before the custodian `write`; for either
+   resolved action it stages the 32-byte key directly from the caller isolate
+   into a bounded native allocation with the synchronous
+   `supplyPreparedDEK(token, keyPointer, keyLength)` call, which retains
+   exactly one wiped-on-consume staged copy.
+5. `preparePersistentState(token)` consumes the staged key exactly once. Fresh
+   provisioning resolves the empty-envelope write barrier and records the
+   rename outcome on the token before any success response can be delivered;
+   an existing envelope is authenticated and classified as exactly empty or
+   non-empty. `completePersistentCustody(token)` then ends custody. Every
    response carries the token. A response for an abandoned generation is
    ignored and its resources are closed.
-6. Every exception, timeout, cancellation, or worker exit calls
+6. The long-lived worker performs only the final start: its token-qualified
+   start call atomically adopts the exact prepared Store and held lease into
+   the runtime candidate. An idle operation that will not start instead ends
+   with `finishPreparedPersistentState(token)`.
+7. Every exception, timeout, cancellation, or worker exit calls
    `abandon(token)`, never an unqualified “stop current candidate.”
 
 Custodian Futures are not assumed cancellable. Abandoning a token quarantines
@@ -311,9 +336,9 @@ its continuation:
 - only after the custody Future and required cleanup settle does
   `finishCustody(token)` release preparation and permit a later generation.
 
-An idle status probe uses a short `beginProbe`/`finishProbe` session with the
-same root/lease rules. A reset uses the generation-bound transaction described
-below.
+An idle status probe runs the same token protocol under the same root/lease
+rules and closes its no-start path with `finishPreparedPersistentState(token)`.
+A reset uses the generation-bound transaction described below.
 
 Two callers configured with the same Keybay entry but different state roots are
 a host configuration error. The core Keybay binding documents and tests the
@@ -587,10 +612,41 @@ error.
 | canonical absent/encrypted root | absent or canonical encrypted | custodian error or non-32-byte value | Fail before native launch. Make no StateStore mutation. If a fresh-key write was attempted, run token-qualified compensating delete because the error may have followed a commit. |
 
 “Valid and exactly empty” means a successfully authenticated v1 envelope whose
-logical map has zero entries. It is distinct from a missing or zero-byte file.
-Do not classify enrollment from `_machinekey`: upstream may generate a machine
-key before node/profile enrollment completes. Non-empty state is only a signal
-to let upstream resume its own state machine.
+logical map has zero entries other than the package-owned runtime metadata key
+below. `logicalEmpty` ignores exactly that one key; similarly named and future
+upstream keys remain authoritative state. It is distinct from a missing or
+zero-byte file. Do not classify enrollment from `_machinekey`: upstream may
+generate a machine key before node/profile enrollment completes. Non-empty
+state is only a signal to let upstream resume its own state machine.
+
+### Package-owned runtime metadata
+
+The store keeps one package-owned key inside the authenticated envelope:
+`_tailscale-dart/runtime-config`, a bounded (64 KiB) strict-JSON record
+`{version, hostname, controlURL, ephemeral}` at version 1. It is deliberately
+outside the upstream key namespace and is the only key excluded from the
+exactly-empty classification, so idle `status()` and `logout()` classify a
+metadata-only envelope as `noState`.
+
+Its lifecycle is bound to the `Server.Start` proof boundary of persistent
+runtimes; ephemeral runtimes never write it:
+
+- before a new start may mutate upstream state, the prior tuple is deleted
+  with a direct nil `WriteState`, so idle logout can never reconstruct
+  possibly-mutated state under a stale configuration;
+- only after `Server.Start` returns success is the proven
+  `{hostname, controlURL, ephemeral: false}` tuple written; a metadata write
+  failure fails that start.
+
+Idle logout on an authenticated non-empty envelope reconstructs its minimum
+runtime from this record, not from caller-supplied configuration. Reading is
+strict: absence surfaces as `ipn.ErrStateNotExist`, while a duplicate,
+unknown, missing, or wrongly typed field, an unsupported version, or an
+`ephemeral: true` record is a typed metadata error. If the record is absent or
+invalid beside non-empty upstream state — for example after a crash between
+the pre-start clear and the post-start save — idle logout fails with that
+typed error instead of constructing a runtime. This is fail-closed rather than
+terminal: the next successful `up()` re-proves and rewrites the tuple.
 
 Fresh provisioning is an intentionally cross-system transaction:
 
@@ -630,7 +686,7 @@ returning a `noState` value.
 | Unrecognized residual subtree, no marker | `unexpectedStateResidue` without custody read | Throws `unexpectedStateResidue`; no remote call or mutation. | Creates the durable marker, then idempotently deletes the exact DEK and owned subtree. |
 | State subtree and marker absent, DEK absent | `noState` | Completes; no Server, remote call, custodian mutation, or subtree deletion. | Completes as an idempotent no-op. |
 | Authenticated exactly-empty envelope plus DEK | `noState` | Completes; no remote call or deletion, and preserves the pair. Makes no claim that a remote device record was never created or was revoked. | Warns that a remote record may remain, then deletes the DEK and owned subtree. |
-| Authenticated non-empty envelope plus DEK | stopped with persisted state | Constructs/reuses the minimum runtime and performs upstream logout. Confirmed success preserves the DEK and upstream-mutated encrypted store, then reports `noState`; failure/timeout closes the mutated generation, preserves the same storage pair as recovery evidence, and throws `logoutIndeterminate`. | Warns that a remote record may remain, then deletes the DEK and owned subtree without a remote call. |
+| Authenticated non-empty envelope plus DEK | stopped with persisted state | Constructs/reuses the minimum runtime from the package-owned runtime metadata and performs upstream logout. Absent/invalid metadata beside this non-empty state throws its typed metadata error without constructing a runtime; a later successful `up()` rewrites the tuple. Confirmed success preserves the DEK and upstream-mutated encrypted store, then reports `noState`; failure/timeout closes the mutated generation, preserves the same storage pair as recovery evidence, and throws `logoutIndeterminate`. | Warns that a remote record may remain, then deletes the DEK and owned subtree without a remote call. |
 | Orphan DEK, no envelope | `orphanedDek` | Throws `orphanedDek`; no remote call or automatic deletion. | Idempotently deletes the exact DEK, then removes the exact owned subtree if present. |
 | Canonical encrypted file, DEK absent | `missingDek` | Throws `missingDek`; no remote call or automatic deletion. | Performs idempotent DEK deletion/absence confirmation, then removes the owned subtree. |
 | Malformed/unsupported envelope or authenticated-open failure | the exact format/authentication error | Throws the same typed error; no remote call or automatic deletion. | Deletes the exact DEK first, then removes the owned subtree. A malformed outer envelope is not opened merely to reset it. |

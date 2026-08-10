@@ -231,3 +231,44 @@ func TestSweepStaleEphemeralStateScratchUsesAgeOwnershipModeAndLiveLease(t *test
 		t.Fatalf("symlink target was touched: %v", err)
 	}
 }
+
+func TestEphemeralScratchParentPrefersConfiguredValue(t *testing.T) {
+	runtimes.mu.Lock()
+	previous := runtimes.scratchParent
+	runtimes.mu.Unlock()
+	t.Cleanup(func() {
+		runtimes.mu.Lock()
+		runtimes.scratchParent = previous
+		runtimes.mu.Unlock()
+	})
+	runtimes.mu.Lock()
+	runtimes.scratchParent = ""
+	runtimes.mu.Unlock()
+
+	if got := ephemeralScratchParent(); got != os.TempDir() {
+		t.Fatalf("unconfigured parent = %q, want os.TempDir() %q", got, os.TempDir())
+	}
+	SetEphemeralScratchParent("   ")
+	if got := ephemeralScratchParent(); got != os.TempDir() {
+		t.Fatalf("blank parent must be ignored; got %q", got)
+	}
+
+	configured := t.TempDir()
+	SetEphemeralScratchParent(configured)
+	if got := ephemeralScratchParent(); got != configured {
+		t.Fatalf("configured parent = %q, want %q", got, configured)
+	}
+	SetEphemeralScratchParent(t.TempDir())
+	if got := ephemeralScratchParent(); got != configured {
+		t.Fatalf("scratch parent must be set-once; got %q, want %q", got, configured)
+	}
+
+	scratch, err := createEphemeralStateScratch()
+	if err != nil {
+		t.Fatalf("createEphemeralStateScratch: %v", err)
+	}
+	t.Cleanup(func() { _ = scratch.Close() })
+	if dir := scratch.directory(); !strings.HasPrefix(dir, configured+string(os.PathSeparator)) {
+		t.Fatalf("scratch %q must live under the configured parent %q", dir, configured)
+	}
+}

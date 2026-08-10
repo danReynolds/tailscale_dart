@@ -110,7 +110,7 @@ first Running observation starts exactly one bounded Go worker and suppresses
 that Running event. Before Running, identity-bound data-plane calls fail
 immediately with `dataPlaneNotReady`; while bootstrap is running they join its
 single result; after success they proceed. Bootstrap success opens the gate
-under `watchMu` and posts synthetic Running only when Running is still the
+under the runtime's `watchMu` and posts synthetic Running only when Running is still the
 watcher's latest state; a newer non-Running event is preserved and a later real
 Running publishes normally. Watcher ownership, state publication, and
 readiness therefore cannot split. A bootstrap/watcher failure before readiness
@@ -245,13 +245,17 @@ Relevant nested orders; take locks left to right, never right to left:
 
 ```
 runtimeController.configureMu  →  runtimeController.mu
-watchMu  →  identityCache.mu
-watchMu  →  publicationBootstrap.mu
-runtimeController.mu, httpBindingMu, tcpFdListenerMu,
-udpFdBindingMu, tailnetHTTPTransports.mu, reactorMu, dartPortMu,
-hostNetworkMu, publicationManager.mu, encryptedStateStore.mu
+nodeRuntime.watchMu  →  identityCache.mu
+nodeRuntime.watchMu  →  publicationBootstrap.mu
+runtimeController.mu, nodeRuntime.httpMu, nodeRuntime.fd.<family>.mu,
+reactorMu, dartPortMu, hostNetworkMu, publicationManager.mu,
+encryptedStateStore.mu
   (leaf, no package-lock nesting)
 ```
+
+R7a-R7c moved the transport slot (`httpMu`), the three fd registries
+(`fd.tcpListeners`/`fd.udpBridges`/`fd.httpBindings`), and the watcher barrier
+(`watchMu`) onto `nodeRuntime`; their nesting relationships are unchanged.
 
 Rules that keep it acyclic:
 
@@ -273,9 +277,9 @@ Rules that keep it acyclic:
   serialization of that optimistic get-modify-set is the lock's entire
   purpose. Never extend that exception to the runtime controller or to calls
   that wait on the tailnet.
-- `UdpCloseBinding`/`closeAllUdpBindings` invoke a bridge's close callback
-  only after releasing `udpFdBindingMu` (the callback re-enters the registry
-  to deregister — Go mutexes are not reentrant).
+- `UdpCloseBinding` and the runtime's registry drain invoke a bridge's close
+  callback only after releasing the registry lock (the callback re-enters the
+  registry to deregister — Go mutexes are not reentrant).
 
 ## Diagnostics
 

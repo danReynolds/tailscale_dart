@@ -246,8 +246,8 @@ func (m *publicationManager) publishBootstrapSuccess(run *watcherRun) bool {
 	if m == nil || m.bootstrap == nil {
 		return false
 	}
-	watchMu.Lock()
-	defer watchMu.Unlock()
+	run.runtime.watchMu.Lock()
+	defer run.runtime.watchMu.Unlock()
 	if !watcherRunCurrentLocked(run) {
 		return false
 	}

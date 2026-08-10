@@ -49,6 +49,15 @@ external ffi.Pointer<Utf8> duneConfigure(
   int logLevel,
 );
 
+/// Supplies the platform's writable temporary directory as the ephemeral
+/// scratch parent. Go's own os.TempDir() fallback is not app-writable on
+/// Android, so Dart passes Directory.systemTemp right after configure.
+/// Set-once; empty and repeated values are ignored natively.
+@ffi.Native<ffi.Void Function(ffi.Pointer<Utf8>)>(
+  symbol: 'DuneSetEphemeralScratchParent',
+)
+external void duneSetEphemeralScratchParent(ffi.Pointer<Utf8> parent);
+
 /// Acquires the configured root's token-bound persistent-state lease.
 /// Public persistent operations call it before any secure-state probe or
 /// Keybay operation.

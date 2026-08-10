@@ -10,8 +10,10 @@ state-lease/reset ownership, and explicit local forget. R5 adds the automatic
 publication bootstrap, shared readiness gate, runtime-owned ServeConfig
 authority, and exact handles. The hosted Funnel-tailnet, replacement, and macOS
 production-Keybay process-crash/restart receipts passed on 2026-08-10. The
-remaining R6/R10 evidence and R7 migration of the remaining process-global
-transport/watcher registries still remain.
+R7a-R7c have since moved the outbound HTTP transport, the fd listener
+registries, and the state watcher onto `nodeRuntime` (2026-08-10). The
+remaining R6/R10 evidence, the R8 identity-cache benchmark decision, and R9
+error conformance still remain.
 
 ## Context
 
@@ -100,7 +102,7 @@ type nodeRuntime struct {
 
     publication *publicationManager
     watcher     *stateWatcher
-    http        *http.Transport // moves here in workstream R7a
+    http        *http.Transport // R7a: owned transport slot
 
     // Runtime-owned HTTP/TCP/UDP/TLS registries and bridges are moved here
     // incrementally. Each keeps its own narrow lock.
@@ -113,8 +115,24 @@ ordering contracts may not.
 The pseudocode is the final shape, expressed through storage-neutral ownership
 slots. R2 first landed with the then-current Store treated as an opaque
 interface plus closer; R4 filled the lease/secret slots and replaced SQLite
-without repairing it first. R7a still needs to move the existing HTTP cache
-behind the `http` slot; the temporary owner-keyed cache/sweep remains.
+without repairing it first. R7a has since replaced the owner-keyed process
+cache with the runtime-owned transport slot, and R7b/R7c moved the fd
+registries and watcher onto the runtime.
+
+Implemented mapping (current source, `go/node_runtime.go`): there is no
+distinct `runtimeCandidate` type. The controller's `candidate` slot holds a
+not-yet-published `*nodeRuntime`, and the sketch's candidate-local
+`phaseMu`/`candidatePhase`/`startDone` synchronization is realized as an
+`abandoned` bit guarded by the controller lock plus token-qualified receipts:
+rescue only marks and cancels a candidate whose `Start` may still be in
+flight, and the startup owner re-checks abandonment after each fallible step
+and again at atomic commit, so `Close` is never concurrent with `Start`. The
+`phaseMu`/`writeDone` phase-barrier machinery lives on R4c's
+`persistentPreparation` (`go/state_preparation.go`), whose prepared Store and
+lease the persistent start path atomically adopts into the candidate. The
+controller additionally tracks draining/logout/reset/preparation slots, and
+the process `nodeEpoch` atomic is the generation. The ownership and ordering
+contracts stated here are unchanged by this mapping.
 
 ## Lifecycle state machine
 
@@ -197,9 +215,9 @@ Populate all immutable Server fields before its first method call. Invoke
 `Server.Start` without a package lock held.
 
 The startup owner is the only goroutine allowed to close candidate resources
-until `Start` returns. Candidate phase, abandonment, and `serverStarted` are
-protected by `phaseMu`; `startDone` closes exactly once after the Start result is
-recorded. Rescue locks only long enough to mark abandonment/cancel context. If
+until `Start` returns. Abandonment is marked under the controller lock and the
+Start outcome is recorded exactly once — the sketch's `phaseMu`/`startDone`.
+Rescue locks only long enough to mark abandonment/cancel context. If
 Start is still in flight it never reads an unsynchronized result or calls
 `Close`; the startup owner observes abandonment after recording the result and
 performs the ordered cleanup. If Start already returned, cleanup is scheduled
@@ -230,10 +248,11 @@ intentional adaptation for the private in-memory LocalAPI transport. Add a test
 that the cached client uses the in-process custom Dial path; if the transport
 ever changes, the test forces the trust decision to be revisited.
 
-In R2, keep the existing owner-keyed outbound HTTP cache and teardown sweep as a
-temporary compatibility bridge. R7a constructs the transport once on the
-runtime and deletes that legacy cache. In both phases, no pooled connection may
-survive a generation change.
+R2 kept the then-existing owner-keyed outbound HTTP cache and teardown sweep
+as a temporary compatibility bridge. R7a has since replaced it: the runtime
+owns one lazily built transport slot with a closed bit, so no pooled
+connection can survive a generation change and a straggling request racing
+close receives a one-off transport instead of repopulating the slot.
 
 R4 transfers the candidate's DEK into the encrypted Store and
 wipes its temporary key buffer before commit. `nodeRuntime` does not retain a
@@ -311,8 +330,8 @@ Caller-isolate helper work (`tcp.dial`, `diag.ping`, Serve, and Funnel) also
 captures the exact runtime token before it can wait on recovery or the shared
 offload cap. Native validates that token before accessing Server or LocalClient,
 so queued work cannot be rebound to a later identity. Worker-FIFO listener and
-binding commands remain governed by the generation commit gate until R7b moves
-their registries and handles onto the runtime.
+binding commands commit into runtime-owned registries (R7b), whose closed-bit
+sweep and retained generation gate keep commit and teardown totally ordered.
 
 A publication handle's `close()` and finalizer submit the captured generation,
 publication token, host/port/path, and visibility mode. Native removal succeeds
@@ -606,14 +625,17 @@ before accepting lifecycle work.
 
 ### Unexpected worker exit
 
-Before dispatching preparation to the worker, the supervisor creates and
-retains a unique opaque request-generation token. The worker calls
-`beginPreparation(token, stateRoot, mode)`, and native code binds the candidate
-and any lease to that already-known token before blocking work. This guarantees
-that worker death between native acquisition and response delivery cannot
-strand a reservation that rescue cannot name. The worker's
-`startPrepared(token, config, keyBytes)` and every response carry it. Late
-responses for an abandoned token are ignored.
+Before dispatching preparation, the supervisor creates and retains a unique
+opaque request-generation token. The caller isolate drives persistent
+preparation through short-lived helper isolates against token-bound native
+state: `beginPersistentPreparation(token)` binds the lease for the
+already-configured root to that already-known token before blocking work, and
+the DEK is staged by a direct caller-isolate `supplyPreparedDEK(token, ...)`
+call. The long-lived worker performs only the token-qualified final start that
+adopts the prepared state. This guarantees that worker or helper death between
+native acquisition and response delivery cannot strand a reservation that
+rescue cannot name. Every response carries the token. Late responses for an
+abandoned token are ignored.
 
 On unexpected exit, the supervisor invokes a small rescue FFI entry point from
 a live helper isolate so teardown cannot block the UI isolate. Rescue does not
@@ -665,14 +687,15 @@ rescue or emit twice.
 
 ### Push compatibility before watcher ownership moves
 
-R3 makes the Worker replaceable before R7c moves the process-global watcher and
-push port onto `nodeRuntime`. As a required compatibility bridge, every native
+R3 made the Worker replaceable before R7c moved the watcher onto
+`nodeRuntime`; the push port remains the sanctioned process-global bridge. As
+a required compatibility bridge, every native
 status, runtime-error, and peer-list push carries its captured runtime
 generation/token. Dart drops a push whose generation is not the current worker
 binding. Quarantine cancels **and joins** the old watcher/background push
 sources; the supervisor does not bind the replacement worker port until that
-join completes. R7c later replaces this bridge with direct runtime ownership,
-but cannot be relied upon to make R3 safe.
+join completes. R7c has since made watcher ownership direct on the runtime;
+the generation tagging is retained because it is what made R3 safe on its own.
 
 ### `up()` timeout
 
@@ -715,8 +738,9 @@ must establish the no-late-commit invariant before returning.
 - State lease acquisition and Keybay operations occur with no controller or
   registry lock held.
 - Callbacks and close functions run after the owning registry lock is released.
-- `runtimeCandidate.phaseMu` is a leaf lock. No caller waits on `startDone` or
-  calls Server/Store cleanup while holding it.
+- `persistentPreparation.phaseMu` is a leaf lock. No caller waits on its
+  operation/write-outcome barriers or calls Server/Store cleanup while holding
+  it.
 
 The existing detailed lock graph in [`concurrency.md`](concurrency.md) remains
 the current-state reference. Each registry migration updates it; the final

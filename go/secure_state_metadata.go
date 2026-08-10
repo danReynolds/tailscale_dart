@@ -84,7 +84,7 @@ func loadRuntimeConfig(store ipn.StateStore) (runtimeConfig, error) {
 	}
 	// StateStore does not promise that ReadState returns caller-owned memory.
 	// Parse and wipe a private copy without mutating an implementation's cache.
-	payload := cloneStateBytes(stored)
+	payload := bytes.Clone(stored)
 	defer wipeBytes(payload)
 	return parseRuntimeConfigMetadata(payload)
 }

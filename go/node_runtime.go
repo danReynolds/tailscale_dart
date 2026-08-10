@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
+	"tailscale.com/util/mak"
 )
 
 // ErrLifecycleBusy means a node is being prepared or drained. Callers must
@@ -79,6 +81,51 @@ type nodeRuntime struct {
 	closeOnce           sync.Once
 	closeErr            error
 	abandoned           bool // guarded by runtimeController.mu
+
+	httpMu              sync.Mutex
+	httpTransport       *http.Transport
+	httpTransportClosed bool
+
+	fd fdResources
+
+	watchMu sync.Mutex
+	watch   *watcherRun
+}
+
+// tailnetTransport returns this runtime's one outbound HTTP transport (an
+// HTTP connection pool + TLS session cache), building it on first use. The
+// pool is a SECURITY boundary, not just hygiene: a pooled connection carries
+// the tailnet identity that was live when it was dialed and must never serve
+// a different identity. Runtime ownership makes that structural — a
+// replacement identity is a new runtime with an empty slot, and close drains
+// this one. A request that raced close gets a one-off transport without
+// touching the slot — reported via oneOff=true so the caller closes its idle
+// connections after use — because repopulating a closed slot would retain the
+// dead server's whole netstack graph behind the teardown sweep. Cross-host
+// isolation is inherent to http.Transport (its pool is keyed by host:port).
+func (r *nodeRuntime) tailnetTransport(build func() *http.Transport) (transport *http.Transport, oneOff bool) {
+	r.httpMu.Lock()
+	defer r.httpMu.Unlock()
+	if r.httpTransportClosed {
+		return build(), true
+	}
+	if r.httpTransport == nil {
+		r.httpTransport = build()
+	}
+	return r.httpTransport, false
+}
+
+// closeTailnetTransport drops the runtime's transport and closes its idle
+// connections. Called from close so no pooled connection outlives the
+// node/identity; later stragglers receive one-off transports.
+func (r *nodeRuntime) closeTailnetTransport() {
+	r.httpMu.Lock()
+	defer r.httpMu.Unlock()
+	r.httpTransportClosed = true
+	if r.httpTransport != nil {
+		r.httpTransport.CloseIdleConnections()
+		r.httpTransport = nil
+	}
 }
 
 func newNodeRuntime(generation, token uint64, config runtimeConfig) *nodeRuntime {
@@ -150,7 +197,7 @@ func (r *nodeRuntime) closeOwnedResources(closeStartedServer, preserveBootstrapF
 	}
 	r.closeOnce.Do(func() {
 		r.cancel()
-		StopWatch()
+		r.stopWatch()
 
 		// Publication cleanup is best-effort and bounded. Do not let a stale
 		// ServeConfig cleanup failure strand Server/Store/lease ownership: the
@@ -159,10 +206,8 @@ func (r *nodeRuntime) closeOwnedResources(closeStartedServer, preserveBootstrapF
 			r.publication.shutdownBootstrap(preserveBootstrapFailure)
 			_ = r.publication.close()
 		}
-		closeAllTcpFdListeners()
-		closeAllHttpBindings()
-		closeAllUdpBindings()
-		resetTailnetHTTPTransport()
+		r.fd.closeAll()
+		r.closeTailnetTransport()
 
 		if closeStartedServer && r.server != nil {
 			closeServer := r.closeServer
@@ -259,6 +304,7 @@ type runtimeController struct {
 	stateRootInfo   os.FileInfo
 	keybayNamespace string
 	logLevel        int32
+	scratchParent   string
 }
 
 var runtimes runtimeController
@@ -269,14 +315,11 @@ func (c *runtimeController) beginStartCall(token uint64) (*runtimeStartCall, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.startCalls == nil {
-		c.startCalls = make(map[uint64]*runtimeStartCall)
-	}
 	if c.startCalls[token] != nil {
 		return nil, fmt.Errorf("%w: start call for token %d is already active", ErrLifecycleBusy, token)
 	}
 	call := &runtimeStartCall{done: make(chan struct{})}
-	c.startCalls[token] = call
+	mak.Set(&c.startCalls, token, call)
 	return call, nil
 }
 
@@ -309,6 +352,33 @@ func RetireAbandonedRuntimeToken(token uint64) {
 		delete(runtimes.abandonedTokens, token)
 	}
 	runtimes.mu.Unlock()
+}
+
+// SetEphemeralScratchParent supplies the host platform's writable temporary
+// directory for ephemeral scratch. Android app processes cannot write Go's
+// os.TempDir() fallback (/data/local/tmp is shell-writable only), while the
+// embedding Dart runtime knows the app's real cache/temporary location, so
+// Dart supplies it immediately after Configure. Empty or repeated values are
+// ignored: the parent is environmental, set once, and deliberately outside
+// the frozen configuration identity tuple.
+func SetEphemeralScratchParent(parent string) {
+	trimmed := strings.TrimSpace(parent)
+	if trimmed == "" {
+		return
+	}
+	runtimes.configureMu.Lock()
+	defer runtimes.configureMu.Unlock()
+	runtimes.mu.Lock()
+	defer runtimes.mu.Unlock()
+	if runtimes.scratchParent == "" {
+		runtimes.scratchParent = filepath.Clean(trimmed)
+	}
+}
+
+func configuredEphemeralScratchParent() string {
+	runtimes.mu.Lock()
+	defer runtimes.mu.Unlock()
+	return runtimes.scratchParent
 }
 
 // Configure freezes process-wide initialization identity. os.SameFile supplies
@@ -470,76 +540,11 @@ func ensurePrivateDirectory(path string) error {
 // without following a symbolic link at that path. The configured state root
 // may itself be supplied through a symlink alias and is canonicalized by
 // Configure; descendants such as tailscale/ and tailscale/logs are package
-// storage boundaries and must remain real directories.
+// storage boundaries and must remain real, current-user-owned directories.
+// It shares the encrypted store's handle-verified TOCTOU choreography so the
+// securing discipline exists exactly once.
 func ensurePrivateOwnedDirectory(path string) error {
-	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
-	}
-
-	before, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if before.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("path is a symbolic link")
-	}
-	if !before.IsDir() {
-		return fmt.Errorf("path is not a directory")
-	}
-
-	// Chmod the verified directory handle, not the path. Revalidate its path
-	// identity before and after mutation so a swapped symlink or directory is
-	// rejected without chmodding an external target.
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	opened, err := dir.Stat()
-	if err != nil {
-		return err
-	}
-	current, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if current.Mode()&os.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(opened, current) {
-		return fmt.Errorf("directory identity changed while securing it")
-	}
-	if err := dir.Chmod(0o700); err != nil {
-		return err
-	}
-	final, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if final.Mode()&os.ModeSymlink != 0 || !final.IsDir() || !os.SameFile(opened, final) {
-		return fmt.Errorf("directory identity changed while securing it")
-	}
-	if got := final.Mode().Perm(); got != 0o700 {
-		return fmt.Errorf("permissions are %04o, want 0700", got)
-	}
-	return nil
-}
-
-// removeOwnedDirectory refuses ambiguous package-owned paths. RemoveAll does
-// not follow a terminal symlink, which protects its target but could otherwise
-// make logout report success while credentials remain in that target.
-func removeOwnedDirectory(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("path is a symbolic link")
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("path is not a directory")
-	}
-	return os.RemoveAll(path)
+	return secureEncryptedStateDirectory(path, true)
 }
 
 func setRawDiscoCompatibility() error {
@@ -584,12 +589,31 @@ func (c *runtimeController) reserve(token uint64, config runtimeConfig) (*nodeRu
 	return candidate, nil, nil
 }
 
-// activeRuntimeForConfig handles the one persistent-start case that does not
+// refreshActiveRuntime handles the one persistent-start case that does not
 // require new custody: an idempotent call against the already-active runtime.
+// The admission decision runs under the controller lock; the refresh callback
+// feeds the process-global host-network bridge, not runtime state, and runs
+// after release per the ADR lock policy (no network work under c.mu).
 func (c *runtimeController) refreshActiveRuntime(
 	token uint64,
 	config runtimeConfig,
 	refresh func() error,
+) (*nodeRuntime, error) {
+	runtime, err := c.activeRuntimeForConfig(token, config)
+	if err != nil || runtime == nil {
+		return runtime, err
+	}
+	if refresh != nil {
+		if err := refresh(); err != nil {
+			return nil, err
+		}
+	}
+	return runtime, nil
+}
+
+func (c *runtimeController) activeRuntimeForConfig(
+	token uint64,
+	config runtimeConfig,
 ) (*nodeRuntime, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -621,11 +645,6 @@ func (c *runtimeController) refreshActiveRuntime(
 	}
 	if c.current.config != config {
 		return nil, fmt.Errorf("%w: call down before changing hostname, control URL, or ephemeral mode", ErrConfigurationMismatch)
-	}
-	if refresh != nil {
-		if err := refresh(); err != nil {
-			return nil, err
-		}
 	}
 	return c.current, nil
 }
@@ -676,10 +695,7 @@ func (c *runtimeController) release(candidate *nodeRuntime, cleanupErr error) er
 	if c.candidate == candidate {
 		c.candidate = nil
 		if candidate.abandoned {
-			if c.completedPreparations == nil {
-				c.completedPreparations = make(map[uint64]preparationOutcome)
-			}
-			c.completedPreparations[candidate.token] = preparationOutcome{err: cleanupErr}
+			mak.Set(&c.completedPreparations, candidate.token, preparationOutcome{err: cleanupErr})
 		}
 	}
 	c.mu.Unlock()
@@ -712,10 +728,7 @@ func (c *runtimeController) recordLifecycleReceiptLocked(receipt lifecycleReceip
 	if receipt.result.Token == 0 {
 		return
 	}
-	if c.completedLifecycle == nil {
-		c.completedLifecycle = make(map[uint64]lifecycleReceipt)
-	}
-	c.completedLifecycle[receipt.result.Token] = receipt
+	mak.Set(&c.completedLifecycle, receipt.result.Token, receipt)
 }
 
 func (c *runtimeController) recordLifecycleReceipt(receipt lifecycleReceipt) {
@@ -782,18 +795,7 @@ func (c *runtimeController) finishLogout(
 		if op.cleanupErr == nil {
 			op.cleanupErr = cleanupErr
 		}
-		c.recordLifecycleReceiptLocked(lifecycleReceipt{
-			result: RuntimeCloseResult{
-				Token:         result.Token,
-				Operation:     lifecycleOperationLogout,
-				Matched:       true,
-				Started:       result.Started,
-				EmitStopped:   result.EmitStopped,
-				NoState:       result.NoState,
-				CleanupFailed: result.CleanupFailed,
-			},
-			err: operationErr,
-		})
+		c.recordLifecycleReceiptLocked(lifecycleReceipt{result: result.closeReceipt(), err: operationErr})
 		c.logout = nil
 		close(op.done)
 	}
@@ -875,10 +877,7 @@ func AbandonRuntime(token uint64) (RuntimeCloseResult, error) {
 			runtimes.mu.Unlock()
 			return receipt.result, receipt.err
 		}
-		if runtimes.abandonedTokens == nil {
-			runtimes.abandonedTokens = make(map[uint64]struct{})
-		}
-		runtimes.abandonedTokens[token] = struct{}{}
+		mak.Set(&runtimes.abandonedTokens, token, struct{}{})
 		if preparation := runtimes.persistentPreparation; preparation != nil && preparation.token == token {
 			custodyHeld, writeDone, disposition := preparation.abandonDisposition()
 			result.Matched = true

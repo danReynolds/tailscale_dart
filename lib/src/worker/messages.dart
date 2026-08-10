@@ -32,97 +32,39 @@ enum _WorkerOperation {
     int? statusCode,
   }) => switch (this) {
     start => TailscaleUpException(message, code: code, statusCode: statusCode),
-    httpBind => TailscaleHttpException(
+    httpBind || httpCloseBinding => TailscaleHttpException(
       message,
       code: code,
       statusCode: statusCode,
     ),
-    httpCloseBinding => TailscaleHttpException(
+    tcpListenFd || tcpCloseFdListener => TailscaleTcpException(
       message,
       code: code,
       statusCode: statusCode,
     ),
-    tcpListenFd => TailscaleTcpException(
+    tlsListenFd || tlsDomains => TailscaleTlsException(
       message,
       code: code,
       statusCode: statusCode,
     ),
-    tcpCloseFdListener => TailscaleTcpException(
+    udpBindFd || udpCloseBinding => TailscaleUdpException(
       message,
       code: code,
       statusCode: statusCode,
     ),
-    tlsListenFd => TailscaleTlsException(
+    whois || status || peers => TailscaleStatusException(
       message,
       code: code,
       statusCode: statusCode,
     ),
-    udpBindFd => TailscaleUdpException(
+    diagMetrics || diagDERPMap || diagCheckUpdate || debugNodeState =>
+      TailscaleDiagException(message, code: code, statusCode: statusCode),
+    prefsGet || prefsUpdate => TailscalePrefsException(
       message,
       code: code,
       statusCode: statusCode,
     ),
-    udpCloseBinding => TailscaleUdpException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    whois => TailscaleStatusException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    tlsDomains => TailscaleTlsException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    diagMetrics => TailscaleDiagException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    diagDERPMap => TailscaleDiagException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    diagCheckUpdate => TailscaleDiagException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    debugNodeState => TailscaleDiagException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    status => TailscaleStatusException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    peers => TailscaleStatusException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    prefsGet => TailscalePrefsException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    prefsUpdate => TailscalePrefsException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    exitNodeSuggest => TailscaleExitNodeException(
-      message,
-      code: code,
-      statusCode: statusCode,
-    ),
-    exitNodeUseAuto => TailscaleExitNodeException(
+    exitNodeSuggest || exitNodeUseAuto => TailscaleExitNodeException(
       message,
       code: code,
       statusCode: statusCode,

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -318,17 +319,20 @@ func TestLocalAPIError_OmitsCodeWhenUnclassified(t *testing.T) {
 	}
 }
 
-func TestIsNotFound_StringFallback(t *testing.T) {
-	// Errors from older upstream versions that don't implement
-	// Status() still flag via the "404" substring fallback.
-	if !isNotFound(errors.New("whois returned 404")) {
-		t.Error("expected fallback string match for '404'")
+func TestIsNotFound_TypedOnly(t *testing.T) {
+	// The pinned upstream returns the exported sentinel from WhoIs; typed
+	// evidence is required and prose is deliberately not classified.
+	if !isNotFound(local.ErrPeerNotFound) {
+		t.Error("expected sentinel match for local.ErrPeerNotFound")
 	}
-	if !isNotFound(errors.New("peer not found")) {
-		t.Error("expected fallback string match for 'not found'")
+	if !isNotFound(fmt.Errorf("whois: %w", local.ErrPeerNotFound)) {
+		t.Error("expected wrapped sentinel match")
 	}
-	if isNotFound(errors.New("unrelated error")) {
-		t.Error("non-404 error should not match")
+	if isNotFound(errors.New("whois returned 404")) {
+		t.Error("bare '404' prose must not classify as not-found")
+	}
+	if isNotFound(errors.New("peer not found")) {
+		t.Error("bare 'not found' prose must not classify as not-found")
 	}
 }
 
@@ -498,11 +502,11 @@ func TestApplyServeClearRemovesLastHandlerAndFunnel(t *testing.T) {
 	}
 	sc.SetFunnel("demo.tailnet.ts.net", 80, true)
 
-	if err := applyServeClear(sc, st, serveClearPayload{
+	if err := applyServeClearForHostWithFunnelCleanup(sc, "demo.tailnet.ts.net", serveClearPayload{
 		TailnetPort: 80,
 		Path:        "/",
-	}); err != nil {
-		t.Fatalf("applyServeClear: %v", err)
+	}, true); err != nil {
+		t.Fatalf("applyServeClearForHostWithFunnelCleanup: %v", err)
 	}
 	if sc.Web != nil || sc.TCP != nil || sc.AllowFunnel != nil {
 		t.Fatalf("serve config not fully cleared: %+v", sc)
@@ -524,7 +528,7 @@ func TestRemoveServeWebHandlerPreservesOtherPaths(t *testing.T) {
 		}
 	}
 
-	removeServeWebHandler(sc, "demo.tailnet.ts.net", 443, "/api")
+	removeServeWebHandlerWithFunnelCleanup(sc, "demo.tailnet.ts.net", 443, "/api", true)
 	hp := ipn.HostPort("demo.tailnet.ts.net:443")
 	if sc.Web == nil || sc.Web[hp] == nil || sc.Web[hp].Handlers["/"] == nil {
 		t.Fatalf("root handler was removed: %+v", sc)
@@ -533,7 +537,7 @@ func TestRemoveServeWebHandlerPreservesOtherPaths(t *testing.T) {
 		t.Fatalf("/api handler still present: %+v", sc.Web[hp].Handlers)
 	}
 
-	removeServeWebHandler(sc, "demo.tailnet.ts.net", 443, "/")
+	removeServeWebHandlerWithFunnelCleanup(sc, "demo.tailnet.ts.net", 443, "/", true)
 	if sc.Web != nil || sc.TCP != nil {
 		t.Fatalf("serve config not fully cleared: %+v", sc)
 	}
@@ -552,15 +556,15 @@ func TestNormalizeServePathRejectsTraversalSegments(t *testing.T) {
 func TestValidateServeLocalAddressRequiresLoopback(t *testing.T) {
 	for _, address := range []string{"127.0.0.1", "127.12.34.56", "::1", "localhost", "LOCALHOST"} {
 		t.Run("allow "+address, func(t *testing.T) {
-			if err := validateServeLocalAddress(address); err != nil {
-				t.Fatalf("validateServeLocalAddress(%q): %v", address, err)
+			if _, err := normalizeServeLocalAddress(address); err != nil {
+				t.Fatalf("normalizeServeLocalAddress(%q): %v", address, err)
 			}
 		})
 	}
 	for _, address := range []string{"169.254.169.254", "192.168.1.1", "example.com", ""} {
 		t.Run("reject "+address, func(t *testing.T) {
-			if err := validateServeLocalAddress(address); err == nil {
-				t.Fatalf("validateServeLocalAddress(%q) succeeded, want error", address)
+			if _, err := normalizeServeLocalAddress(address); err == nil {
+				t.Fatalf("normalizeServeLocalAddress(%q) succeeded, want error", address)
 			}
 		})
 	}

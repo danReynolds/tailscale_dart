@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,11 +34,9 @@ type TcpFdListener struct {
 	LocalPort    int
 }
 
-var (
-	tcpFdListenerID       int64
-	tcpFdListenerRegistry = map[int64]net.Listener{}
-	tcpFdListenerMu       sync.Mutex
-)
+// tcpFdListenerID allocates monotonic listener ids; see fdRegistry for why
+// the counter stays process-global while the maps live on the runtime.
+var tcpFdListenerID int64
 
 // TcpDialFd opens an outbound TCP connection for the exact captured runtime
 // token and returns a POSIX fd connected to that tailnet stream.
@@ -47,13 +44,9 @@ var (
 // The returned fd is owned by the caller. Go keeps the other side of a
 // socketpair and pipes it to the tsnet connection.
 func TcpDialFd(runtimeToken uint64, host string, port int, timeout time.Duration) (*TcpFdConn, error) {
-	gate, ok := acquireNodeGateForRuntimeToken(runtimeToken)
-	if !ok {
-		return nil, fmt.Errorf(
-			"%w: TcpDialFd captured runtime %d is no longer current",
-			ErrRuntimeStale,
-			runtimeToken,
-		)
+	gate, err := gateForRuntimeToken("TcpDialFd", runtimeToken)
+	if err != nil {
+		return nil, err
 	}
 	if host == "" {
 		return nil, errors.New("host is required")
@@ -102,9 +95,9 @@ func TcpListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 		return nil, fmt.Errorf("invalid port %d", tailnetPort)
 	}
 
-	gate, ok := acquireNodeGate()
-	if !ok {
-		return nil, errors.New("TcpListenFd called before Start")
+	gate, err := gateForCurrentRuntime("TcpListenFd")
+	if err != nil {
+		return nil, err
 	}
 	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
 		return nil, fmt.Errorf("tcp listen data plane: %w", err)
@@ -124,9 +117,9 @@ func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 		return nil, fmt.Errorf("invalid port %d", tailnetPort)
 	}
 
-	gate, ok := acquireNodeGate()
-	if !ok {
-		return nil, errors.New("TlsListenFd called before Start")
+	gate, err := gateForCurrentRuntime("TlsListenFd")
+	if err != nil {
+		return nil, err
 	}
 	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
 		return nil, fmt.Errorf("tls listen data plane: %w", err)
@@ -153,6 +146,10 @@ func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 // mandatory first-Up bootstrap has completed. Deliberately absent is
 // ListenTLS: that convenience method calls Server.Up internally and would
 // create a second lifecycle/publication-reset authority.
+//
+// listenTLSOnReadyServer therefore mirrors the composition inside upstream
+// tsnet.Server.ListenTLS (tsnet/tsnet.go, v1.102.2) minus its internal Up
+// call; diff it against upstream on every tailscale.com bump.
 type readyTLSListenServer interface {
 	CertDomains() []string
 	Listen(network, addr string) (net.Listener, error)
@@ -185,17 +182,13 @@ func registerTcpFdListener(gate nodeGate, ln net.Listener, fallbackAddress strin
 	}
 
 	id := atomic.AddInt64(&tcpFdListenerID, 1)
-	tcpFdListenerMu.Lock()
-	// Commit-point epoch check (see nodeGate): a listen that raced teardown
-	// must not land in the registry behind closeAllTcpFdListeners' sweep,
-	// where it would hold its tailnet port with no owner until process exit.
-	if !gate.stillCurrent() {
-		tcpFdListenerMu.Unlock()
+	// Commit-point check (see fdRegistry): a listen that raced teardown must
+	// not land behind the runtime sweep, where it would hold its tailnet port
+	// with no owner until process exit.
+	if !gate.runtime.fd.tcpListeners.commit(gate, id, ln) {
 		ln.Close()
 		return nil, errors.New("tcp listen raced node teardown")
 	}
-	tcpFdListenerRegistry[id] = ln
-	tcpFdListenerMu.Unlock()
 
 	return &TcpFdListener{
 		ID:           id,
@@ -205,21 +198,16 @@ func registerTcpFdListener(gate nodeGate, ln net.Listener, fallbackAddress strin
 }
 
 func TcpAcceptFd(listenerID int64) (*TcpFdConn, bool, error) {
-	tcpFdListenerMu.Lock()
-	ln := tcpFdListenerRegistry[listenerID]
-	tcpFdListenerMu.Unlock()
-	if ln == nil {
+	listeners := currentTcpListeners()
+	ln, ok := listeners.get(listenerID)
+	if !ok {
 		return nil, true, nil
 	}
 
 	tailConn, err := ln.Accept()
 	if err != nil {
 		if errors.Is(err, net.ErrClosed) {
-			tcpFdListenerMu.Lock()
-			if tcpFdListenerRegistry[listenerID] == ln {
-				delete(tcpFdListenerRegistry, listenerID)
-			}
-			tcpFdListenerMu.Unlock()
+			listeners.removeMatching(listenerID, ln)
 			return nil, true, nil
 		}
 		return nil, false, fmt.Errorf("tailnet accept: %w", err)
@@ -250,25 +238,8 @@ func TcpAcceptFd(listenerID int64) (*TcpFdConn, bool, error) {
 }
 
 func TcpCloseFdListener(listenerID int64) {
-	tcpFdListenerMu.Lock()
-	ln := tcpFdListenerRegistry[listenerID]
-	delete(tcpFdListenerRegistry, listenerID)
-	tcpFdListenerMu.Unlock()
+	ln, _ := currentTcpListeners().take(listenerID)
 	if ln != nil {
-		ln.Close()
-	}
-}
-
-func closeAllTcpFdListeners() {
-	tcpFdListenerMu.Lock()
-	listeners := make([]net.Listener, 0, len(tcpFdListenerRegistry))
-	for id, ln := range tcpFdListenerRegistry {
-		listeners = append(listeners, ln)
-		delete(tcpFdListenerRegistry, id)
-	}
-	tcpFdListenerMu.Unlock()
-
-	for _, ln := range listeners {
 		ln.Close()
 	}
 }

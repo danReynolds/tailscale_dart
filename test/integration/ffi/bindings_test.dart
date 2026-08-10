@@ -258,7 +258,8 @@ void main() {
       calloc.free(headers);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
-      expect(parsed['error'], contains('HttpStart called before Start'));
+      expect(parsed['error'], contains('HttpStart captured runtime 999999'));
+      expect(parsed['code'], 'staleRuntime');
     });
   });
 

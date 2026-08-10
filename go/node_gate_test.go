@@ -155,11 +155,13 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 				return true
 			},
 			count: func() int {
-				tcpFdListenerMu.Lock()
-				defer tcpFdListenerMu.Unlock()
-				return len(tcpFdListenerRegistry)
+				return currentTcpListeners().size()
 			},
-			sweep: closeAllTcpFdListeners,
+			sweep: func() {
+				for _, ln := range currentTcpListeners().drain() {
+					_ = ln.Close()
+				}
+			},
 		},
 		{
 			name: "udp-bridge",
@@ -187,39 +189,48 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 				return true
 			},
 			count: func() int {
-				udpFdBindingMu.Lock()
-				defer udpFdBindingMu.Unlock()
-				return len(udpFdBindingRegistry)
+				return currentUdpBridges().size()
 			},
-			sweep: closeAllUdpBindings,
+			sweep: func() {
+				for _, bridge := range currentUdpBridges().drain() {
+					bridge.close()
+				}
+			},
 		},
 		{
-			name: "http-transport-cache",
+			name: "http-transport-slot",
 			register: func(t *testing.T, gate nodeGate) bool {
-				tr, oneOff := tailnetHTTPTransports.getCurrent(gate, newFakeTransport)
+				tr, oneOff := gate.runtime.tailnetTransport(newFakeTransport)
 				if tr == nil {
-					t.Fatal("getCurrent must always return a transport")
+					t.Fatal("tailnetTransport must always return a transport")
 				}
-				// Accepted iff the cache is now keyed to MY gate's server —
-				// "anything is cached" can't tell my registration from a
-				// pre-existing entry for the same server.
-				tailnetHTTPTransports.mu.Lock()
-				accepted := tailnetHTTPTransports.owner == any(gate.s)
-				tailnetHTTPTransports.mu.Unlock()
+				// Accepted iff MY runtime's slot now holds my transport; a
+				// one-off means the closed slot correctly refused it.
+				gate.runtime.httpMu.Lock()
+				accepted := gate.runtime.httpTransport == tr
+				gate.runtime.httpMu.Unlock()
 				if accepted && oneOff {
 					t.Fatal("an accepted registration must not be reported one-off")
 				}
 				return accepted
 			},
 			count: func() int {
-				tailnetHTTPTransports.mu.Lock()
-				defer tailnetHTTPTransports.mu.Unlock()
-				if tailnetHTTPTransports.transport != nil {
+				runtime := currentRuntime()
+				if runtime == nil {
+					return 0
+				}
+				runtime.httpMu.Lock()
+				defer runtime.httpMu.Unlock()
+				if runtime.httpTransport != nil {
 					return 1
 				}
 				return 0
 			},
-			sweep: func() { tailnetHTTPTransports.reset() },
+			sweep: func() {
+				if runtime := currentRuntime(); runtime != nil {
+					runtime.closeTailnetTransport()
+				}
+			},
 		},
 		// No Funnel row: Funnel is an AllowFunnel bit on the runtime-owned
 		// ServeConfig authority, not a listener registry.
@@ -233,11 +244,13 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 				return registerHttpBinding(gate, atomic.AddInt64(&httpBindingID, 1), state)
 			},
 			count: func() int {
-				httpBindingMu.Lock()
-				defer httpBindingMu.Unlock()
-				return len(httpBindingRegistry)
+				return currentHttpBindings().size()
 			},
-			sweep: closeAllHttpBindings,
+			sweep: func() {
+				for _, state := range currentHttpBindings().drain() {
+					state.close()
+				}
+			},
 		},
 	}
 
@@ -314,7 +327,7 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 				default:
 				}
 				if gate, ok := acquireNodeGate(); ok {
-					_, _ = tailnetHTTPTransports.getCurrent(gate, newFakeTransport)
+					_, _ = gate.runtime.tailnetTransport(newFakeTransport)
 				}
 			}
 		}()
@@ -339,7 +352,7 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 					continue
 				}
 				for j := 0; j < 512; j++ {
-					_, _ = tailnetHTTPTransports.getCurrent(gate, newFakeTransport)
+					_, _ = gate.runtime.tailnetTransport(newFakeTransport)
 				}
 			}
 		}()
@@ -368,19 +381,22 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 		for i := 0; i < 400; i++ {
 			runtimes.mu.Lock()
 			nodeEpoch.Add(1)
+			retiring := runtimes.current
 			runtimes.current = nil
 			runtimes.mu.Unlock()
-			tailnetHTTPTransports.mu.Lock()
-			if o := tailnetHTTPTransports.owner; o != nil && o != any(current) {
-				leaks.Add(1) // cross-lifecycle commit (check 1)
+			if retiring != nil {
+				// nodeRuntime.close's sweep: after this, any entry in the
+				// retiring slot is a stale commit that landed behind the
+				// sweep — the exact leak the closed bit makes impossible.
+				// (Cross-lifecycle pollution is structural now: a stale gate
+				// can only ever reach its own runtime's slot.)
+				retiring.closeTailnetTransport()
+				retiring.httpMu.Lock()
+				if retiring.httpTransport != nil {
+					leaks.Add(1) // landed behind the sweep
+				}
+				retiring.httpMu.Unlock()
 			}
-			tailnetHTTPTransports.mu.Unlock()
-			tailnetHTTPTransports.reset()
-			tailnetHTTPTransports.mu.Lock()
-			if tailnetHTTPTransports.transport != nil {
-				leaks.Add(1) // landed behind the sweep (check 2)
-			}
-			tailnetHTTPTransports.mu.Unlock()
 			runtimes.mu.Lock()
 			nextRuntime := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
 			nextRuntime.server = next
@@ -396,19 +412,21 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 		t.Fatalf("%d stale-gate commits landed behind a teardown sweep", got)
 	}
 
-	// Final teardown: after this, nothing may remain cached.
+	// Final teardown: after this, nothing may remain cached in the last
+	// lifecycle's slot.
 	runtimes.mu.Lock()
 	nodeEpoch.Add(1)
+	last := runtimes.current
 	runtimes.current = nil
 	runtimes.mu.Unlock()
-	tailnetHTTPTransports.reset()
-
-	tailnetHTTPTransports.mu.Lock()
-	leaked := tailnetHTTPTransports.transport != nil
-	owner := tailnetHTTPTransports.owner
-	tailnetHTTPTransports.mu.Unlock()
-	if leaked {
-		t.Fatalf("transport cache must be empty after the final sweep; owner=%v", owner)
+	if last != nil {
+		last.closeTailnetTransport()
+		last.httpMu.Lock()
+		leaked := last.httpTransport != nil
+		last.httpMu.Unlock()
+		if leaked {
+			t.Fatal("transport slot must be empty after the final sweep")
+		}
 	}
 }
 

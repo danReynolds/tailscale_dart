@@ -506,22 +506,19 @@ func TestStart_RuntimeCloseClosesListeners(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	httpBindingMu.Lock()
-	httpBindingRegistry[99] = &httpBindingState{
+	withLiveServer(t, nil, runtimeConfig{})
+	runtime := currentRuntime()
+	if !runtime.fd.httpBindings.commit(liveGate(t), 99, &httpBindingState{
 		binding:  HttpBinding{ID: 99, TailnetPort: 80},
 		ln:       oldLn,
 		requests: make(chan *HttpIncomingRequest, 1),
 		done:     make(chan struct{}),
+	}) {
+		t.Fatal("live binding registration must be accepted")
 	}
-	httpBindingMu.Unlock()
-
-	withLiveServer(t, nil, runtimeConfig{})
 	Stop()
 
-	httpBindingMu.Lock()
-	_, stillRegistered := httpBindingRegistry[99]
-	httpBindingMu.Unlock()
-	if stillRegistered {
+	if _, stillRegistered := runtime.fd.httpBindings.get(99); stillRegistered {
 		t.Error("HTTP binding should be removed by runtime close")
 	}
 

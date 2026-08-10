@@ -12,7 +12,6 @@ import "C"
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 	"unsafe"
@@ -72,6 +71,11 @@ func DuneConfigure(stateRoot *C.char, keybayNamespace *C.char, logLevel C.int) *
 	}
 	b, _ := json.Marshal(map[string]any{"stateDir": resolved})
 	return C.CString(string(b))
+}
+
+//export DuneSetEphemeralScratchParent
+func DuneSetEphemeralScratchParent(parent *C.char) {
+	tailscale.SetEphemeralScratchParent(C.GoString(parent))
 }
 
 //export DuneBeginPersistentPreparation
@@ -527,52 +531,8 @@ func lifecycleErrorJSON(err error, fields map[string]any) string {
 	for key, value := range fields {
 		m[key] = value
 	}
-	switch {
-	case errors.Is(err, tailscale.ErrLogoutIndeterminate):
-		// Preserve the remote-result uncertainty even when local close also
-		// failed; callers must not mistake it for a confirmed revocation.
-		m["code"] = "logoutIndeterminate"
-	case errors.Is(err, tailscale.ErrLifecycleBusy):
-		m["code"] = "lifecycleBusy"
-	case errors.Is(err, tailscale.ErrRuntimeCleanupFailed):
-		m["code"] = "runtimeCleanupFailed"
-	case errors.Is(err, tailscale.ErrConfigurationMismatch):
-		m["code"] = "configurationMismatch"
-	case errors.Is(err, tailscale.ErrDataPlaneNotReady):
-		m["code"] = "dataPlaneNotReady"
-	case errors.Is(err, tailscale.ErrPublicationBootstrapFailure):
-		m["code"] = "publicationBootstrapFailure"
-	case errors.Is(err, tailscale.ErrStartupAbandoned):
-		m["code"] = "startupAbandoned"
-	case errors.Is(err, tailscale.ErrRuntimeStale):
-		m["code"] = "staleRuntime"
-	case errors.Is(err, tailscale.ErrStateLeaseBusy):
-		m["code"] = "stateLeaseBusy"
-	case errors.Is(err, tailscale.ErrInvalidStateKey):
-		m["code"] = "invalidStateKey"
-	case errors.Is(err, tailscale.ErrMissingStateDEK):
-		m["code"] = "missingStateKey"
-	case errors.Is(err, tailscale.ErrOrphanedStateDEK):
-		m["code"] = "orphanedStateKey"
-	case errors.Is(err, tailscale.ErrLocalResetIncomplete):
-		m["code"] = "localResetIncomplete"
-	case errors.Is(err, tailscale.ErrConflictingStateFormats):
-		m["code"] = "conflictingStateFormats"
-	case errors.Is(err, tailscale.ErrLegacyStateUnsupported):
-		m["code"] = "legacyStateUnsupported"
-	case errors.Is(err, tailscale.ErrUnexpectedStateResidue),
-		errors.Is(err, tailscale.ErrEphemeralPersistentStateOccupied):
-		m["code"] = "unexpectedStateResidue"
-	case errors.Is(err, tailscale.ErrAtomicPersistenceFailure):
-		m["code"] = "atomicPersistenceFailure"
-	case errors.Is(err, tailscale.ErrEncryptedStateAuthentication):
-		m["code"] = "stateAuthenticationFailed"
-	case errors.Is(err, tailscale.ErrEncryptedStateUnsupported):
-		m["code"] = "unsupportedStateFormat"
-	case errors.Is(err, tailscale.ErrEncryptedStateInvalidFormat),
-		errors.Is(err, tailscale.ErrEncryptedStateOversized),
-		errors.Is(err, tailscale.ErrEncryptedStatePathSecurity):
-		m["code"] = "invalidStateFormat"
+	if code := tailscale.LifecycleErrorCode(err); code != "" {
+		m["code"] = code
 	}
 	b, _ := json.Marshal(m)
 	return string(b)

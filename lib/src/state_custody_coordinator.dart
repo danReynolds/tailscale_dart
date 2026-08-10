@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -12,6 +11,7 @@ import 'package:meta/meta.dart';
 import 'errors.dart';
 import 'ffi_bindings.dart' as native;
 import 'keybay_state_custody.dart';
+import 'native_error_code.dart';
 import 'worker/worker.dart';
 
 typedef CustodyTokenCall = Future<void> Function(int token);
@@ -461,20 +461,9 @@ final class StateCustodySession {
     if (disposition != StateCustodyDisposition.compensateKey) return;
 
     // If constructor resolution itself failed after native marked custody,
-    // retry resolution once for compensation. Failure remains fail-closed.
-    late final SecretStorage storage;
-    try {
-      storage = _storage ?? binding.createStorage();
-      await storage.delete(stateStoreDekEntry);
-    } catch (error, stackTrace) {
-      Error.throwWithStackTrace(
-        mapKeybayStateCustodyError(
-          error,
-          action: 'remove the Tailscale state key',
-        ),
-        stackTrace,
-      );
-    }
+    // the delete helper retries resolution once for compensation. Failure
+    // remains fail-closed.
+    await deleteStateStoreDek(binding, storage: _storage);
   }
 
   Future<void> _awaitSettledOperation() => _custodyTail;
@@ -502,32 +491,28 @@ void supplyTransferredDekToNative({
   ffi.Pointer<ffi.Uint8>? pointer;
   try {
     _validateDek(bytes);
-    pointer = calloc<ffi.Uint8>(stateStoreDekLength);
-    pointer.asTypedList(stateStoreDekLength).setAll(0, bytes);
-    final resultPointer = (supply ?? native.duneSupplyPreparedDek)(
-      token,
-      pointer,
-      stateStoreDekLength,
+    final dek = pointer = calloc<ffi.Uint8>(stateStoreDekLength);
+    dek.asTypedList(stateStoreDekLength).setAll(0, bytes);
+    final decoded = decodeNativeEnvelope(
+      () => (supply ?? native.duneSupplyPreparedDek)(
+        token,
+        dek,
+        stateStoreDekLength,
+      ),
+      onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+          TailscaleOperationException(
+            'state custody',
+            message,
+            code: code,
+            statusCode: statusCode,
+          ),
+      free: freeResponse,
     );
-    try {
-      final decoded = jsonDecode(resultPointer.toDartString());
-      if (decoded is! Map<String, dynamic>) {
-        throw const TailscaleOperationException(
-          'state custody',
-          'Native runtime returned an invalid DEK-transfer response.',
-        );
-      }
-      final message = decoded['error'] as String?;
-      if (message != null) {
-        final rawCode = decoded['code'] as String?;
-        final code = TailscaleErrorCode.values.firstWhere(
-          (candidate) => candidate.name == rawCode,
-          orElse: () => TailscaleErrorCode.unknown,
-        );
-        throw TailscaleOperationException('state custody', message, code: code);
-      }
-    } finally {
-      (freeResponse ?? native.duneFree)(resultPointer);
+    if (decoded is! Map<String, dynamic>) {
+      throw const TailscaleOperationException(
+        'state custody',
+        'Native runtime returned an invalid DEK-transfer response.',
+      );
     }
   } finally {
     _wipe(bytes);

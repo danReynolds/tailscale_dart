@@ -146,10 +146,42 @@ class _SmokeHomeState extends State<SmokeHome> {
         config.targetIp,
         timeout: const Duration(seconds: 20),
       );
+      final firstCycleOk = _requiredSmokeProbesOk(report);
+
+      // Restart cycle: the runtime lifecycle receipt. A second Server start in
+      // the same app process proves stop/start under the platform's real app
+      // sandbox (on Android: the zygote seccomp policy) and that the fresh
+      // generation still moves traffic. The reusable auth key re-enrolls the
+      // ephemeral node.
+      _event('restart: down');
+      await _demo.down();
+      final restartRunning = _demo.onStateChange.firstWhere(
+        (state) => state == NodeState.running,
+      );
+      _event('restart: up');
+      final restartStatus = await _demo.up(
+        stateDir: stateDir,
+        appId: 'dev.tailscale.dart.demo.smoke',
+        hostname: config.hostname,
+        authKey: config.authKey,
+        ephemeral: true,
+        controlUrl: Uri.parse(config.controlUrl),
+        logLevel: TailscaleLogLevel.error,
+      );
+      if (!restartStatus.isRunning) {
+        await restartRunning.timeout(_defaultTimeout);
+      }
+      final restartReport = await _demo.probeNode(
+        config.targetIp,
+        timeout: const Duration(seconds: 20),
+      );
+      final restartOk = _requiredSmokeProbesOk(restartReport);
+      _event('restart: down (final)');
+      await _demo.down();
 
       await _finish(
         SmokeResult(
-          ok: _requiredSmokeProbesOk(report),
+          ok: firstCycleOk && restartOk,
           startedAt: startedAt,
           finishedAt: DateTime.now().toUtc(),
           hostname: config.hostname,
@@ -159,6 +191,8 @@ class _SmokeHomeState extends State<SmokeHome> {
           services: services,
           nodesSeen: nodes.length,
           report: report,
+          restartReport: restartReport,
+          restartOk: restartOk,
           events: List.unmodifiable(_events),
         ),
       );
@@ -369,6 +403,8 @@ final class SmokeResult {
     required this.nodesSeen,
     required this.report,
     required this.events,
+    this.restartReport,
+    this.restartOk = false,
     this.error,
     this.stackTrace,
   });
@@ -383,6 +419,8 @@ final class SmokeResult {
   final DemoServices? services;
   final int nodesSeen;
   final DemoProbeReport? report;
+  final DemoProbeReport? restartReport;
+  final bool restartOk;
   final String? error;
   final String? stackTrace;
   final List<String> events;
@@ -405,33 +443,33 @@ final class SmokeResult {
             'udpPort': services!.udpPort,
           },
     'nodesSeen': nodesSeen,
-    'report': report == null
+    'report': _reportJson(report),
+    'restart': restartReport == null
         ? null
-        : {
-            'nodeIp': report!.nodeIp,
-            'ok': report!.ok,
-            'requiredOk': ok,
-            'requiredKinds': [
-              'whois',
-              'httpGet',
-              'httpPost',
-              'tcpEcho',
-              'udpEcho',
-            ],
-            'results': [
-              for (final result in report!.results)
-                {
-                  'kind': result.kind.name,
-                  'ok': result.ok,
-                  'durationMs': result.duration.inMilliseconds,
-                  'message': _shorten(result.message),
-                },
-            ],
-          },
+        : {'ok': restartOk, 'report': _reportJson(restartReport)},
     'error': error,
     'stackTrace': stackTrace == null ? null : _shorten(stackTrace!, 600),
     'eventCount': events.length,
   };
+
+  static Map<String, Object?>? _reportJson(DemoProbeReport? report) {
+    if (report == null) return null;
+    return {
+      'nodeIp': report.nodeIp,
+      'ok': report.ok,
+      'requiredOk': _requiredSmokeProbesOk(report),
+      'requiredKinds': ['whois', 'httpGet', 'httpPost', 'tcpEcho', 'udpEcho'],
+      'results': [
+        for (final result in report.results)
+          {
+            'kind': result.kind.name,
+            'ok': result.ok,
+            'durationMs': result.duration.inMilliseconds,
+            'message': _shorten(result.message),
+          },
+      ],
+    };
+  }
 }
 
 Future<void> _postResult(SmokeResult result) async {

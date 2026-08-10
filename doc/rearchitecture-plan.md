@@ -11,13 +11,21 @@ the current repository and open pull requests, Keybay's current platform
 contract, and Tailscale v1.102.2 source behavior.
 
 The current source now contains the `nodeRuntime`/supervisor foundations,
-R4d's atomic secure-state cutover, and R5's runtime-owned publication manager,
-first-`Up` readiness gate, and exact publication handles. Persistent nodes use
+R4d's atomic secure-state cutover, R5's runtime-owned publication manager,
+first-`Up` readiness gate, and exact publication handles, and the R7a-R7c
+ownership moves: the outbound HTTP transport, the TCP/UDP/HTTP fd registries,
+and the state watcher now live on `nodeRuntime` (2026-08-10). Persistent nodes use
 the Keybay-backed encrypted StateStore, ephemeral nodes use an in-memory Store,
 local forget is explicit, and the SQLite runtime/dependency are gone. This does
 not mark the plan or a release complete. Hosted Funnel-tailnet and replacement
 receipts plus the macOS production-Keybay persisted process-crash/restart
-receipt passed on 2026-08-10. Android/mobile and remaining platform receipts,
+receipt passed on 2026-08-10, and an Android arm64 emulator runtime receipt
+(API 33 app process: two full init/up/down generations reaching upstream
+NeedsLogin with zero SIGSYS, raw-disco pin as shipped, no tailnet traffic)
+passed the same day after fixing ephemeral scratch to use the Dart-supplied
+platform temp directory; the matching iOS-simulator runtime receipt (iPhone 17
+Pro, two generations to NeedsLogin, tsnet netstack boot logged, no crash)
+passed the same day. Mobile custody and remaining platform receipts,
 R6 permission/backup/sidecar evidence, later ownership work, and the R10
 integrated gate remain authoritative requirements below.
 
@@ -346,8 +354,9 @@ Each row is intentionally issue-sized. The dependency column is a merge-order
 constraint, not an instruction to combine the work into one large PR.
 
 Implementation snapshot: R2/R3 lifecycle foundations, R4a-R4d secure state,
-R5 publication convergence, and the first macOS R6 crash/restart receipt are
-present in the current source. The table
+R5 publication convergence, the first macOS R6 crash/restart receipt, and the
+R7a-R7c transport/registry/watcher ownership moves are present in the current
+source. The table
 continues to state each workstream's full acceptance result; code presence does
 not satisfy uncollected hosted, platform, or release receipts.
 
@@ -629,6 +638,16 @@ For each resource family:
 
 Do not introduce a generic registry framework unless at least three migrated
 families demonstrate the same useful abstraction.
+
+Two process-globals are accounted for as sanctioned permanent bridge
+infrastructure rather than R7 migration targets. The fd-reactor registry
+(`go/reactor.go`) maps reactor ids to their kqueue/epoll pollers for the
+Dart-owned reactor isolates; it is part of the retained POSIX fd capability
+bridge and holds no identity-bound state. The Android host-network snapshot
+cache (`go/netmon_snapshot.go`) backs upstream
+`netmon.RegisterInterfaceGetter`, a register-once process-global hook, so the
+latest host-supplied interface snapshot must stay readable across runtime
+generations.
 
 Identity-bound Dart capabilities participate in the same gate. R5 already makes
 every `TailscalePublishedService` token/epoch-conditional and runtime-owned.

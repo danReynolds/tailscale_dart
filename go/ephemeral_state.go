@@ -79,8 +79,18 @@ type ephemeralStateScratch struct {
 	closeErr error
 }
 
+// ephemeralScratchParent prefers the host-supplied platform temporary
+// directory (see SetEphemeralScratchParent) and falls back to os.TempDir()
+// for direct Go callers.
+func ephemeralScratchParent() string {
+	if parent := configuredEphemeralScratchParent(); parent != "" {
+		return parent
+	}
+	return os.TempDir()
+}
+
 func createEphemeralStateScratch() (*ephemeralStateScratch, error) {
-	return createEphemeralStateScratchIn(os.TempDir())
+	return createEphemeralStateScratchIn(ephemeralScratchParent())
 }
 
 func createEphemeralStateScratchIn(parent string) (*ephemeralStateScratch, error) {
@@ -151,7 +161,7 @@ func (scratch *ephemeralStateScratch) Close() error {
 // symlinks, broad modes, young directories, and busy leases are skipped.
 func sweepStaleEphemeralStateScratch() (int, error) {
 	return sweepStaleEphemeralStateScratchIn(
-		os.TempDir(),
+		ephemeralScratchParent(),
 		time.Now(),
 		ephemeralStateScratchMinimumAge,
 	)

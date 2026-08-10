@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+
+	"tailscale.com/util/mak"
 )
 
 // ErrInvalidStateKey means the supplied StateStore data-encryption key was
@@ -74,15 +76,25 @@ type persistentPreparation struct {
 	cleanupErr         error
 }
 
+// requireLiveLocked is the shared liveness guard for every exported operation
+// on a preparation. Callers must hold phaseMu. Abandoned wins over terminating
+// so rescue evidence is never masked, and one shared guard means a future
+// phase flag cannot be silently omitted at a single entry point.
+func (p *persistentPreparation) requireLiveLocked() error {
+	if p.abandoned {
+		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, p.token)
+	}
+	if p.finishing || p.adopted {
+		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, p.token)
+	}
+	return nil
+}
+
 func (p *persistentPreparation) beginOperation(name string) (func() error, error) {
 	p.phaseMu.Lock()
-	if p.finishing || p.adopted {
+	if err := p.requireLiveLocked(); err != nil {
 		p.phaseMu.Unlock()
-		return nil, fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, p.token)
-	}
-	if p.abandoned {
-		p.phaseMu.Unlock()
-		return nil, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, p.token)
+		return nil, err
 	}
 	if !p.acquisitionSettled || p.lease == nil {
 		p.phaseMu.Unlock()
@@ -256,11 +268,8 @@ func MarkCustodyActive(token uint64) error {
 	}
 	preparation.phaseMu.Lock()
 	defer preparation.phaseMu.Unlock()
-	if preparation.abandoned {
-		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
-	}
-	if preparation.finishing || preparation.adopted {
-		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
+	if err := preparation.requireLiveLocked(); err != nil {
+		return err
 	}
 	if !preparation.acquisitionSettled || preparation.lease == nil {
 		return fmt.Errorf("%w: state lease acquisition has not completed", ErrLifecycleBusy)
@@ -281,11 +290,8 @@ func MarkCustodyWriteAttempted(token uint64) error {
 	}
 	preparation.phaseMu.Lock()
 	defer preparation.phaseMu.Unlock()
-	if preparation.abandoned {
-		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
-	}
-	if preparation.finishing || preparation.adopted {
-		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
+	if err := preparation.requireLiveLocked(); err != nil {
+		return err
 	}
 	if !preparation.custodyActive {
 		return fmt.Errorf("custody is not active for preparation token %d", token)
@@ -307,11 +313,8 @@ func SupplyPreparedDEK(token uint64, raw []byte) error {
 	}
 	preparation.phaseMu.Lock()
 	defer preparation.phaseMu.Unlock()
-	if preparation.abandoned {
-		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
-	}
-	if preparation.finishing || preparation.adopted {
-		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, token)
+	if err := preparation.requireLiveLocked(); err != nil {
+		return err
 	}
 	if !preparation.custodyActive {
 		return fmt.Errorf("custody is not active for preparation token %d", token)
@@ -339,13 +342,9 @@ func runInitialEnvelopeWrite(
 	}
 
 	preparation.phaseMu.Lock()
-	if preparation.abandoned {
+	if err := preparation.requireLiveLocked(); err != nil {
 		preparation.phaseMu.Unlock()
-		return fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, preparation.token)
-	}
-	if preparation.finishing || preparation.adopted {
-		preparation.phaseMu.Unlock()
-		return fmt.Errorf("%w: preparation token %d is terminating", ErrRuntimeStale, preparation.token)
+		return err
 	}
 	if !preparation.custodyWriteAttempted || !preparation.dekSupplied {
 		preparation.phaseMu.Unlock()
@@ -520,10 +519,7 @@ func finishClaimedPersistentPreparation(preparation *persistentPreparation, prim
 	if runtimes.persistentPreparation == preparation {
 		runtimes.persistentPreparation = nil
 		if abandoned {
-			if runtimes.completedPreparations == nil {
-				runtimes.completedPreparations = make(map[uint64]preparationOutcome)
-			}
-			runtimes.completedPreparations[preparation.token] = preparationOutcome{err: err}
+			mak.Set(&runtimes.completedPreparations, preparation.token, preparationOutcome{err: err})
 		}
 	}
 	runtimes.mu.Unlock()

@@ -208,6 +208,28 @@ final class PublicationBootstrapFailureRegistry {
   int get retainedFailureCount => _failures.length;
 }
 
+/// Test-only crash-injection points inside the supervised worker's lifecycle
+/// dispatch, armed through the `Tailscale.debugTerminateWorkerForTesting`
+/// wrapper. Each value names exactly one termination site.
+@visibleForTesting
+enum DebugTerminatePoint {
+  /// Immediately after the next down/logout intent is tagged and before its
+  /// native acknowledgement.
+  nextShutdown,
+
+  /// After the next native start response but before the public up operation
+  /// can complete its stable-state wait.
+  afterNextStart,
+
+  /// Immediately after the next logout command is sent to the worker, before
+  /// its native acknowledgement reaches Dart.
+  afterNextLogoutDispatch,
+
+  /// After native down/logout has produced a terminal receipt but before that
+  /// receipt can be delivered to the caller isolate.
+  afterNextLifecycleNativeResult,
+}
+
 /// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
 final class Worker {
   Worker({
@@ -242,9 +264,15 @@ final class Worker {
   onExit;
   final void Function(SendPort) _entrypoint;
 
-  // Requests are processed synchronously on the worker isolate and each
-  // command produces exactly one response in request order, so a FIFO queue is
-  // sufficient for matching RPC responses without request IDs.
+  // Pending RPC responses, matched to their commands purely by FIFO position —
+  // the protocol carries no request IDs.
+  //
+  // INVARIANT: this pairing is sound only because the worker entrypoint
+  // handles each command synchronously, sending exactly one response per
+  // command in receipt order. Any `await` inside a command handler before its
+  // reply is sent breaks response pairing — a later command could then
+  // complete an earlier command's completer. Keep entrypoint handlers
+  // synchronous, or introduce tagged request IDs first.
   final Queue<Completer<_WorkerResponse>> _pendingRequests =
       Queue<Completer<_WorkerResponse>>();
   final LifecycleQueue _lifecycle = LifecycleQueue();
@@ -259,10 +287,8 @@ final class Worker {
   bool _disposed = false;
   bool _expectedExit = false;
   bool _logoutDispatched = false;
-  bool _terminateOnNextShutdown = false;
-  bool _terminateAfterNextStart = false;
-  bool _terminateAfterNextLogoutDispatch = false;
-  bool _terminateAfterNextLifecycleNativeResult = false;
+  final Set<DebugTerminatePoint> _armedDebugTerminations =
+      <DebugTerminatePoint>{};
   Isolate? _isolate;
   int? _runtimeToken;
   int? _preparingToken;
@@ -412,29 +438,17 @@ final class Worker {
     await _sendPort;
   }
 
+  /// Arms one test-only termination at [point]'s exact lifecycle injection
+  /// site. Each armed point fires once, on the next matching call.
   @internal
-  void debugTerminateOnNextShutdown() {
-    _terminateOnNextShutdown = true;
-  }
-
-  @internal
-  void debugTerminateAfterNextStart() {
-    _terminateAfterNextStart = true;
-  }
-
-  @internal
-  void debugTerminateAfterNextLogoutDispatch() {
-    _terminateAfterNextLogoutDispatch = true;
-  }
-
-  @internal
-  void debugTerminateAfterNextLifecycleNativeResult() {
-    _terminateAfterNextLifecycleNativeResult = true;
+  void debugArmTermination(DebugTerminatePoint point) {
+    _armedDebugTerminations.add(point);
   }
 
   void _terminateForDebugIfRequested() {
-    if (!_terminateOnNextShutdown) return;
-    _terminateOnNextShutdown = false;
+    if (!_armedDebugTerminations.remove(DebugTerminatePoint.nextShutdown)) {
+      return;
+    }
     _isolate?.kill(priority: Isolate.immediate);
   }
 
@@ -545,8 +559,9 @@ final class Worker {
           );
         }
         _runtimeToken = response.runtimeToken;
-        if (_terminateAfterNextStart) {
-          _terminateAfterNextStart = false;
+        if (_armedDebugTerminations.remove(
+          DebugTerminatePoint.afterNextStart,
+        )) {
           _isolate?.kill(priority: Isolate.immediate);
         }
         return WorkerStartResult(
@@ -777,8 +792,9 @@ final class Worker {
 
   Future<WorkerCloseResult> down() {
     final token = _runtimeToken ?? 0;
-    final terminateAfterNativeResult = _terminateAfterNextLifecycleNativeResult;
-    _terminateAfterNextLifecycleNativeResult = false;
+    final terminateAfterNativeResult = _armedDebugTerminations.remove(
+      DebugTerminatePoint.afterNextLifecycleNativeResult,
+    );
     _expectedExit = token > 0;
     _terminateForDebugIfRequested();
     return _lifecycle.run(() async {
@@ -829,11 +845,12 @@ final class Worker {
             code: TailscaleErrorCode.startupAbandoned,
           );
         }
-        final terminateAfterDispatch = _terminateAfterNextLogoutDispatch;
-        _terminateAfterNextLogoutDispatch = false;
-        final terminateAfterNativeResult =
-            _terminateAfterNextLifecycleNativeResult;
-        _terminateAfterNextLifecycleNativeResult = false;
+        final terminateAfterDispatch = _armedDebugTerminations.remove(
+          DebugTerminatePoint.afterNextLogoutDispatch,
+        );
+        final terminateAfterNativeResult = _armedDebugTerminations.remove(
+          DebugTerminatePoint.afterNextLifecycleNativeResult,
+        );
         final response = await _request<_WorkerAckResponse>(
           _WorkerLogoutCommand(
             runtimeToken: token,

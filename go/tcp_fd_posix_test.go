@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/tsnet"
 )
 
 type readyTLSListenServerStub struct {
@@ -66,28 +67,27 @@ func TestNewSocketPairConn_PipesBytesBothWays(t *testing.T) {
 	}
 }
 
-func TestCloseAllTcpFdListenersClosesAndClearsRegistry(t *testing.T) {
+func TestRuntimeSweepClosesAndClearsTcpListeners(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tcpFdListenerMu.Lock()
-	tcpFdListenerRegistry[999] = ln
-	tcpFdListenerMu.Unlock()
+	withLiveServer(t, &tsnet.Server{})
+	runtime := currentRuntime()
+	if !runtime.fd.tcpListeners.commit(liveGate(t), 999, ln) {
+		t.Fatal("live listener registration must be accepted")
+	}
 
-	closeAllTcpFdListeners()
-	closeAllTcpFdListeners()
+	runtime.fd.closeAll()
+	runtime.fd.closeAll()
 
-	tcpFdListenerMu.Lock()
-	got := len(tcpFdListenerRegistry)
-	tcpFdListenerMu.Unlock()
-	if got != 0 {
+	if got := runtime.fd.tcpListeners.size(); got != 0 {
 		t.Fatalf("listener registry length = %d, want 0", got)
 	}
 
 	if _, err := ln.Accept(); err == nil {
-		t.Fatal("listener was still open after closeAllTcpFdListeners")
+		t.Fatal("listener was still open after the runtime sweep")
 	}
 }
 

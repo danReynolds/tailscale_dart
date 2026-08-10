@@ -13,6 +13,7 @@ import "C"
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 	"unsafe"
 
@@ -50,6 +51,51 @@ func DuneConfigure(stateRoot *C.char, keybayNamespace *C.char, logLevel C.int) *
 	}
 	b, _ := json.Marshal(map[string]any{"stateDir": resolved})
 	return C.CString(string(b))
+}
+
+//export DuneBeginPersistentPreparation
+func DuneBeginPersistentPreparation(requestToken C.ulonglong) *C.char {
+	if err := tailscale.BeginPersistentPreparation(uint64(requestToken)); err != nil {
+		return lifecycleError(err)
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneMarkCustodyActive
+func DuneMarkCustodyActive(requestToken C.ulonglong) *C.char {
+	if err := tailscale.MarkCustodyActive(uint64(requestToken)); err != nil {
+		return lifecycleError(err)
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneMarkCustodyWriteAttempted
+func DuneMarkCustodyWriteAttempted(requestToken C.ulonglong) *C.char {
+	if err := tailscale.MarkCustodyWriteAttempted(uint64(requestToken)); err != nil {
+		return lifecycleError(err)
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneSupplyPreparedDEK
+func DuneSupplyPreparedDEK(requestToken C.ulonglong, key *C.uint8_t, keyLength C.longlong) *C.char {
+	if keyLength != C.longlong(32) || key == nil {
+		err := fmt.Errorf("%w: got %d bytes, want 32", tailscale.ErrInvalidStateKey, int64(keyLength))
+		return lifecycleError(err)
+	}
+	raw := unsafe.Slice((*byte)(unsafe.Pointer(key)), 32)
+	if err := tailscale.SupplyPreparedDEK(uint64(requestToken), raw); err != nil {
+		return lifecycleError(err)
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneFinishCustody
+func DuneFinishCustody(requestToken C.ulonglong, cleanupSucceeded C.int) *C.char {
+	if err := tailscale.FinishCustody(uint64(requestToken), cleanupSucceeded != 0); err != nil {
+		return lifecycleError(err)
+	}
+	return C.CString(`{"ok":true}`)
 }
 
 //export DuneHttpStart
@@ -418,6 +464,10 @@ func lifecycleErrorJSON(err error, fields map[string]any) string {
 		m["code"] = "startupAbandoned"
 	case errors.Is(err, tailscale.ErrRuntimeStale):
 		m["code"] = "staleRuntime"
+	case errors.Is(err, tailscale.ErrStateLeaseBusy):
+		m["code"] = "stateLeaseBusy"
+	case errors.Is(err, tailscale.ErrInvalidStateKey):
+		m["code"] = "invalidStateKey"
 	}
 	b, _ := json.Marshal(m)
 	return string(b)
@@ -435,14 +485,16 @@ func logoutDisposition(result tailscale.LogoutResult) map[string]any {
 
 func runtimeCloseDisposition(result tailscale.RuntimeCloseResult) map[string]any {
 	return map[string]any{
-		"token":         result.Token,
-		"operation":     result.Operation,
-		"matched":       result.Matched,
-		"started":       result.Started,
-		"emitStopped":   result.EmitStopped,
-		"pending":       result.Pending,
-		"noState":       result.NoState,
-		"cleanupFailed": result.CleanupFailed,
+		"token":              result.Token,
+		"operation":          result.Operation,
+		"matched":            result.Matched,
+		"started":            result.Started,
+		"emitStopped":        result.EmitStopped,
+		"pending":            result.Pending,
+		"noState":            result.NoState,
+		"cleanupFailed":      result.CleanupFailed,
+		"custodyHeld":        result.CustodyHeld,
+		"custodyDisposition": result.CustodyDisposition,
 	}
 }
 

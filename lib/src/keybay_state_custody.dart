@@ -1,3 +1,6 @@
+import 'dart:math';
+import 'dart:typed_data';
+
 import 'package:keybay/keybay.dart';
 import 'package:meta/meta.dart';
 
@@ -8,6 +11,9 @@ const String stateStoreDekEntry = 'tailscale/state-store/v1/dek';
 
 /// Non-secret label shown for the DEK in platform credential UIs.
 const String stateStoreDekLabel = 'Tailscale node-state encryption key';
+
+/// Fixed binary key size used by the Go encrypted StateStore.
+const int stateStoreDekLength = 32;
 
 const String _keybayNamespaceSuffix = '.tailscale';
 const int _keybayAppIdLimit = 120;
@@ -74,4 +80,13 @@ String deriveKeybayAppId(String hostAppId) {
     );
   }
   return '$hostAppId$_keybayNamespaceSuffix';
+}
+
+/// Generates one installation-level DEK without any text encoding.
+@internal
+Uint8List generateStateStoreDek() {
+  final random = Random.secure();
+  return Uint8List.fromList(
+    List<int>.generate(stateStoreDekLength, (_) => random.nextInt(256)),
+  );
 }

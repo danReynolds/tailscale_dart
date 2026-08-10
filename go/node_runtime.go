@@ -197,6 +197,7 @@ type runtimeController struct {
 	current               *nodeRuntime
 	draining              *drainingRuntime
 	logout                *logoutOperation
+	persistentPreparation *persistentPreparation
 	abandonedTokens       map[uint64]struct{}
 	completedPreparations map[uint64]preparationOutcome
 	completedLifecycle    map[uint64]lifecycleReceipt
@@ -309,26 +310,40 @@ func Configure(stateRoot, keybayNamespace string, logLevel int32) (string, error
 
 const ownedStateSubdirectory = "tailscale"
 
-// configuredStateDir returns the only state directory native lifecycle calls
-// may use. The root inode is revalidated so deleting/replacing the configured
-// directory cannot silently redirect credentials to a different filesystem
-// object at the same lexical path.
-func configuredStateDir() (string, error) {
+// configuredStateRoot returns the canonical app-owned coordination directory.
+// Its inode is revalidated so deleting/replacing the configured directory
+// cannot silently redirect credentials or the persistent-state lease.
+func configuredStateRootSnapshot() (string, os.FileInfo, error) {
 	runtimes.mu.Lock()
 	configured := runtimes.configured
 	root := runtimes.stateRoot
 	rootInfo := runtimes.stateRootInfo
 	runtimes.mu.Unlock()
 	if !configured || rootInfo == nil {
-		return "", fmt.Errorf("%w: call Tailscale.init before using the native runtime", ErrConfigurationMismatch)
+		return "", nil, fmt.Errorf("%w: call Tailscale.init before using the native runtime", ErrConfigurationMismatch)
 	}
 
 	info, err := os.Stat(root)
 	if err != nil {
-		return "", fmt.Errorf("%w: configured state root is unavailable: %v", ErrConfigurationMismatch, err)
+		return "", nil, fmt.Errorf("%w: configured state root is unavailable: %v", ErrConfigurationMismatch, err)
 	}
 	if !os.SameFile(rootInfo, info) {
-		return "", fmt.Errorf("%w: configured state root was replaced", ErrConfigurationMismatch)
+		return "", nil, fmt.Errorf("%w: configured state root was replaced", ErrConfigurationMismatch)
+	}
+	return root, rootInfo, nil
+}
+
+func configuredStateRoot() (string, error) {
+	root, _, err := configuredStateRootSnapshot()
+	return root, err
+}
+
+// configuredStateDir returns the package-owned Tailscale subtree selected by
+// Configure. The external lock and reset marker deliberately live beside it.
+func configuredStateDir() (string, error) {
+	root, err := configuredStateRoot()
+	if err != nil {
+		return "", err
 	}
 	return filepath.Join(root, ownedStateSubdirectory), nil
 }
@@ -452,7 +467,7 @@ func (c *runtimeController) reserve(token uint64, config runtimeConfig) (*nodeRu
 	if c.logout != nil {
 		return nil, nil, fmt.Errorf("%w: logout token %d is still in progress", ErrLifecycleBusy, c.logout.token)
 	}
-	if c.candidate != nil || c.draining != nil {
+	if c.persistentPreparation != nil || c.candidate != nil || c.draining != nil {
 		return nil, nil, fmt.Errorf("%w: another node lifecycle transition is in progress", ErrLifecycleBusy)
 	}
 	if c.current != nil {
@@ -670,14 +685,16 @@ func (c *runtimeController) finishLogout(
 // non-cancellable Server.Start is still unwinding; the token is already
 // quarantined and cannot commit or admit a replacement runtime.
 type RuntimeCloseResult struct {
-	Token         uint64 `json:"token"`
-	Operation     string `json:"operation,omitempty"`
-	Matched       bool   `json:"matched"`
-	Started       bool   `json:"started"`
-	EmitStopped   bool   `json:"emitStopped,omitempty"`
-	Pending       bool   `json:"pending"`
-	NoState       bool   `json:"noState,omitempty"`
-	CleanupFailed bool   `json:"cleanupFailed,omitempty"`
+	Token              uint64             `json:"token"`
+	Operation          string             `json:"operation,omitempty"`
+	Matched            bool               `json:"matched"`
+	Started            bool               `json:"started"`
+	EmitStopped        bool               `json:"emitStopped,omitempty"`
+	Pending            bool               `json:"pending"`
+	NoState            bool               `json:"noState,omitempty"`
+	CleanupFailed      bool               `json:"cleanupFailed,omitempty"`
+	CustodyHeld        bool               `json:"custodyHeld,omitempty"`
+	CustodyDisposition CustodyDisposition `json:"custodyDisposition,omitempty"`
 }
 
 func detachRuntimeLocked(runtime *nodeRuntime, receiptOperation string) *drainingRuntime {
@@ -740,6 +757,30 @@ func AbandonRuntime(token uint64) (RuntimeCloseResult, error) {
 			runtimes.abandonedTokens = make(map[uint64]struct{})
 		}
 		runtimes.abandonedTokens[token] = struct{}{}
+		if preparation := runtimes.persistentPreparation; preparation != nil && preparation.token == token {
+			custodyHeld, writeDone, disposition := preparation.abandonDisposition()
+			result.Matched = true
+			result.Pending = true
+			runtimes.mu.Unlock()
+
+			if writeDone != nil {
+				<-writeDone
+				disposition = preparation.custodyDisposition()
+			}
+			preparation.phaseMu.Lock()
+			acquisitionSettled := preparation.acquisitionSettled
+			preparation.phaseMu.Unlock()
+			if !acquisitionSettled {
+				return result, nil
+			}
+			if custodyHeld {
+				result.CustodyHeld = true
+				result.CustodyDisposition = disposition
+				return result, nil
+			}
+			result.Pending = false
+			return result, finishPersistentPreparation(preparation, nil)
+		}
 		if logout := runtimes.logout; logout != nil && logout.token == token {
 			done := logout.done
 			runtimes.mu.Unlock()
@@ -785,6 +826,12 @@ func AwaitRuntimeQuiescence(token uint64) error {
 	}
 	for {
 		runtimes.mu.Lock()
+		if preparation := runtimes.persistentPreparation; preparation != nil && preparation.token == token {
+			done := preparation.done
+			runtimes.mu.Unlock()
+			<-done
+			return preparation.result()
+		}
 		if logout := runtimes.logout; logout != nil && logout.token == token {
 			done := logout.done
 			runtimes.mu.Unlock()

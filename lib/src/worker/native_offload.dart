@@ -74,6 +74,8 @@ final class RuntimeQuarantineResult {
     required this.pending,
     required this.noState,
     required this.cleanupFailed,
+    required this.custodyHeld,
+    required this.custodyDisposition,
     required this.error,
   });
 
@@ -85,7 +87,35 @@ final class RuntimeQuarantineResult {
   final bool pending;
   final bool noState;
   final bool cleanupFailed;
+  final bool custodyHeld;
+  final StateCustodyDisposition custodyDisposition;
   final TailscaleOperationException? error;
+}
+
+StateCustodyDisposition _parseCustodyDisposition(
+  String? raw, {
+  required bool custodyHeld,
+}) {
+  if (!custodyHeld && (raw == null || raw.isEmpty)) {
+    return StateCustodyDisposition.none;
+  }
+  if (custodyHeld) {
+    return switch (raw) {
+      'none' => StateCustodyDisposition.none,
+      'compensateKey' => StateCustodyDisposition.compensateKey,
+      'preserveCoherentPair' => StateCustodyDisposition.preserveCoherentPair,
+      _ => throw TailscaleOperationException(
+        'runtime quarantine',
+        'Native retained state custody without a valid cleanup disposition.',
+        code: TailscaleErrorCode.runtimeCleanupFailed,
+      ),
+    };
+  }
+  throw TailscaleOperationException(
+    'runtime quarantine',
+    'Native returned a custody disposition without retaining custody.',
+    code: TailscaleErrorCode.runtimeCleanupFailed,
+  );
 }
 
 Future<RuntimeQuarantineResult> quarantineNativeRuntime(int token) =>
@@ -96,6 +126,7 @@ RuntimeQuarantineResult _execRuntimeQuarantine(int token) {
       _decodeNativeJson(() => native.duneAbandon(token))
           as Map<String, dynamic>;
   final errorMessage = result['error'] as String?;
+  final custodyHeld = result['custodyHeld'] == true;
   return RuntimeQuarantineResult(
     token: result['token'] as int? ?? token,
     operation: result['operation'] as String?,
@@ -105,6 +136,11 @@ RuntimeQuarantineResult _execRuntimeQuarantine(int token) {
     pending: result['pending'] == true,
     noState: result['noState'] == true,
     cleanupFailed: result['cleanupFailed'] == true,
+    custodyHeld: custodyHeld,
+    custodyDisposition: _parseCustodyDisposition(
+      result['custodyDisposition'] as String?,
+      custodyHeld: custodyHeld,
+    ),
     error: errorMessage == null
         ? null
         : TailscaleOperationException(
@@ -115,6 +151,59 @@ RuntimeQuarantineResult _execRuntimeQuarantine(int token) {
           ),
   );
 }
+
+Future<void> beginNativePersistentPreparation(int token) => Isolate.run(() {
+  _callNativeJson(
+    () => native.duneBeginPersistentPreparation(token),
+    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+        TailscaleOperationException(
+          'state preparation',
+          message,
+          code: code,
+          statusCode: statusCode,
+        ),
+  );
+});
+
+Future<void> markNativeCustodyActive(int token) => Isolate.run(() {
+  _callNativeJson(
+    () => native.duneMarkCustodyActive(token),
+    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+        TailscaleOperationException(
+          'state custody',
+          message,
+          code: code,
+          statusCode: statusCode,
+        ),
+  );
+});
+
+Future<void> markNativeCustodyWriteAttempted(int token) => Isolate.run(() {
+  _callNativeJson(
+    () => native.duneMarkCustodyWriteAttempted(token),
+    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+        TailscaleOperationException(
+          'state custody',
+          message,
+          code: code,
+          statusCode: statusCode,
+        ),
+  );
+});
+
+Future<void> finishNativeCustody(int token, {required bool cleanupSucceeded}) =>
+    Isolate.run(() {
+      _callNativeJson(
+        () => native.duneFinishCustody(token, cleanupSucceeded ? 1 : 0),
+        onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+            TailscaleOperationException(
+              'state custody',
+              message,
+              code: code,
+              statusCode: statusCode,
+            ),
+      );
+    });
 
 Future<void> awaitNativeRuntimeQuiescence(int token) => Isolate.run(() {
   _callNativeJson(

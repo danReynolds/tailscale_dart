@@ -22,6 +22,7 @@ import 'src/ffi_bindings.dart' as native;
 import 'src/http_fd_client.dart';
 import 'src/keybay_state_custody.dart';
 import 'src/runtime_config.dart';
+import 'src/state_custody_coordinator.dart';
 import 'src/status.dart';
 import 'src/worker/worker.dart';
 
@@ -179,6 +180,7 @@ class Tailscale implements TailscaleClient {
       <int, RuntimeQuarantineResult>{};
   int _nextRuntimeToken = 1;
   final LifecycleQueue _supervisorLifecycle = LifecycleQueue();
+  final StateCustodyCoordinator _stateCustody = StateCustodyCoordinator();
   int? _activeUpToken;
   Completer<Object?>? _activeUpWorkerExit;
 
@@ -296,6 +298,7 @@ class Tailscale implements TailscaleClient {
   ) {
     if (!identical(_workerInstance, worker)) return;
     _workerInstance = null;
+    final recoveryToken = runtimeToken ?? _activeUpToken;
     final activeUpExit = _activeUpWorkerExit;
     if (_activeUpToken != null &&
         activeUpExit != null &&
@@ -305,7 +308,7 @@ class Tailscale implements TailscaleClient {
     _reset();
     _trackWorkerRecovery(
       () => _recoverExitedWorker(
-        runtimeToken: runtimeToken,
+        runtimeToken: recoveryToken,
         expected: expected,
         cause: cause,
       ),
@@ -323,6 +326,12 @@ class Tailscale implements TailscaleClient {
     try {
       final token = runtimeToken ?? 0;
       quarantine = await quarantineNativeRuntime(token);
+      if (quarantine.custodyHeld) {
+        await _stateCustody.settleAbandonment(
+          token: quarantine.token,
+          disposition: quarantine.custodyDisposition,
+        );
+      }
       final quarantineError = quarantine.error;
       final hasTerminalReceipt = quarantine.operation != null;
       if (!hasTerminalReceipt && quarantineError != null) {
@@ -514,6 +523,12 @@ class Tailscale implements TailscaleClient {
         // runtime token. Quarantining its request token correctly matches
         // nothing; do not reset, classify, or republish that live runtime.
         if (!result.matched) return;
+        if (result.custodyHeld) {
+          await _stateCustody.settleAbandonment(
+            token: result.token,
+            disposition: result.custodyDisposition,
+          );
+        }
         if (result.pending) {
           await awaitNativeRuntimeQuiescence(token);
         }

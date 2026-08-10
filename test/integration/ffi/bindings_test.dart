@@ -10,13 +10,17 @@
 library;
 
 import 'dart:convert';
+import 'dart:ffi' as ffi;
 import 'dart:io';
+import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:tailscale/tailscale.dart';
 import 'package:tailscale/src/ffi_bindings.dart' as native;
+import 'package:tailscale/src/state_custody_coordinator.dart';
 
 import '../support/process_state_root.dart';
 
@@ -120,6 +124,63 @@ void main() {
 
       expect(abandon, containsPair('token', 525252));
       expect(quiescence, {'ok': true});
+    });
+
+    test('persistent custody symbols accept an arbitrary binary DEK', () {
+      clearProcessIntegrationState(configuredStateBaseDir);
+      const token = 525253;
+      var completed = false;
+      addTearDown(() {
+        if (completed) return;
+        final abandon = _decodeAndFree(native.duneAbandon(token));
+        if (abandon['custodyHeld'] == true) {
+          _decodeAndFree(native.duneFinishCustody(token, 1));
+        }
+        _decodeAndFree(native.duneAwaitRuntimeQuiescence(token));
+      });
+      final begin = _decodeAndFree(
+        native.duneBeginPersistentPreparation(token),
+      );
+      expect(begin, {'ok': true});
+
+      final active = _decodeAndFree(native.duneMarkCustodyActive(token));
+      expect(active, {'ok': true});
+      final invalid = calloc<ffi.Uint8>(31);
+      try {
+        final rejected = _decodeAndFree(
+          native.duneSupplyPreparedDek(token, invalid, 31),
+        );
+        expect(rejected, containsPair('code', 'invalidStateKey'));
+      } finally {
+        invalid.asTypedList(31).fillRange(0, 31, 0);
+        calloc.free(invalid);
+      }
+      final key = Uint8List.fromList(
+        List<int>.generate(32, (index) => index * 11 & 0xff),
+      );
+      key[0] = 0;
+      key[key.length - 1] = 0xff;
+      supplyTransferredDekToNative(
+        token: token,
+        transferred: TransferableTypedData.fromList(<Uint8List>[key]),
+      );
+
+      final abandon = _decodeAndFree(native.duneAbandon(token));
+      expect(abandon, containsPair('custodyHeld', true));
+      expect(abandon, containsPair('custodyDisposition', 'none'));
+      final finish = _decodeAndFree(native.duneFinishCustody(token, 1));
+      expect(finish, {'ok': true});
+      final quiescence = _decodeAndFree(
+        native.duneAwaitRuntimeQuiescence(token),
+      );
+      expect(quiescence, {'ok': true});
+      completed = true;
+      expect(
+        Directory(
+          p.join(configuredStateBaseDir.path, 'tailscale'),
+        ).existsSync(),
+        isFalse,
+      );
     });
   });
 
@@ -343,4 +404,12 @@ void main() {
       expect(parsed['error'], contains('ServeClear called before Start'));
     });
   });
+}
+
+Map<String, dynamic> _decodeAndFree(ffi.Pointer<Utf8> pointer) {
+  try {
+    return jsonDecode(pointer.toDartString()) as Map<String, dynamic>;
+  } finally {
+    native.duneFree(pointer);
+  }
 }

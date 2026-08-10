@@ -97,7 +97,13 @@ func HttpBind(runtimeToken uint64, tailnetPort int) (*HttpBinding, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+	// Bounded and tied to the runtime, like dial: an abandoned caller or a
+	// closing runtime releases the offload permit instead of holding it for
+	// the full bootstrap budget.
+	readyCtx, cancelReady := boundedCallCtxFrom(gate.runtime.ctx, 0)
+	err = gate.awaitDataPlaneReady(readyCtx)
+	cancelReady()
+	if err != nil {
 		return nil, fmt.Errorf("http bind data plane: %w", err)
 	}
 

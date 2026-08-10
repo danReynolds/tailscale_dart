@@ -629,6 +629,23 @@ void main() {
       }
     });
 
+    test('bind issued during a pending up() joins that runtime', () async {
+      // Regression: binds run on a helper isolate and capture their runtime
+      // token synchronously, so one dispatched while up() is still starting
+      // sees no runtime yet. It must join the pending start the way the
+      // worker FIFO used to, not fail with a stale-runtime error.
+      final starting = bringUp();
+      final listener = await tsnet.tcp.bind(port: 0);
+      addTearDown(listener.close);
+      await starting;
+
+      expect(
+        listener.local.port,
+        greaterThan(0),
+        reason: 'the bind must resolve against the runtime up() produced',
+      );
+    });
+
     test('up with auth key emits Starting → Running', () async {
       final sequence = await recordUntil(tsnet, NodeState.running, bringUp);
 

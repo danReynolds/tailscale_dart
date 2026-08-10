@@ -181,6 +181,10 @@ class Tailscale implements TailscaleClient {
   pkg_http.Client? _http;
   List<TailscaleNode>? _latestNodes;
   bool _nativeStartInFlight = false;
+  // Completes when an in-flight public start settles. Captured synchronously
+  // by identity-bound calls that found no runtime, so they can join that
+  // start instead of failing stale. Never completes with an error.
+  Future<void>? _nativeStartPending;
   Worker? _workerInstance;
   Future<void>? _workerRecovery;
   TailscaleOperationException? _workerRecoveryFailure;
@@ -310,9 +314,20 @@ class Tailscale implements TailscaleClient {
     final runtimeToken = worker != null && !worker.isDisposed
         ? worker.runtimeToken ?? 0
         : 0;
+    // A zero token means no runtime existed at capture time, so there is no
+    // earlier generation this call could be rebound away from. If a start is
+    // settling, join it and re-capture: the worker FIFO used to queue these
+    // calls behind that start, and failing them stale instead would break
+    // the gate-phase error contract for anything issued during up().
+    final pendingStart = runtimeToken == 0 ? _nativeStartPending : null;
     return () async {
       await _awaitWorkerRecovery();
-      return await operation(runtimeToken);
+      if (pendingStart == null) return await operation(runtimeToken);
+      await pendingStart;
+      final started = _workerInstance;
+      return await operation(
+        started != null && !started.isDisposed ? started.runtimeToken ?? 0 : 0,
+      );
     }();
   }
 
@@ -1262,6 +1277,8 @@ class Tailscale implements TailscaleClient {
     // native construction, stable-state observation, and Dart capability
     // setup. Teardown operations share this supervisor queue.
     _nativeStartInFlight = true;
+    final startSettled = Completer<void>();
+    _nativeStartPending = startSettled.future;
     final elapsed = Stopwatch()..start();
     try {
       return await _supervisorLifecycle.run(
@@ -1276,6 +1293,8 @@ class Tailscale implements TailscaleClient {
       );
     } finally {
       _nativeStartInFlight = false;
+      _nativeStartPending = null;
+      startSettled.complete();
     }
   }
 

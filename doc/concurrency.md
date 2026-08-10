@@ -25,8 +25,8 @@ Every native call enters the Go layer from one of two places:
    instance; public calls resolve that instance at call time rather than
    retaining method tear-offs from a dead isolate.
 2. **Helper isolates (concurrent).** The long, contended calls — `tcp.dial`,
-   `diag.ping`, `serve.forward`, `funnel.forward`, plus every HTTP client
-   request goroutine — run on short-lived `Isolate.run` helpers (data-plane
+   `diag.ping`, `serve.forward`, `funnel.forward`, the `tcp`/`tls`/`udp`/`http`
+   listen and bind entry points, plus every HTTP client request goroutine — run on short-lived `Isolate.run` helpers (data-plane
    offloads are capped at 32 by the shared gate in the supported caller isolate;
    see `lib/src/native_offload_gate.dart`). Native
    secure-state preparation, probe, reset, quarantine, and quiescence calls also
@@ -36,12 +36,16 @@ Every native call enters the Go layer from one of two places:
    token admission and the state lease provide their ordering.
 
 Before yielding to recovery or the shared helper gate, the caller isolate
-captures the current runtime token for `tcp.dial`, `diag.ping`, Serve, and
+captures the current runtime token for `tcp.dial`, `diag.ping`, the four
+listen/bind entry points, Serve, and
 Funnel. `TailscaleHttpClient` retains the token from its construction. Native
 rejects a zero or superseded token before touching a replacement runtime's
-Server or LocalClient. Listener and binding commands still enter through the
-worker FIFO and use the worker's current runtime at native entry; R7b moves
-their registries and returned handles onto explicit runtime capabilities.
+Server or LocalClient. Listener and binding commands capture the same
+exact token: `tcp.bind`, `tls.bind`, `udp.bind`, and `http.bind` are offloaded
+like dial, because their native admission joins the runtime's one bounded
+first-`Up` bootstrap and would otherwise park the serial worker isolate for
+that whole window. Their close/teardown commands stay on the worker FIFO,
+keyed by ids only a completed bind produces.
 
 The consequence: **any offloaded call can race a lifecycle call.** A
 `serve.forward` can be mid-flight while `stop()` tears the node down. Code on

@@ -3,7 +3,6 @@
 package tailscale
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -106,7 +105,13 @@ func TcpListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*Tcp
 	if err != nil {
 		return nil, err
 	}
-	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+	// Bounded and tied to the runtime, like dial: an abandoned caller or a
+	// closing runtime releases the offload permit instead of holding it for
+	// the full bootstrap budget.
+	readyCtx, cancelReady := boundedCallCtxFrom(gate.runtime.ctx, 0)
+	err = gate.awaitDataPlaneReady(readyCtx)
+	cancelReady()
+	if err != nil {
 		return nil, fmt.Errorf("tcp listen data plane: %w", err)
 	}
 
@@ -131,7 +136,13 @@ func TlsListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*Tcp
 	if err != nil {
 		return nil, err
 	}
-	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+	// Bounded and tied to the runtime, like dial: an abandoned caller or a
+	// closing runtime releases the offload permit instead of holding it for
+	// the full bootstrap budget.
+	readyCtx, cancelReady := boundedCallCtxFrom(gate.runtime.ctx, 0)
+	err = gate.awaitDataPlaneReady(readyCtx)
+	cancelReady()
+	if err != nil {
 		return nil, fmt.Errorf("tls listen data plane: %w", err)
 	}
 	if gate.runtime.localClient == nil {

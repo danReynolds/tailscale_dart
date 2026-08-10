@@ -541,7 +541,8 @@ func lifecycleErrorJSON(err error, fields map[string]any) string {
 		m["code"] = "conflictingStateFormats"
 	case errors.Is(err, tailscale.ErrLegacyStateUnsupported):
 		m["code"] = "legacyStateUnsupported"
-	case errors.Is(err, tailscale.ErrUnexpectedStateResidue):
+	case errors.Is(err, tailscale.ErrUnexpectedStateResidue),
+		errors.Is(err, tailscale.ErrEphemeralPersistentStateOccupied):
 		m["code"] = "unexpectedStateResidue"
 	case errors.Is(err, tailscale.ErrAtomicPersistenceFailure):
 		m["code"] = "atomicPersistenceFailure"

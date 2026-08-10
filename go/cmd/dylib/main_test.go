@@ -59,6 +59,18 @@ func TestLifecycleErrorJSONClassifiesCleanupFailure(t *testing.T) {
 	assertLifecycleFieldForTest(t, payload, "code", "runtimeCleanupFailed")
 }
 
+func TestLifecycleErrorJSONClassifiesEphemeralPersistentStateOccupancy(t *testing.T) {
+	payload := decodeLifecycleErrorForTest(t, lifecycleErrorJSON(
+		errors.Join(
+			tailscale.ErrEphemeralPersistentStateOccupied,
+			errors.New("package subtree contains state"),
+		),
+		nil,
+	))
+
+	assertLifecycleFieldForTest(t, payload, "code", "unexpectedStateResidue")
+}
+
 func TestLifecycleErrorJSONKeepsIndeterminateLogoutPrecedence(t *testing.T) {
 	payload := decodeLifecycleErrorForTest(t, lifecycleErrorJSON(
 		errors.Join(

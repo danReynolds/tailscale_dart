@@ -165,6 +165,23 @@ Future<void> beginNativePersistentPreparation(int token) => Isolate.run(() {
   );
 });
 
+Future<String> inspectNativePersistentPreparation(int token) => Isolate.run(() {
+  final result =
+      _callNativeJson(
+            () => native.duneInspectPersistentPreparation(token),
+            onError:
+                (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+                    TailscaleOperationException(
+                      'state preparation',
+                      message,
+                      code: code,
+                      statusCode: statusCode,
+                    ),
+          )
+          as Map<String, dynamic>;
+  return result['layout'] as String? ?? '';
+});
+
 Future<void> markNativeCustodyActive(int token) => Isolate.run(() {
   _callNativeJson(
     () => native.duneMarkCustodyActive(token),
@@ -184,6 +201,121 @@ Future<void> markNativeCustodyWriteAttempted(int token) => Isolate.run(() {
     onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
         TailscaleOperationException(
           'state custody',
+          message,
+          code: code,
+          statusCode: statusCode,
+        ),
+  );
+});
+
+Future<String> resolveNativePersistentCustody(
+  int token, {
+  required bool dekPresent,
+}) => Isolate.run(() {
+  final result =
+      _callNativeJson(
+            () =>
+                native.duneResolvePersistentCustody(token, dekPresent ? 1 : 0),
+            onError:
+                (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+                    TailscaleOperationException(
+                      'state custody',
+                      message,
+                      code: code,
+                      statusCode: statusCode,
+                    ),
+          )
+          as Map<String, dynamic>;
+  return result['action'] as String? ?? '';
+});
+
+Future<bool> prepareNativePersistentState(int token) => Isolate.run(() {
+  final result =
+      _callNativeJson(
+            () => native.dunePreparePersistentState(token),
+            onError:
+                (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+                    TailscaleOperationException(
+                      'state preparation',
+                      message,
+                      code: code,
+                      statusCode: statusCode,
+                    ),
+          )
+          as Map<String, dynamic>;
+  return result['empty'] == true;
+});
+
+Future<void> completeNativePersistentCustody(int token) => Isolate.run(() {
+  _callNativeJson(
+    () => native.duneCompletePersistentCustody(token),
+    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+        TailscaleOperationException(
+          'state custody',
+          message,
+          code: code,
+          statusCode: statusCode,
+        ),
+  );
+});
+
+Future<void> finishNativePreparedPersistentState(int token) => Isolate.run(() {
+  _callNativeJson(
+    () => native.duneFinishPreparedPersistentState(token),
+    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+        TailscaleOperationException(
+          'state preparation',
+          message,
+          code: code,
+          statusCode: statusCode,
+        ),
+  );
+});
+
+/// Receipt from the pre-Keybay half of an explicit local reset. [stopped]
+/// remains available even when [error] is non-null so Dart can retire the
+/// worker generation that native already detached.
+final class NativeLocalResetBeginResult {
+  const NativeLocalResetBeginResult({
+    required this.token,
+    required this.stopped,
+    required this.error,
+  });
+
+  final int token;
+  final bool stopped;
+  final TailscaleOperationException? error;
+}
+
+Future<NativeLocalResetBeginResult> beginNativeLocalReset(int token) =>
+    Isolate.run(() {
+      final result =
+          _decodeNativeJson(() => native.duneBeginLocalReset(token))
+              as Map<String, dynamic>;
+      final message = result['error'] as String?;
+      return NativeLocalResetBeginResult(
+        token: result['token'] as int? ?? token,
+        stopped: result['stopped'] == true,
+        error: message == null
+            ? null
+            : TailscaleOperationException(
+                'forget local identity',
+                message,
+                code: _parseErrorCode(result['code'] as String?),
+                statusCode: result['statusCode'] as int?,
+              ),
+      );
+    });
+
+Future<void> finishNativeLocalReset(
+  int token, {
+  required bool custodyDeletionSucceeded,
+}) => Isolate.run(() {
+  _callNativeJson(
+    () => native.duneFinishLocalReset(token, custodyDeletionSucceeded ? 1 : 0),
+    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+        TailscaleOperationException(
+          'forget local identity',
           message,
           code: code,
           statusCode: statusCode,
@@ -218,8 +350,18 @@ Future<void> awaitNativeRuntimeQuiescence(int token) => Isolate.run(() {
   );
 });
 
-Future<TailscaleStatus> classifyNativeIdleStatus() =>
-    Isolate.run(_loadStatusSnapshot);
+Future<void> retireNativeAbandonedRuntimeToken(int token) => Isolate.run(() {
+  _callNativeJson(
+    () => native.duneRetireAbandonedRuntimeToken(token),
+    onError: (message, {code = TailscaleErrorCode.unknown, statusCode}) =>
+        TailscaleOperationException(
+          'runtime quarantine',
+          message,
+          code: code,
+          statusCode: statusCode,
+        ),
+  );
+});
 
 /// Runs [nativeOp] on a fresh short-lived isolate and returns its result,
 /// subject to the concurrency cap. [nativeOp] must be a top-level/static call

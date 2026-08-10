@@ -34,6 +34,45 @@ enum TailscaleErrorCode {
   /// The persistent StateStore DEK was not exactly 32 raw bytes.
   invalidStateKey,
 
+  /// An encrypted state envelope exists but its Keybay DEK is absent.
+  missingStateKey,
+
+  /// Keybay contains a DEK but the corresponding state envelope is absent.
+  orphanedStateKey,
+
+  /// A previously authorized local reset has not completed.
+  localResetIncomplete,
+
+  /// Legacy plaintext SQLite/FileStore and encrypted artifacts coexist.
+  conflictingStateFormats,
+
+  /// A pre-launch plaintext SQLite/FileStore requires explicit local forget.
+  legacyStateUnsupported,
+
+  /// The package state subtree contains unrecognized residual files.
+  unexpectedStateResidue,
+
+  /// An interrupted atomic envelope write could not be safely recovered.
+  atomicPersistenceFailure,
+
+  /// The Keybay key did not authenticate the encrypted envelope.
+  stateAuthenticationFailed,
+
+  /// The encrypted envelope uses a newer or unsupported format tuple.
+  unsupportedStateFormat,
+
+  /// The encrypted envelope or its security metadata is malformed.
+  invalidStateFormat,
+
+  /// The platform keystore is locked or requires unavailable interaction.
+  secureStorageLocked,
+
+  /// Keybay cannot safely access its platform-protected container.
+  secureStorageUnavailable,
+
+  /// Another live writer currently owns Keybay's mutation lock.
+  secureStorageBusy,
+
   /// The caller deadline expired and the matching runtime was quarantined.
   startupTimeout,
 
@@ -205,6 +244,17 @@ final class TailscaleLogoutException extends TailscaleOperationException {
     super.statusCode,
     super.cause,
   }) : super('logout', message);
+}
+
+/// Thrown when explicit local identity destruction cannot be completed.
+final class TailscaleForgetLocalIdentityException
+    extends TailscaleOperationException {
+  const TailscaleForgetLocalIdentityException(
+    String message, {
+    super.code,
+    super.statusCode,
+    super.cause,
+  }) : super('forget local identity', message);
 }
 
 /// Thrown when a `taildrop.*` call fails.

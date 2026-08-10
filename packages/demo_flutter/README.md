@@ -13,6 +13,20 @@ provide a small UI for:
 - listing nodes
 - probing another node end to end
 
+This manual demo keeps a persistent node identity. It stores the package state
+root under the platform application-support directory and uses the package's
+Keybay-backed encrypted StateStore. The Android demo therefore sets
+`minSdk = 31` (Android 12), the minimum for Keybay's Android Keystore path. For
+older Android versions, use an explicitly ephemeral integration such as
+`packages/demo_smoke_flutter`; ephemeral mode uses an in-memory StateStore and
+does not access Keybay.
+
+Application-support placement does not mean the complete directory is
+encrypted or automatically excluded from backup. The logical StateStore is
+encrypted, while upstream logs/configuration and TLS sidecars can remain
+outside that encryption boundary; production hosts must enforce owner-only
+access and apply and verify their platform backup policy.
+
 ## Connecting to local Headscale
 
 Use **Client** mode for the local Headscale E2E stack. **Admin** mode is only
@@ -37,7 +51,7 @@ auth keys.
    - `Hostname`: any unique name, for example `demo-macos` or `demo-ios`.
    - `Auth key`: the preauth key from step 2.
    - `Control URL` on macOS: `http://localhost:8080`.
-   - `Control URL` on a physical iOS/Android device: use the Mac's LAN IP,
+   - `Control URL` on a physical iOS/Android device (Android API 31+): use the Mac's LAN IP,
      for example `http://192.168.86.22:8080`.
 
    To find the Mac LAN IP:
@@ -59,4 +73,5 @@ For faster local iteration without deploying Flutter to a device, use
 `packages/demo_core/bin/demo_node.dart` as a headless node. Run `serve` in a
 terminal and keep it open; by default it stays alive until `SIGINT`/`SIGTERM`.
 Automation that needs `PROBE <ip>` and `STOP` over stdin should pass
-`--stdin-control`.
+`--stdin-control`. Pass `--ephemeral` for headless Linux; persistent Linux
+requires a desktop Secret Service session and `secret-tool`.

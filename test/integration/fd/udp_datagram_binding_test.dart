@@ -158,10 +158,7 @@ void main() {
     });
 
     tearDownAll(() async {
-      try {
-        await Tailscale.instance.down();
-      } catch (_) {}
-      clearProcessIntegrationState(configuredStateBaseDir);
+      await forgetProcessIntegrationState(configuredStateBaseDir);
     });
 
     test('throws TailscaleUdpException', () async {

@@ -28,11 +28,11 @@ layer that proves the behavior.
 | Suite | Command | Runs by default? | External dependency | Purpose |
 | --- | --- | --- | --- | --- |
 | Static analysis | `dart analyze` | Yes, PR gate | None | Analyzer/type/lint correctness. |
-| Root Dart suite | `dart test` | Yes, PR gate | None by default | Unit, FFI, fd, runtime tests. `test/e2e/` and `test/live_tailscale/` register as skipped/no-op unless their required env vars are present. |
+| Root Dart suite | `dart test` | Yes, PR gate | None by default | Unit, FFI, fd, runtime tests. Persistent runtime integration uses a package-internal in-memory Keybay test backend, not the Linux Secret Service. `test/e2e/` and `test/live_tailscale/` register as skipped/no-op unless their required env vars are present. |
 | Go suite | `cd go && go test -count=1 ./...` | Yes, PR gate | None | Go wrappers, LocalAPI mapping helpers, native-side validation. |
-| Headscale E2E | `test/e2e/run_e2e.sh` | Yes, PR gate | Docker | Starts local Headscale, joins embedded nodes, verifies real tailnet behavior without a Tailscale account. |
+| Headscale E2E | `test/e2e/run_e2e.sh` | Yes, PR gate | Docker | Starts local Headscale, exercises encrypted persistent enrollment/reconnect through a test-only file custodian, and uses ephemeral peers for disposable data-plane cases. It does not exercise production Linux Secret Service custody. |
 | Local full suite | `tool/test_local_full.sh` | No, local/release confidence | Docker for Headscale | PR gate plus demo package tests and whitespace checks. |
-| Platform smoke matrix | `tool/smoke/run_matrix.sh` | No, local/release confidence | Docker plus local Flutter platforms/devices | Validates native asset packaging and HTTP/TCP/UDP smoke behavior on macOS/iOS/Android/etc. |
+| Platform smoke matrix | `tool/smoke/run_matrix.sh` | No, local/release confidence | Docker plus local Flutter platforms/devices | Runs explicitly ephemeral nodes to validate native asset packaging and HTTP/TCP/UDP smoke behavior on macOS/iOS/Android/etc.; it is not a persistent-storage receipt. |
 | Live Tailscale routing controls | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_routing_controls_test.dart` | No, opt-in only | Tailscale SaaS + API key | Validates hosted-control-plane behavior Headscale cannot model: exit-node route approval, `suggest`, `useAuto`, and cleanup. |
 | Live Tailscale TLS | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_tls_listener_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS-enabled tailnet | Validates successful `tls.bind` serving. Headscale can only validate the clear failure path because it does not provision Tailscale HTTPS certificates. |
 | Live Tailscale Serve | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_serve_forward_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS-enabled tailnet | Validates `serve.forward` end-to-end by proxying a loopback HTTP server and fetching it from a second embedded node. |
@@ -55,6 +55,29 @@ tool/test_pr_gate.sh
 The live Tailscale suite is deliberately outside default CI. It is repeatable,
 but it depends on hosted Tailscale state and a secret with permissions to create
 auth keys, list/delete devices, and approve routes.
+
+## Secure-State Evidence Boundary
+
+The ordinary Linux PR/runtime integration path installs a package-internal
+in-memory Keybay backend through the test-only storage-factory seam. That keeps
+the encrypted Store, Dart custody coordinator, binary FFI, lifecycle, reset,
+and failure behavior deterministic, but it does **not** exercise Linux
+`secret-tool`, Secret Service locking/unlocking, or a real platform keystore.
+
+Headscale E2E uses a conspicuously test-only file custodian for the primary
+node and cross-process persistence cases. That proves encrypted-StateStore
+enrollment, reconnect, logout/reset, and tailnet behavior in headless CI, but
+the custodian is not production Keybay and is not a platform security receipt.
+Disposable peer cases remain explicitly ephemeral. The smoke runner likewise
+passes `--ephemeral` to its headless `demo_core` peer, and the Flutter smoke app
+calls `up(ephemeral: true)`; those nodes use in-memory StateStores and never
+access Keybay.
+
+Real persistent Keybay enrollment/restart, stable-node recovery across process
+restart, platform backup exclusion, fail-closed platform permissions, crash
+recovery, and the complete plaintext sidecar inventory remain R6 evidence.
+They must be collected on each claimed persistent platform; a green Linux PR
+gate, Headscale E2E run, or smoke matrix is not a substitute.
 
 ## Placement Rules
 
@@ -119,8 +142,9 @@ In short: `demo_core` is the shared engine, `demo_flutter` is the manual UI, and
 PR CI is intentionally narrow and fast. It runs on Linux and covers:
 
 - Go tests.
-- Dart analysis and root tests.
-- Headscale E2E.
+- Dart analysis and root tests, using the internal in-memory Keybay test backend
+  for persistent runtime integration.
+- Headscale E2E with the test-only persistent custodian plus ephemeral peers.
 
 Run the same shape locally with:
 
@@ -148,10 +172,11 @@ or platform-specific networking:
 tool/smoke/run_matrix.sh
 ```
 
-The smoke matrix starts Docker Headscale, starts one headless `demo_core` peer,
-then runs `packages/demo_smoke_flutter` as a second node on each available
-Flutter platform target. The app joins the Headscale tailnet, starts the demo
-HTTP/TCP/UDP services, probes the headless peer, and prints a
+The smoke matrix starts Docker Headscale, starts one explicitly ephemeral
+headless `demo_core` peer, then runs `packages/demo_smoke_flutter` as a second
+explicitly ephemeral node on each available Flutter platform target. The app
+joins the Headscale tailnet, starts the demo HTTP/TCP/UDP services, probes the
+headless peer, and prints a
 `DUNE_SMOKE_RESULT` JSON line for the runner to parse.
 
 Before starting the tailnet, the runner refreshes dependencies for
@@ -162,7 +187,8 @@ Smoke is a platform packaging/runtime check, not the canonical correctness
 suite. The detailed protocol and API assertions live in unit, integration, and
 Headscale E2E tests. The smoke matrix answers a narrower question: "Can this
 Flutter runtime load the native asset, start tsnet, join the control plane, and
-move HTTP/TCP/UDP traffic to another node?"
+move HTTP/TCP/UDP traffic to another node?" Because both nodes are ephemeral,
+it does not qualify persistent Keybay or restart behavior.
 
 Targets can be selected or made strict:
 

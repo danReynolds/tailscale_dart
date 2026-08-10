@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,8 +12,8 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
-	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tsnet"
 )
 
@@ -42,7 +41,7 @@ func nextDirectRuntimeToken() uint64 {
 const defaultNativeCallTimeout = 30 * time.Second
 
 type runtimeStartDependencies struct {
-	openStore            func(path string) (ipn.StateStore, io.Closer, error)
+	adoptPersistent      func(uint64, runtimeConfig) (*nodeRuntime, error)
 	configureHostNetwork func(snapshot string) error
 	startServer          func(server *tsnet.Server) error
 	localClient          func(server *tsnet.Server) (*local.Client, error)
@@ -50,10 +49,7 @@ type runtimeStartDependencies struct {
 }
 
 var productionRuntimeStartDependencies = runtimeStartDependencies{
-	openStore: func(path string) (ipn.StateStore, io.Closer, error) {
-		store, err := NewSQLiteStore(path)
-		return store, store, err
-	},
+	adoptPersistent:      runtimes.adoptPersistentPreparation,
 	configureHostNetwork: ConfigureHostNetworkSnapshot,
 	startServer:          func(server *tsnet.Server) error { return server.Start() },
 	localClient: func(server *tsnet.Server) (*local.Client, error) {
@@ -91,27 +87,53 @@ type LogoutResult struct {
 }
 
 type runtimeLogoutDependencies struct {
-	configuredStateDir func() (string, error)
-	classifyIdleState  func(string) (IdleStateClass, error)
-	loadRuntimeConfig  func() (runtimeConfig, error)
-	startRuntime       func(uint64, runtimeConfig, string) (uint64, error)
+	prepareIdleRuntime func(uint64, string) (uint64, error)
 	revokeNodeKey      func(*nodeRuntime) error
 	closeRuntime       func(uint64) (RuntimeCloseResult, error)
 }
 
 var productionRuntimeLogoutDependencies = runtimeLogoutDependencies{
-	configuredStateDir: configuredStateDir,
-	classifyIdleState:  ClassifyIdleState,
-	loadRuntimeConfig:  lastRuntimeConfig,
-	startRuntime: func(token uint64, config runtimeConfig, hostNetworkSnapshot string) (uint64, error) {
+	prepareIdleRuntime: func(token uint64, hostNetworkSnapshot string) (uint64, error) {
+		if _, _, err := configuredStateRootSnapshot(); err != nil {
+			return 0, err
+		}
+		preparation, err := persistentPreparationForToken(token)
+		if err != nil {
+			return 0, err
+		}
+		preparation.phaseMu.Lock()
+		store := preparation.store
+		ready := store != nil && preparation.custodyCompleted && !preparation.custodyActive
+		preparation.phaseMu.Unlock()
+		if !ready {
+			return 0, fmt.Errorf("%w: idle logout requires authenticated prepared state", ErrRuntimeStale)
+		}
+		config, err := loadRuntimeConfig(store)
+		if err != nil {
+			cleanupErr := FinishPreparedPersistentState(token)
+			return 0, errors.Join(
+				fmt.Errorf("load persistent runtime configuration: %w", err),
+				cleanupErr,
+			)
+		}
 		_, runtimeToken, err := StartRuntimeWithToken(
 			token,
 			config.hostname,
 			"",
 			config.controlURL,
-			config.ephemeral,
+			false,
 			hostNetworkSnapshot,
 		)
+		if err != nil {
+			// An error after adoption is cleaned by the candidate's deferred
+			// teardown, so the preparation is already stale. An error before
+			// adoption still owns the Store+lease and must release both here.
+			cleanupErr := FinishPreparedPersistentState(token)
+			if errors.Is(cleanupErr, ErrRuntimeStale) {
+				cleanupErr = nil
+			}
+			err = errors.Join(err, cleanupErr)
+		}
 		return runtimeToken, err
 	},
 	revokeNodeKey: revokeNodeKey,
@@ -169,10 +191,6 @@ func logoutWithDependencies(requestToken uint64, hostNetworkSnapshot string, dep
 	if err := runtimeCleanupAdmissionError(); err != nil {
 		return result, err
 	}
-	stateDir, err := dependencies.configuredStateDir()
-	if err != nil {
-		return result, err
-	}
 
 	runtime := currentRuntime()
 	publicRuntimeWasActive := runtime != nil
@@ -182,26 +200,7 @@ func logoutWithDependencies(requestToken uint64, hostNetworkSnapshot string, dep
 		}
 		result.Token = runtime.token
 	} else {
-		state, err := dependencies.classifyIdleState(stateDir)
-		if err != nil {
-			return result, err
-		}
-		if state == IdleStateAbsent {
-			// A truly absent root has no runtime configuration worth retaining.
-			// Confirmed upstream logout is different: it preserves the Store, so
-			// that path retains the exact configuration needed to reopen it.
-			runtimes.mu.Lock()
-			runtimes.lastConfig = nil
-			runtimes.mu.Unlock()
-			result.NoState = true
-			return result, nil
-		}
-
-		config, err := dependencies.loadRuntimeConfig()
-		if err != nil {
-			return result, err
-		}
-		runtimeToken, err := dependencies.startRuntime(requestToken, config, hostNetworkSnapshot)
+		runtimeToken, err := dependencies.prepareIdleRuntime(requestToken, hostNetworkSnapshot)
 		if err != nil {
 			return result, err
 		}
@@ -288,6 +287,12 @@ func StartRuntimeWithHostNetwork(hostname, authKey, controlURL string, ephemeral
 // returned token is the active runtime token; for an idempotent start it may be
 // older than requestToken.
 func StartRuntimeWithToken(requestToken uint64, hostname, authKey, controlURL string, ephemeral bool, hostNetworkSnapshot string) (alreadyActive bool, runtimeToken uint64, err error) {
+	startCall, err := runtimes.beginStartCall(requestToken)
+	if err != nil {
+		return false, 0, err
+	}
+	defer runtimes.finishStartCall(requestToken, startCall)
+
 	stateDir, err := configuredStateDir()
 	if err != nil {
 		return false, 0, err
@@ -324,19 +329,42 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 		controlURL: controlURL,
 		ephemeral:  ephemeral,
 	}
-	candidate, active, err := runtimes.reserve(requestToken, config)
+	refreshed, err := runtimes.refreshActiveRuntime(requestToken, config, func() error {
+		return applyHostNetworkSnapshot(hostNetworkSnapshot, dependencies)
+	})
+	if err != nil {
+		return false, 0, err
+	}
+	if refreshed != nil {
+		return true, refreshed.token, nil
+	}
+	var candidate, active *nodeRuntime
+	if ephemeral {
+		candidate, active, err = runtimes.reserve(requestToken, config)
+	} else {
+		adopt := dependencies.adoptPersistent
+		if adopt == nil {
+			adopt = runtimes.adoptPersistentPreparation
+		}
+		candidate, err = adopt(requestToken, config)
+	}
 	if err != nil {
 		return false, 0, err
 	}
 	if active != nil {
-		// Repeated same-config up() calls are identity no-ops, but Android's
-		// host interface snapshot is live process input and must still refresh.
-		// reserve validated the immutable runtime tuple before this mutation, so
-		// a configuration mismatch cannot alter the active runtime's snapshot.
-		if err := applyHostNetworkSnapshot(hostNetworkSnapshot, dependencies); err != nil {
-			return false, 0, err
+		// reserve rechecked controller state after the first probe and observed a
+		// runtime published by another direct caller. Re-enter the same guarded
+		// refresh path instead of mutating host globals outside admission.
+		refreshed, refreshErr := runtimes.refreshActiveRuntime(requestToken, config, func() error {
+			return applyHostNetworkSnapshot(hostNetworkSnapshot, dependencies)
+		})
+		if refreshErr != nil {
+			return false, 0, refreshErr
 		}
-		return true, active.token, nil
+		if refreshed == nil {
+			return false, 0, fmt.Errorf("%w: active runtime changed during refresh", ErrRuntimeStale)
+		}
+		return true, refreshed.token, nil
 	}
 
 	serverStarted := false
@@ -351,14 +379,20 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 			// Server.Start owns and unwinds its partial initialization on error.
 			// Calling Server.Close concurrently or after that error violates the
 			// upstream lifecycle contract; only caller-owned resources close here.
-			candidate.cancel()
-			if candidate.storeCloser != nil {
-				cleanupErr = candidate.storeCloser.Close()
-			}
+			cleanupErr = candidate.closeUnstarted()
+		}
+		if errors.Is(err, ErrRuntimeCleanupFailed) {
+			cleanupErr = errors.Join(cleanupErr, err)
 		}
 		cleanupErr = runtimes.release(candidate, cleanupErr)
 		err = errors.Join(err, cleanupErr)
 	}()
+
+	if ephemeral {
+		if err := prepareEphemeralRuntime(candidate, authKey); err != nil {
+			return false, 0, err
+		}
+	}
 
 	if err := setRawDiscoCompatibility(); err != nil {
 		return false, 0, err
@@ -373,21 +407,23 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
 	}
 
-	if err := ensurePrivateOwnedDirectory(stateDir); err != nil {
-		return false, 0, fmt.Errorf("prepare state dir: %w", err)
+	runtimeDir := candidate.scratchDirectory()
+	if !ephemeral {
+		runtimeDir = filepath.Join(stateDir, "tsnet")
+		if err := ensurePrivateOwnedDirectory(runtimeDir); err != nil {
+			return false, 0, fmt.Errorf("prepare runtime dir: %w", err)
+		}
 	}
-	logDir := filepath.Join(stateDir, "logs")
-	if err := ensurePrivateOwnedDirectory(logDir); err != nil {
-		return false, 0, fmt.Errorf("prepare log dir: %w", err)
-	}
+	logDir := runtimeDir
 
-	statePath := filepath.Join(stateDir, "state.db")
-	newStore, newStoreCloser, err := dependencies.openStore(statePath)
-	if err != nil {
-		return false, 0, fmt.Errorf("failed to create sqlite store: %w", err)
+	if !ephemeral {
+		// A new Server.Start may mutate the profile before it returns an error.
+		// Invalidate the prior proven tuple first so idle logout can never
+		// reconstruct that possibly-mutated state under stale configuration.
+		if err := clearRuntimeConfig(candidate.store); err != nil {
+			return false, 0, fmt.Errorf("invalidate runtime configuration: %w", err)
+		}
 	}
-	candidate.store = newStore
-	candidate.storeCloser = newStoreCloser
 	candidate.closeServer = dependencies.closeServer
 	if runtimes.isAbandoned(candidate) {
 		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
@@ -397,8 +433,8 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 		Hostname:   hostname,
 		AuthKey:    authKey,
 		ControlURL: controlURL,
-		Dir:        stateDir,
-		Store:      newStore,
+		Dir:        runtimeDir,
+		Store:      candidate.store,
 		Ephemeral:  ephemeral,
 		Logf: func(format string, args ...any) {
 			if atomic.LoadInt32(&LogLevel) >= 2 {
@@ -418,10 +454,13 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 	if startErr != nil {
 		return false, 0, fmt.Errorf("failed to start tsnet: %w", startErr)
 	}
-	// Server.Start has now applied its immutable identity inputs and may have
-	// persisted them. Record this exact tuple before any later abandonment or
-	// LocalClient failure so idle logout can never reopen with stale settings.
-	runtimes.rememberStartedConfig(candidate)
+	if !ephemeral {
+		// Server.Start is the proof boundary for the immutable tuple used by
+		// event-silent idle logout reconstruction.
+		if err := saveRuntimeConfig(candidate.store, config); err != nil {
+			return false, 0, fmt.Errorf("persist proven runtime configuration: %w", err)
+		}
+	}
 	if runtimes.isAbandoned(candidate) {
 		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
 	}
@@ -451,6 +490,43 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 		return false, 0, err
 	}
 	return false, candidate.token, nil
+}
+
+var ErrEphemeralAuthKeyRequired = errors.New("ephemeral startup requires an auth key")
+
+func prepareEphemeralRuntime(candidate *nodeRuntime, authKey string) error {
+	if candidate == nil {
+		return fmt.Errorf("ephemeral runtime candidate is nil")
+	}
+	if authKey == "" {
+		return ErrEphemeralAuthKeyRequired
+	}
+	baseRoot, expectedRoot, err := configuredStateRootSnapshot()
+	if err != nil {
+		return err
+	}
+	lease, err := acquireStateLease(baseRoot, withExpectedStateLeaseRoot(expectedRoot))
+	if err != nil {
+		return err
+	}
+	candidate.stateLease = lease
+	if err := validateEphemeralPersistentOccupancy(baseRoot); err != nil {
+		return err
+	}
+	if _, err := sweepStaleEphemeralStateScratch(); err != nil {
+		logInfo("ephemeral scratch sweep: %v", err)
+	}
+	scratch, err := createEphemeralStateScratch()
+	if err != nil {
+		return err
+	}
+	candidate.scratch = scratch
+	store, err := mem.New(func(string, ...any) {}, "")
+	if err != nil {
+		return fmt.Errorf("create ephemeral in-memory StateStore: %w", err)
+	}
+	candidate.store = store
+	return nil
 }
 
 func applyHostNetworkSnapshot(snapshot string, dependencies runtimeStartDependencies) error {

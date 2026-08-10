@@ -166,6 +166,7 @@ final class Worker {
   Isolate? _isolate;
   int? _runtimeToken;
   int? _preparingToken;
+  int? _pushVisiblePreparingToken;
 
   int? get runtimeToken => _runtimeToken;
   bool get isDisposed => _disposed;
@@ -241,7 +242,7 @@ final class Worker {
     return acceptsRuntimePush(
       token: token,
       currentToken: _runtimeToken,
-      preparingToken: _preparingToken,
+      preparingToken: _pushVisiblePreparingToken,
     );
   }
 
@@ -305,6 +306,9 @@ final class Worker {
   void detachRuntimeToken(int token) {
     if (_runtimeToken == token) _runtimeToken = null;
     if (_preparingToken == token) _preparingToken = null;
+    if (_pushVisiblePreparingToken == token) {
+      _pushVisiblePreparingToken = null;
+    }
   }
 
   Future<TResponse> _request<TResponse extends _WorkerResponse>(
@@ -355,6 +359,7 @@ final class Worker {
     required String controlUrl,
   }) {
     _preparingToken = requestToken;
+    _pushVisiblePreparingToken = requestToken;
     return _lifecycle.run(() async {
       try {
         final hostNetworkSnapshot = await _loadHostNetworkSnapshot();
@@ -391,6 +396,9 @@ final class Worker {
         );
       } finally {
         if (_preparingToken == requestToken) _preparingToken = null;
+        if (_pushVisiblePreparingToken == requestToken) {
+          _pushVisiblePreparingToken = null;
+        }
       }
     });
   }

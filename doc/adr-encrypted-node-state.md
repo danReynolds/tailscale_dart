@@ -2,19 +2,22 @@
 
 ## Status
 
-**Accepted for implementation — 2026-08-09.**
+**Accepted; R4d implemented in current source — 2026-08-10.**
 
 This ADR defines the pre-launch persistence replacement. There is deliberately
-no SQLite migration. The current `main` branch is not yet encrypted at the
-application layer.
+no SQLite migration. R4d now wires the encrypted Store, Keybay custody, state
+lease, secure idle operations, explicit local forget, and ephemeral in-memory
+path together and removes the SQLite runtime/dependency. R6 real-platform
+custody, backup-exclusion, crash, and complete sidecar-inventory receipts remain
+release gates; this status does not certify those receipts.
 
 ## Context
 
 Tailscale StateStore data contains cloning-sensitive node identity, profile,
-preferences, and publication state. The current package stores that logical map
-in SQLite under an owner-only directory. Permissions and mobile sandboxing are
-useful, but a copied backup or offline copy of the database can carry the node's
-private identity to another device.
+preferences, and publication state. Before R4d, the package stored that logical
+map in SQLite under an owner-only directory. Permissions and mobile sandboxing
+were useful, but a copied backup or offline copy of the database could carry the
+node's private identity to another device.
 
 The architecture audit initially suggested Tailscale's default FileStore as the
 simpler replacement. Current security requirements change that conclusion:
@@ -26,7 +29,7 @@ simpler replacement. Current security requirements change that conclusion:
   map and atomicity anyway;
 - StateStore is not a data-plane workload, so SQLite has no demonstrated
   performance justification;
-- the current SQLite implementation violates the upstream nil-delete contract
+- the pre-cutover SQLite implementation violated the upstream nil-delete contract
   and `HasState` creates storage while trying to inspect it.
 
 Keybay already implements the platform-specific custody work in Dart. It can
@@ -318,7 +321,7 @@ one-to-one binding.
 
 ## On-disk layout
 
-Target layout:
+R4d layout:
 
 ```text
   <stateBaseDir>/
@@ -339,7 +342,7 @@ Target layout:
 Pass `tailscale/tsnet` as `tsnet.Server.Dir` and pass the custom StateStore
 explicitly. During `Server.Start`, temporarily point upstream `TS_LOGS_DIR` at
 that same runtime-owned Dir using the scoped/restore protocol in the lifecycle
-ADR; never leave it at the current
+ADR; never leave it at the pre-cutover
 `<stateBaseDir>/tailscale/logs`. The relocation groups upstream logs with the
 target `tsnet` runtime root, keeps the encrypted state file distinct from
 sidecars, and lets reset remove one exact package-owned subtree.
@@ -348,7 +351,7 @@ The complete `tailscale/` subtree still needs owner-only permissions and backup
 exclusion because non-Kubernetes upstream TLS/log sidecars are not encrypted by
 this ADR, including on any future supported mobile ACME path.
 
-Permissions are a target security invariant, not best effort. The lock and
+Permissions are a security invariant, not best effort. The lock and
 sensitive files must have no group/other bits (`0600` target), and package-owned
 directories must have no group/other access (`0700` target). Startup rejects
 symlinks, unexpected file types, ownership mismatches where the platform can
@@ -572,9 +575,9 @@ error.
 | --- | --- | --- | --- |
 | reset marker present | any | not read | `localResetIncomplete`. Refuse startup; only explicit `forgetLocalIdentity()` may resume the already-authorized reset transaction. |
 | unrecognized residual `tailscale/` subtree | absent | not read | `unexpectedStateResidue`. Refuse startup; explicit local reset may remove it. |
-| clean root: subtree/marker absent | absent | absent | Fresh. Without explicit enrollment/auth key: `noState`, with no state/custodian writes beyond permitted base/lock coordination. With enrollment: create DEK, persist it, create authenticated empty envelope, then start. |
+| clean root: subtree/marker absent | absent | absent | Fresh. Idle `status()`/`logout()` report `noState` without creating custody or the state subtree. Persistent `up()` creates the DEK and authenticated empty envelope, then starts with a supplied auth key or upstream interactive login. |
 | clean root: subtree/marker absent | absent | valid | Orphaned key, including a crash or reinstall edge. Refuse startup; explicit local reset may delete it. Do not silently reuse or overwrite it. |
-| canonical secure root | valid and exactly empty | valid | Interrupted/fresh provisioning. With auth key, resume enrollment. Without auth key, report `noState` and preserve both. |
+| canonical secure root | valid and exactly empty | valid | Interrupted/fresh provisioning. Idle inspection reports `noState`; persistent `up()` opens the pair and lets upstream use a supplied auth key or enter interactive login. |
 | canonical secure root | valid and non-empty | valid | Persisted upstream state, but not proof of completed enrollment. Open and start. Pass any caller-supplied auth key to the new Server and let upstream decide whether to use or ignore it; never wipe locally. |
 | canonical secure root | canonical encrypted file | absent | Lost DEK. Fail closed; explicit local reset is the only local recovery. |
 | canonical secure root | malformed or unsupported outer envelope | not read | Return the typed format error before custody and never start empty. |
@@ -664,7 +667,7 @@ state is already `noState`.
 
 ### Status / HasState
 
-Replace the current creating `HasState` behavior with an asynchronous,
+R4d replaces the pre-cutover creating `HasState` behavior with an asynchronous,
 non-mutating secure probe:
 
 - any reset-marker entry means `localResetIncomplete`, with no automatic
@@ -996,7 +999,8 @@ documented startup/write budget.
 ## Rollout
 
 Because the package is pre-launch, rollout is a clean cut after the runtime and
-fail-safe foundations:
+fail-safe foundations. R4a through R4d are implemented together in the current
+source; the numbered list retains their review order and the remaining R6 gate:
 
 1. **R4a:** add Keybay directly to core, require the stable host application
    identifier, bind the dedicated DEK entry, and add package-internal fake
@@ -1014,8 +1018,9 @@ fail-safe foundations:
 5. **R6:** after R5 publication convergence, run Headscale persistence, real
    platform-Keybay, crash, fail-closed permission, platform backup-exclusion,
    and plaintext/sidecar-inventory gates.
-6. Update README/site from “owner-only database” to the exact shipped encrypted
-   StateStore claim only at the release cutover.
+6. Keep current-source docs on the exact encrypted StateStore behavior, but do
+   not publish broader platform/security support claims until the corresponding
+   release receipts pass.
 
 Do not ship an intermediate release that can create both SQLite and encrypted
 state or that falls back to plaintext when custody fails.

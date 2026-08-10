@@ -94,6 +94,66 @@ func TestStateLeaseRejectsRootDifferentFromFrozenIdentity(t *testing.T) {
 	}
 }
 
+func TestStateLeasePinsRootAndRejectsReplacementDuringLease(t *testing.T) {
+	container := t.TempDir()
+	root := filepath.Join(container, "state")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := acquireStateLease(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	moved := filepath.Join(container, "state-original")
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	clearStateLeaseAdmissionAfterTest(t, moved)
+
+	if _, err := lease.root.Stat(); err != nil {
+		t.Fatalf("pinned root descriptor was closed during lease: %v", err)
+	}
+	if err := lease.validatePaths(); !errors.Is(err, ErrConfigurationMismatch) {
+		t.Fatalf("replacement validation error = %v, want ErrConfigurationMismatch", err)
+	}
+	if err := lease.Release(); !errors.Is(err, ErrConfigurationMismatch) {
+		t.Fatalf("Release error = %v, want replacement mismatch", err)
+	}
+	if _, err := lease.root.Stat(); err == nil {
+		t.Fatal("Release left the pinned root descriptor open")
+	}
+	if _, err := os.Lstat(filepath.Join(root, stateLeaseFilename)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement root gained lease infrastructure: %v", err)
+	}
+}
+
+func TestStateLeaseRejectsReplacedLockPathDuringLease(t *testing.T) {
+	root := t.TempDir()
+	clearStateLeaseAdmissionAfterTest(t, root)
+	lease, err := acquireStateLease(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, stateLeaseFilename)
+	if err := os.Rename(path, path+".original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := lease.validatePaths(); err == nil {
+		t.Fatal("replacement lock path passed lease validation")
+	}
+	if err := lease.Release(); err == nil {
+		t.Fatal("Release did not surface the replaced lock path")
+	}
+}
+
 func TestStateLeaseNonblockingAcrossProcesses(t *testing.T) {
 	root := t.TempDir()
 	command := exec.Command(os.Args[0], "-test.run=^TestStateLeaseExternalHelper$")
@@ -302,6 +362,33 @@ func TestStateLeaseReleaseIsConcurrentAndIdempotent(t *testing.T) {
 	defer hookMu.Unlock()
 	if unlockCalls != 1 || closeCalls != 1 {
 		t.Fatalf("cleanup calls = unlock %d, close %d; want 1 each", unlockCalls, closeCalls)
+	}
+}
+
+func TestStateLeaseReleaseClosesLockBeforeRootAndJoinsErrors(t *testing.T) {
+	root := t.TempDir()
+	clearStateLeaseAdmissionAfterTest(t, root)
+	lockCloseFailure := errors.New("lock close failed")
+	rootCloseFailure := errors.New("root close failed")
+	var events []string
+	lease, err := acquireStateLease(root, withStateLeaseTestHooks(stateLeaseTestHooks{
+		close: func(file *os.File) error {
+			events = append(events, "lock")
+			return errors.Join(file.Close(), lockCloseFailure)
+		},
+		closeRoot: func(file *os.File) error {
+			events = append(events, "root")
+			return errors.Join(file.Close(), rootCloseFailure)
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Release(); !errors.Is(err, lockCloseFailure) || !errors.Is(err, rootCloseFailure) {
+		t.Fatalf("Release error = %v, want both close failures", err)
+	}
+	if got, want := fmt.Sprint(events), "[lock root]"; got != want {
+		t.Fatalf("close order = %s, want %s", got, want)
 	}
 }
 

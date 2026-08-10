@@ -105,6 +105,12 @@ final class _TailscaleInitialization {
       keybay.keybayNamespace == other.keybay.keybayNamespace;
 }
 
+final class _PreparedPersistentState {
+  const _PreparedPersistentState({required this.start});
+
+  final bool start;
+}
+
 /// Testable app-facing contract for an embedded Tailscale node.
 ///
 /// Production code usually gets the real implementation from
@@ -142,6 +148,7 @@ abstract interface class TailscaleClient {
   Future<TailscaleNodeIdentity?> whois(String ip);
   Future<void> down();
   Future<void> logout();
+  Future<void> forgetLocalIdentity();
 }
 
 /// Singleton embedded Tailscale node for the current Dart process.
@@ -331,6 +338,11 @@ class Tailscale implements TailscaleClient {
           token: quarantine.token,
           disposition: quarantine.custodyDisposition,
         );
+      } else {
+        // Quarantine is authoritative after a worker response is lost. If
+        // native custody is already terminal, retire the matching caller-side
+        // session as well so its DEK buffers cannot remain retained.
+        await _stateCustody.discardTerminalSession(quarantine.token);
       }
       final quarantineError = quarantine.error;
       final hasTerminalReceipt = quarantine.operation != null;
@@ -369,23 +381,33 @@ class Tailscale implements TailscaleClient {
       }
     }
 
+    // The worker is gone, so no command that had not already entered native
+    // code can do so later. An entry call already in Go remains registered and
+    // retires its own tombstone on return.
+    try {
+      await retireNativeAbandonedRuntimeToken(runtimeToken ?? 0);
+    } catch (error) {
+      rescueFailure ??= error;
+      _workerRecoveryFailure ??= TailscaleOperationException(
+        'worker recovery',
+        'Failed to retire an abandoned native dispatch token.',
+        code: TailscaleErrorCode.workerTerminated,
+        cause: error,
+      );
+    }
+
     final hasTerminalReceipt = quarantine?.operation != null;
     TailscaleStatus? idleStatus;
-    Object? classificationFailure;
     if (rescueFailure == null && !hasTerminalReceipt) {
-      try {
-        idleStatus = await classifyNativeIdleStatus();
-        _requireQuiescentStatus(idleStatus);
-        _idleStatusError = null;
-      } catch (error) {
-        classificationFailure = error;
-        _idleStatusError = error is TailscaleStatusException
-            ? error
-            : TailscaleStatusException(
-                'Failed to classify state after worker termination.',
-                cause: error,
-              );
+      // A runtime that was already active authenticated its Store before
+      // publication, so its successful quarantine can truthfully publish the
+      // stopped transition without a second Keybay read. Preparations that
+      // never published emit nothing; the next explicit status() performs a
+      // fresh secure idle probe on the caller isolate.
+      if (quarantine?.started == true) {
+        idleStatus = TailscaleStatus.stopped;
       }
+      _idleStatusError = null;
     } else if (rescueFailure != null && !cleanupRescueFailure) {
       _idleStatusError = TailscaleStatusException(
         'Native state could not be classified because runtime quarantine '
@@ -398,10 +420,8 @@ class Tailscale implements TailscaleClient {
     if (!expected) {
       final details = <String>[
         'The supervised Tailscale worker terminated unexpectedly.',
-        if (cause != null) 'Cause: $cause',
-        if (rescueFailure != null) 'Native quarantine failed: $rescueFailure',
-        if (classificationFailure != null)
-          'State classification failed: $classificationFailure',
+        if (cause != null) 'The worker reported an exit cause.',
+        if (rescueFailure != null) 'Native quarantine failed.',
       ];
       _errorController.add(
         TailscaleRuntimeError(
@@ -444,17 +464,6 @@ class Tailscale implements TailscaleClient {
         _shutdownIntents.contains(token)) {
       _recoveredShutdowns[token] = quarantine;
     }
-  }
-
-  static void _requireQuiescentStatus(TailscaleStatus status) {
-    if (status.state == NodeState.stopped ||
-        status.state == NodeState.noState) {
-      return;
-    }
-    throw TailscaleStatusException(
-      'Native runtime remained ${status.state.name} after quarantine.',
-      code: TailscaleErrorCode.workerTerminated,
-    );
   }
 
   void _publishQuiescentState({
@@ -506,71 +515,180 @@ class Tailscale implements TailscaleClient {
     );
   }
 
-  Future<void> _quarantineTimedOutStart(Worker worker, int token) async {
+  Future<RuntimeQuarantineResult> _quarantineStateOperation(int token) async {
+    final result = await quarantineNativeRuntime(token);
+    // Custody must settle before interpreting any accompanying native error;
+    // otherwise an error response can strand the lease and possibly-committed
+    // Keybay write indefinitely.
+    if (result.custodyHeld) {
+      await _stateCustody.settleAbandonment(
+        token: result.token,
+        disposition: result.custodyDisposition,
+      );
+    } else {
+      // Native quarantine is the authority for response-loss ambiguity. If it
+      // proves custody is already terminal, retire any caller-side session
+      // whose CompletePersistentCustody response was lost.
+      await _stateCustody.discardTerminalSession(result.token);
+    }
+    if (result.pending) {
+      await awaitNativeRuntimeQuiescence(token);
+    }
+    final quarantineError = result.error;
+    if (quarantineError != null) throw quarantineError;
+    return result;
+  }
+
+  void _retireAbandonedTokenAfter(
+    Future<Object?> originatingOperation,
+    int token,
+  ) {
+    unawaited(() async {
+      try {
+        await originatingOperation;
+      } catch (_) {
+        // Settlement, not success, is the retirement precondition.
+      }
+      try {
+        await retireNativeAbandonedRuntimeToken(token);
+      } catch (error) {
+        _errorController.add(
+          TailscaleRuntimeError(
+            message: 'An abandoned native dispatch token could not be retired.',
+            code: TailscaleRuntimeErrorCode.worker,
+          ),
+        );
+      }
+    }());
+  }
+
+  Future<void> _quarantineTimedOutStart(
+    Worker worker,
+    int token, {
+    Future<Object?>? originatingOperation,
+  }) async {
     worker.detachRuntimeToken(token);
 
     final quarantined = Completer<void>();
     _trackWorkerRecovery(() async {
       try {
-        final result = await quarantineNativeRuntime(token);
+        final result = await _quarantineStateOperation(token);
         if (result.matched) {
           _reset();
         }
-        final quarantineError = result.error;
-        if (quarantineError != null) throw quarantineError;
-        if (!quarantined.isCompleted) quarantined.complete();
         // An idempotent up() can time out before receiving the existing
         // runtime token. Quarantining its request token correctly matches
         // nothing; do not reset, classify, or republish that live runtime.
-        if (!result.matched) return;
-        if (result.custodyHeld) {
-          await _stateCustody.settleAbandonment(
-            token: result.token,
-            disposition: result.custodyDisposition,
-          );
-        }
-        if (result.pending) {
-          await awaitNativeRuntimeQuiescence(token);
-        }
-
-        try {
-          final idleStatus = await classifyNativeIdleStatus();
-          _requireQuiescentStatus(idleStatus);
+        if (result.matched) {
           _idleStatusError = null;
-          _publishQuiescentState(
-            emitStopped: result.emitStopped,
-            idleStatus: idleStatus,
-          );
-        } catch (error) {
-          _idleStatusError = error is TailscaleStatusException
-              ? error
-              : TailscaleStatusException(
-                  'Failed to classify state after startup quarantine.',
-                  cause: error,
-                );
-          _errorController.add(
-            TailscaleRuntimeError(
-              message:
-                  'Startup was quarantined, but persisted state could not be '
-                  'classified: $error',
-              code: TailscaleRuntimeErrorCode.worker,
-            ),
-          );
+          if (result.emitStopped) {
+            _stateController.add(NodeState.stopped);
+          }
         }
+        // This completes only after the native operation, late custody, and
+        // quiescence barrier have all settled.
+        if (!quarantined.isCompleted) quarantined.complete();
       } catch (error, stackTrace) {
         _reset();
-        _workerRecoveryFailure = TailscaleOperationException(
+        final cleanupFailure = TailscaleOperationException(
           'worker recovery',
-          'Failed to quarantine a timed-out native startup.',
-          code: TailscaleErrorCode.workerTerminated,
+          'Timed-out startup cleanup did not reach a proven quiescent state.',
+          code: TailscaleErrorCode.runtimeCleanupFailed,
           cause: error,
         );
+        _retainCleanupFailure(cleanupFailure);
         if (!quarantined.isCompleted) {
-          quarantined.completeError(error, stackTrace);
+          quarantined.completeError(cleanupFailure, stackTrace);
         }
       }
     });
     await quarantined.future;
+    if (originatingOperation != null) {
+      _retireAbandonedTokenAfter(originatingOperation, token);
+    }
+  }
+
+  Future<_PreparedPersistentState> _preparePersistentState({
+    required int token,
+    required bool startRequested,
+  }) async {
+    var nativeAdmission = false;
+    try {
+      await beginNativePersistentPreparation(token);
+      nativeAdmission = true;
+      final layout = await inspectNativePersistentPreparation(token);
+      if (layout != 'absent' && layout != 'encrypted') {
+        throw TailscaleOperationException(
+          'state preparation',
+          'Native returned an unsupported persistent-state layout.',
+          code: TailscaleErrorCode.invalidStateFormat,
+        );
+      }
+
+      final initialization = _initialization!;
+      final session = await _stateCustody.begin(
+        token: token,
+        binding: initialization.keybay,
+      );
+      final existingDek = await session.readDek();
+      final action = await resolveNativePersistentCustody(
+        token,
+        dekPresent: existingDek != null,
+      );
+
+      if (action == 'provision' && !startRequested) {
+        await _stateCustody.complete(token);
+        await finishNativePreparedPersistentState(token);
+        return const _PreparedPersistentState(start: false);
+      }
+
+      if (action == 'provision') {
+        final freshDek = await session.writeFreshDek(generateStateStoreDek());
+        supplyTransferredDekToNative(
+          token: token,
+          transferred: session.transferDek(freshDek),
+        );
+      } else if (action == 'open' && existingDek != null) {
+        supplyTransferredDekToNative(
+          token: token,
+          transferred: session.transferDek(existingDek),
+        );
+      } else {
+        throw TailscaleOperationException(
+          'state preparation',
+          'Native returned an inconsistent persistent-state action.',
+          code: TailscaleErrorCode.invalidStateFormat,
+        );
+      }
+
+      final empty = await prepareNativePersistentState(token);
+      await _stateCustody.complete(token);
+      if (action == 'open' && empty && !startRequested) {
+        await finishNativePreparedPersistentState(token);
+        return const _PreparedPersistentState(start: false);
+      }
+      return const _PreparedPersistentState(start: true);
+    } catch (error, stackTrace) {
+      Object? cleanupError;
+      if (nativeAdmission) {
+        try {
+          await _quarantineStateOperation(token);
+          await retireNativeAbandonedRuntimeToken(token);
+        } catch (cleanup) {
+          cleanupError = cleanup;
+        }
+      }
+      if (cleanupError != null) {
+        throw TailscaleOperationException(
+          'state preparation',
+          'Persistent state preparation failed and its cleanup could not be '
+              'confirmed. Restart the process before retrying.',
+          code: TailscaleErrorCode.runtimeCleanupFailed,
+          cause: (operation: error, cleanup: cleanupError),
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   void _reset() {
@@ -835,34 +953,30 @@ class Tailscale implements TailscaleClient {
   /// `<appId>.tailscale` Keybay namespace for the StateStore encryption key.
   /// It must remain unchanged for the lifetime of [stateDir]. Constructing
   /// this binding does not access Keybay; secure-state lifecycle operations
-  /// will resolve it lazily as part of the R4 cutover.
+  /// resolve it lazily.
   ///
-  /// [stateDir] is an app-owned directory where Tailscale persists
-  /// its node identity, keys, and profile data under a `tailscale/`
-  /// subdirectory. The library creates that subdirectory as `0700` and the
-  /// database as `0600`. The current implementation attempts to tighten
-  /// pre-existing modes but logs and continues when chmod is unavailable; it
-  /// does not yet provide application-layer StateStore encryption.
-  /// On a fresh install this directory is empty; after the first
-  /// successful [up], it contains credentials that let subsequent
-  /// launches reconnect without an auth key.
+  /// [stateDir] is the app-owned base directory for persistent package state.
+  /// The logical Tailscale StateStore is one authenticated encrypted file under
+  /// its owner-only `tailscale/` subtree. One random 32-byte DEK is held by
+  /// Keybay and retained in memory for the runtime lifetime. Missing custody,
+  /// unsafe paths or permissions, tampering, and pre-launch SQLite/FileStore
+  /// layouts fail closed; legacy identities are not migrated. After the first
+  /// successful persistent [up], later launches can reconnect without an auth
+  /// key.
   ///
-  /// The current pre-launch SQLite StateStore is permission-protected but not
-  /// encrypted at rest. It must not ship in a client application before the
-  /// planned Keybay-backed encrypted StateStore cutover. Filesystem permissions
-  /// and backup exclusion remain defense-in-depth after that cutover.
+  /// This encrypts StateStore data, not the entire subtree. Upstream logs, log
+  /// configuration, and TLS/certificate sidecars can remain outside that
+  /// encryption boundary. Owner-only permissions and backup exclusion are
+  /// therefore still required.
   ///
-  /// Pick somewhere durable but **excluded from cloud backups** — the
-  /// directory holds the node's WireGuard private key, and a key that
-  /// leaks into iCloud/Google backups can be restored onto another
-  /// device and silently impersonate this node. Prefer the application
-  /// support directory (`getApplicationSupportDirectory()`) over the
-  /// documents directory, which on iOS is included in iCloud backups
-  /// and visible in the Files app, and on Android is reachable via
-  /// Auto Backup. Mark the directory excluded from backup:
+  /// Pick a durable application-support directory, not a user documents
+  /// directory, and exclude it from cloud backup. Mark the directory excluded:
   /// `NSURLIsExcludedFromBackupKey` on iOS; `dataExtractionRules` /
-  /// `fullBackupContent` rules on Android. For nodes that should not
-  /// persist identity at all, register an ephemeral node instead.
+  /// `fullBackupContent` rules on Android. Persistent Android nodes require API
+  /// 31+; persistent Linux nodes require desktop `secret-tool` and an available,
+  /// unlocked Secret Service. Older Android and headless Linux can use explicit
+  /// ephemeral mode, which uses an in-memory StateStore and never accesses
+  /// Keybay.
   static void init({
     required String stateDir,
     required String appId,
@@ -939,12 +1053,14 @@ class Tailscale implements TailscaleClient {
   /// [controlUrl]. Registers the node on first launch, reconnects from
   /// persisted credentials on subsequent launches.
   ///
-  /// [authKey] is required for first registration; get one from the
-  /// tailnet admin panel at
+  /// [authKey] can enroll a fresh persistent node without user interaction;
+  /// get one from the tailnet admin panel at
   /// <https://login.tailscale.com/admin/settings/keys> (see
   /// <https://tailscale.com/kb/1085/auth-keys>). Reusable keys let you
-  /// call [up] from multiple processes. Subsequent launches can omit it —
-  /// the persisted session state reconnects automatically.
+  /// call [up] from multiple processes. It is optional in persistent mode:
+  /// without a usable profile or key, upstream enters [NodeState.needsLogin]
+  /// and returns an authorization URL for interactive enrollment. Subsequent
+  /// launches can omit it because persisted session state reconnects.
   ///
   /// Set [ephemeral] to register this process as a short-lived node. Ephemeral
   /// nodes are removed from the tailnet automatically after they go inactive
@@ -953,9 +1069,10 @@ class Tailscale implements TailscaleClient {
   /// lower-level StateStore container. Tailnet removal still follows the
   /// control plane's ephemeral-node cleanup behavior. Use this for CI jobs, preview
   /// environments, disposable tests, and other nodes whose identity should not
-  /// outlive the process. This affects registration with the control plane; use
-  /// a fresh or cleared `stateDir` passed to [Tailscale.init] when you need to
-  /// force a new ephemeral identity.
+  /// outlive the process. Ephemeral mode retains no local identity: every new
+  /// [up] after [down] (or process restart) needs a valid auth key, and a
+  /// single-use key must be replaced. The configured `stateDir` is used only
+  /// for admission/coordination and does not need to be cleared.
   ///
   /// [hostname] sets the tailnet-visible hostname and the
   /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) label, so the
@@ -1008,6 +1125,11 @@ class Tailscale implements TailscaleClient {
     _requireInitialized();
     if (timeout <= Duration.zero) {
       throw const TailscaleUsageException('up timeout must be positive.');
+    }
+    if (ephemeral && (authKey == null || authKey.isEmpty)) {
+      throw const TailscaleUsageException(
+        'ephemeral up requires a non-empty authKey.',
+      );
     }
     final validatedHostname = validateRuntimeHostname(hostname);
     final canonicalControlUrl = canonicalizeControlUrl(controlUrl);
@@ -1062,8 +1184,8 @@ class Tailscale implements TailscaleClient {
 
     final requestToken = _allocateRuntimeToken();
     final workerExit = Completer<Object?>();
-    _activeUpToken = requestToken;
-    _activeUpWorkerExit = workerExit;
+    var pendingNativeToken = false;
+    Future<WorkerStartResult>? originatingStart;
 
     Future<T> failOnWorkerExit<T>(Future<T> operation) {
       return Future.any<T>([
@@ -1092,15 +1214,31 @@ class Tailscale implements TailscaleClient {
       required Worker worker,
       required int token,
       required bool quarantine,
+      Future<Object?>? originatingOperation,
     }) async {
       if (quarantine) {
         try {
-          await _quarantineTimedOutStart(worker, token);
+          await _quarantineTimedOutStart(
+            worker,
+            token,
+            originatingOperation: originatingOperation,
+          );
+          pendingNativeToken = false;
         } catch (error) {
+          final cleanupFailure = error is TailscaleOperationException
+              ? error
+              : TailscaleOperationException(
+                  'up',
+                  'Native startup quarantine could not be confirmed.',
+                  code: TailscaleErrorCode.runtimeCleanupFailed,
+                  cause: error,
+                );
+          _retainCleanupFailure(cleanupFailure);
           throw TailscaleUpException(
-            '$message Native quarantine could not be established.',
-            code: TailscaleErrorCode.startupTimeout,
-            cause: error,
+            '$message Native cleanup could not be confirmed; restart before '
+            'retrying.',
+            code: TailscaleErrorCode.runtimeCleanupFailed,
+            cause: cleanupFailure,
           );
         }
       }
@@ -1115,7 +1253,6 @@ class Tailscale implements TailscaleClient {
       try {
         await _awaitWorkerRecovery().timeout(remainingBudget());
         if (remainingBudget() == Duration.zero) throw TimeoutException('');
-        worker = _currentOrSpawnWorker();
       } on TimeoutException {
         throw TailscaleUpException(
           'Node startup could not begin within $timeout because an earlier '
@@ -1124,6 +1261,58 @@ class Tailscale implements TailscaleClient {
         );
       }
 
+      final currentWorker = _workerInstance;
+      final activeRuntime =
+          currentWorker != null &&
+          !currentWorker.isDisposed &&
+          currentWorker.runtimeToken != null;
+      if (!ephemeral && !activeRuntime) {
+        late final _PreparedPersistentState prepared;
+        final preparationOperation = _preparePersistentState(
+          token: requestToken,
+          startRequested: true,
+        );
+        try {
+          prepared = await preparationOperation.timeout(remainingBudget());
+        } on TimeoutException {
+          _retireAbandonedTokenAfter(preparationOperation, requestToken);
+          try {
+            await _quarantineStateOperation(requestToken);
+          } catch (cleanupError) {
+            final cleanupFailure = cleanupError is TailscaleOperationException
+                ? cleanupError
+                : TailscaleOperationException(
+                    'up',
+                    'Persistent state cleanup could not be confirmed.',
+                    code: TailscaleErrorCode.runtimeCleanupFailed,
+                    cause: cleanupError,
+                  );
+            _retainCleanupFailure(cleanupFailure);
+            throw TailscaleUpException(
+              'Persistent state preparation exceeded $timeout and cleanup '
+              'could not be confirmed; restart before retrying.',
+              code: TailscaleErrorCode.runtimeCleanupFailed,
+              cause: cleanupFailure,
+            );
+          }
+          throw TailscaleUpException(
+            'Persistent state preparation exceeded $timeout. The matching '
+            'operation was quarantined.',
+            code: TailscaleErrorCode.startupTimeout,
+          );
+        }
+        if (!prepared.start) {
+          _idleStatusError = null;
+          return TailscaleStatus.noState;
+        }
+        pendingNativeToken = true;
+      }
+
+      worker = _currentOrSpawnWorker();
+      _activeUpToken = requestToken;
+      _activeUpWorkerExit = workerExit;
+
+      pendingNativeToken = true;
       final startFuture = worker.start(
         requestToken: requestToken,
         hostname: hostname,
@@ -1131,6 +1320,7 @@ class Tailscale implements TailscaleClient {
         ephemeral: ephemeral,
         controlUrl: controlUrl,
       );
+      originatingStart = startFuture;
 
       late final WorkerStartResult startResult;
       try {
@@ -1145,8 +1335,10 @@ class Tailscale implements TailscaleClient {
           worker: worker,
           token: requestToken,
           quarantine: true,
+          originatingOperation: startFuture,
         );
       }
+      pendingNativeToken = false;
 
       _activeUpToken = startResult.runtimeToken;
 
@@ -1162,7 +1354,9 @@ class Tailscale implements TailscaleClient {
       // wait on a state change that will never come.
       late final TailscaleStatus postStart;
       try {
-        postStart = await failOnWorkerExit(status()).timeout(remainingBudget());
+        postStart = await failOnWorkerExit(
+          worker.status(),
+        ).timeout(remainingBudget());
       } on TimeoutException {
         return timeoutAfterQuarantine(
           message: 'Node status did not respond within $timeout after startup.',
@@ -1198,7 +1392,9 @@ class Tailscale implements TailscaleClient {
       }
 
       try {
-        return await failOnWorkerExit(status()).timeout(remainingBudget());
+        return await failOnWorkerExit(
+          worker.status(),
+        ).timeout(remainingBudget());
       } on TimeoutException {
         return timeoutAfterQuarantine(
           message:
@@ -1216,6 +1412,71 @@ class Tailscale implements TailscaleClient {
         }
         Error.throwWithStackTrace(error, stackTrace);
       }
+    } catch (error, stackTrace) {
+      Object? cleanupError;
+      if (pendingNativeToken) {
+        _workerInstance?.detachRuntimeToken(requestToken);
+        if (isWorkerTermination(error)) {
+          try {
+            await _awaitWorkerRecoveryCompletion();
+            await _awaitWorkerRecovery();
+          } catch (recoveryError) {
+            cleanupError = recoveryError;
+          }
+        }
+        if (cleanupError == null) {
+          try {
+            await _quarantineStateOperation(requestToken);
+            pendingNativeToken = false;
+            final operation = originatingStart;
+            if (operation != null && !isWorkerTermination(error)) {
+              _retireAbandonedTokenAfter(operation, requestToken);
+            } else if (operation == null) {
+              await retireNativeAbandonedRuntimeToken(requestToken);
+            }
+          } catch (quarantineError) {
+            cleanupError = quarantineError;
+          }
+        }
+      }
+      if (cleanupError != null) {
+        final cleanupFailure =
+            cleanupError is TailscaleOperationException &&
+                cleanupError.code == TailscaleErrorCode.runtimeCleanupFailed
+            ? cleanupError
+            : TailscaleOperationException(
+                'up',
+                'Failed startup cleanup did not reach a proven quiescent '
+                    'state.',
+                code: TailscaleErrorCode.runtimeCleanupFailed,
+                cause: cleanupError,
+              );
+        _retainCleanupFailure(cleanupFailure);
+        throw TailscaleUpException(
+          'Node startup failed and native cleanup could not be confirmed; '
+          'restart before retrying.',
+          code: TailscaleErrorCode.runtimeCleanupFailed,
+          cause: (operation: error, cleanup: cleanupFailure),
+        );
+      }
+      if (error is TailscaleUpException) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (error is TailscaleOperationException) {
+        Error.throwWithStackTrace(
+          TailscaleUpException(
+            error.message,
+            code: error.code,
+            statusCode: error.statusCode,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(
+        TailscaleUpException('Node startup failed.', cause: error),
+        stackTrace,
+      );
     } finally {
       if (identical(_activeUpWorkerExit, workerExit)) {
         _activeUpWorkerExit = null;
@@ -1234,19 +1495,93 @@ class Tailscale implements TailscaleClient {
   /// tailnet IPs, health warnings, and MagicDNS suffix. Node
   /// inventory is separate; call [nodes] when you need it.
   ///
-  /// Safe to call before [up]. Before the encrypted-store cutover, an idle
-  /// retained StateStore is conservatively reported as [NodeState.stopped]
-  /// even after a confirmed logout; [NodeState.noState] requires an absent
-  /// storage root. R4 replaces that filesystem probe with authenticated
-  /// logical-state classification. This occupancy signal is not proof that
-  /// the state is enrolled, valid, or sufficient to reconnect without a key.
+  /// Safe to call before [up]. Idle persistent state is authenticated with the
+  /// installation DEK from Keybay: an absent or authenticated-empty Store is
+  /// [NodeState.noState], while authenticated logical state is
+  /// [NodeState.stopped]. Missing/orphaned keys, malformed state, and locked
+  /// secure storage fail closed instead of being reported as a fresh node.
   @override
   Future<TailscaleStatus> status() async {
     _requireInitialized();
     await _awaitWorkerRecovery();
     final classificationFailure = _idleStatusError;
     if (classificationFailure != null) throw classificationFailure;
-    return _withWorker((worker) => worker.status());
+    final current = _workerInstance;
+    if (current != null &&
+        !current.isDisposed &&
+        current.runtimeToken != null) {
+      return current.status();
+    }
+    return _supervisorLifecycle.run(_runIdleSecureStatus);
+  }
+
+  Future<TailscaleStatus> _runIdleSecureStatus() async {
+    await _awaitWorkerRecovery();
+    final current = _workerInstance;
+    if (current != null &&
+        !current.isDisposed &&
+        current.runtimeToken != null) {
+      return current.status();
+    }
+
+    final token = _allocateRuntimeToken();
+    var pendingPreparation = false;
+    try {
+      final prepared = await _preparePersistentState(
+        token: token,
+        startRequested: false,
+      );
+      if (!prepared.start) return TailscaleStatus.noState;
+      pendingPreparation = true;
+      await finishNativePreparedPersistentState(token);
+      pendingPreparation = false;
+      return TailscaleStatus.stopped;
+    } catch (error, stackTrace) {
+      Object? cleanupError;
+      if (pendingPreparation) {
+        try {
+          await _quarantineStateOperation(token);
+          await retireNativeAbandonedRuntimeToken(token);
+          pendingPreparation = false;
+        } catch (cleanup) {
+          cleanupError = cleanup;
+        }
+      }
+      if (cleanupError != null) {
+        final cleanupFailure = TailscaleOperationException(
+          'status',
+          'Persistent status cleanup did not reach a proven quiescent state.',
+          code: TailscaleErrorCode.runtimeCleanupFailed,
+          cause: cleanupError,
+        );
+        _retainCleanupFailure(cleanupFailure);
+        throw TailscaleStatusException(
+          'Persistent state inspection failed and cleanup could not be '
+          'confirmed; restart before retrying.',
+          code: TailscaleErrorCode.runtimeCleanupFailed,
+          cause: (operation: error, cleanup: cleanupFailure),
+        );
+      }
+      if (error is TailscaleStatusException) rethrow;
+      if (error is TailscaleOperationException) {
+        Error.throwWithStackTrace(
+          TailscaleStatusException(
+            error.message,
+            code: error.code,
+            statusCode: error.statusCode,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(
+        TailscaleStatusException(
+          'Persistent node state could not be authenticated.',
+          cause: error,
+        ),
+        stackTrace,
+      );
+    }
   }
 
   /// Returns the current node inventory — every node on the tailnet
@@ -1423,16 +1758,45 @@ class Tailscale implements TailscaleClient {
   Future<void> _runLogout() async {
     _reset();
     int? shutdownToken;
+    var pendingPersistentPreparation = false;
+    final requestToken = _allocateRuntimeToken();
     try {
-      final requestToken = _allocateRuntimeToken();
       var workerResponseReceived = false;
       try {
+        final current = _workerInstance;
+        final activeRuntime =
+            current != null &&
+            !current.isDisposed &&
+            current.runtimeToken != null;
+        if (!activeRuntime) {
+          try {
+            final prepared = await _preparePersistentState(
+              token: requestToken,
+              startRequested: false,
+            );
+            if (!prepared.start) {
+              _idleStatusError = null;
+              _publishTerminalNodes();
+              _stateController.add(NodeState.noState);
+              return;
+            }
+            pendingPersistentPreparation = true;
+          } on TailscaleOperationException catch (error) {
+            throw TailscaleLogoutException(
+              error.message,
+              code: error.code,
+              statusCode: error.statusCode,
+              cause: error,
+            );
+          }
+        }
         final result = await _withWorker((worker) {
           shutdownToken = worker.runtimeToken ?? requestToken;
           _shutdownIntents.add(shutdownToken!);
           return worker.logout(requestToken: requestToken);
         });
         workerResponseReceived = true;
+        pendingPersistentPreparation = false;
         _idleStatusError = null;
         final logoutError = result.error;
         if (result.started || result.noState) {
@@ -1491,12 +1855,171 @@ class Tailscale implements TailscaleClient {
         rethrow;
       }
     } finally {
+      if (pendingPersistentPreparation) {
+        Object? cleanupError;
+        try {
+          await _awaitWorkerRecoveryCompletion();
+          await _quarantineStateOperation(requestToken);
+          await retireNativeAbandonedRuntimeToken(requestToken);
+          pendingPersistentPreparation = false;
+        } catch (error) {
+          cleanupError = error;
+        }
+        if (cleanupError != null) {
+          final cleanupFailure =
+              cleanupError is TailscaleOperationException &&
+                  cleanupError.code == TailscaleErrorCode.runtimeCleanupFailed
+              ? cleanupError
+              : TailscaleOperationException(
+                  'logout',
+                  'Idle logout preparation cleanup could not be confirmed.',
+                  code: TailscaleErrorCode.runtimeCleanupFailed,
+                  cause: cleanupError,
+                );
+          _retainCleanupFailure(cleanupFailure);
+          throw TailscaleLogoutException(
+            'Logout failed before its prepared state could be safely '
+            'released; restart before retrying.',
+            code: TailscaleErrorCode.runtimeCleanupFailed,
+            cause: cleanupFailure,
+          );
+        }
+      }
       if (shutdownToken case final token?) {
         _shutdownIntents.remove(token);
         _recoveredShutdowns.remove(token);
       }
       _reset();
     }
+  }
+
+  /// Irreversibly removes this installation's local Tailscale identity.
+  ///
+  /// This is deliberately separate from [logout]: it does not contact the
+  /// control plane, so the remote node may remain until an administrator or
+  /// expiry policy removes it. Native code first stops any active runtime and
+  /// durably records reset intent while retaining the state lease. The exact
+  /// Keybay DEK is then deleted, followed by only this package's state subtree.
+  /// Interrupted resets fail closed and must be resumed by calling this method
+  /// again; [up], [status], and [logout] will not guess through the marker.
+  @override
+  Future<void> forgetLocalIdentity() async {
+    _requireInitialized();
+    return _supervisorLifecycle.run(_runForgetLocalIdentity);
+  }
+
+  Future<void> _runForgetLocalIdentity() async {
+    await _awaitWorkerRecovery();
+    _reset();
+
+    final token = _allocateRuntimeToken();
+    final worker = _workerInstance;
+    final activeToken = worker?.runtimeToken;
+    late final NativeLocalResetBeginResult begin;
+    try {
+      begin = await beginNativeLocalReset(token);
+    } catch (error) {
+      Object? settlementError;
+      try {
+        // A lost/invalid response can follow a successful native begin. Settle
+        // it as unconfirmed so the marker remains but the lease is released.
+        await finishNativeLocalReset(token, custodyDeletionSucceeded: false);
+      } catch (settlement) {
+        settlementError = settlement;
+      }
+      final cleanupFailed =
+          (error is TailscaleOperationException &&
+              error.code == TailscaleErrorCode.runtimeCleanupFailed) ||
+          (settlementError is TailscaleOperationException &&
+              settlementError.code == TailscaleErrorCode.runtimeCleanupFailed);
+      if (cleanupFailed) {
+        final failure =
+            error is TailscaleOperationException &&
+                error.code == TailscaleErrorCode.runtimeCleanupFailed
+            ? error
+            : settlementError! as TailscaleOperationException;
+        _retainCleanupFailure(failure);
+      }
+      throw TailscaleForgetLocalIdentityException(
+        cleanupFailed
+            ? 'Local reset response recovery did not reach a proven '
+                  'quiescent state. Restart before retrying.'
+            : 'Local reset could not confirm its durable begin result. Call '
+                  'forgetLocalIdentity() again before starting the node.',
+        code: cleanupFailed
+            ? TailscaleErrorCode.runtimeCleanupFailed
+            : TailscaleErrorCode.localResetIncomplete,
+        cause: (begin: error, settlement: settlementError),
+      );
+    }
+    if (begin.stopped) {
+      if (activeToken != null) worker?.detachRuntimeToken(activeToken);
+      _publishTerminalNodes();
+      _stateController.add(NodeState.stopped);
+    }
+    final beginError = begin.error;
+    if (beginError != null) {
+      if (beginError.code == TailscaleErrorCode.runtimeCleanupFailed) {
+        _retainCleanupFailure(beginError);
+      }
+      throw TailscaleForgetLocalIdentityException(
+        'Local identity reset could not establish durable custody.',
+        code: beginError.code,
+        statusCode: beginError.statusCode,
+        cause: beginError,
+      );
+    }
+
+    TailscaleOperationException? custodyError;
+    try {
+      final storage = _initialization!.keybay.createStorage();
+      await storage.delete(stateStoreDekEntry);
+    } catch (error) {
+      custodyError = mapKeybayStateCustodyError(
+        error,
+        action: 'remove the Tailscale state key',
+      );
+    }
+
+    TailscaleOperationException? finishError;
+    try {
+      await finishNativeLocalReset(
+        token,
+        custodyDeletionSucceeded: custodyError == null,
+      );
+    } catch (error) {
+      finishError = error is TailscaleOperationException
+          ? error
+          : TailscaleOperationException(
+              'forget local identity',
+              'Native local reset did not complete safely.',
+              code: TailscaleErrorCode.localResetIncomplete,
+              cause: error,
+            );
+    }
+
+    if (custodyError != null || finishError != null) {
+      final cleanupFailed =
+          finishError?.code == TailscaleErrorCode.runtimeCleanupFailed;
+      if (cleanupFailed) _retainCleanupFailure(finishError!);
+      throw TailscaleForgetLocalIdentityException(
+        cleanupFailed
+            ? 'Secure-storage deletion failed and native cleanup did not '
+                  'reach a proven quiescent state. Restart before retrying.'
+            : 'Local identity reset is incomplete. Resolve secure-storage '
+                  'access and call forgetLocalIdentity() again before '
+                  'starting the node.',
+        code: cleanupFailed
+            ? TailscaleErrorCode.runtimeCleanupFailed
+            : TailscaleErrorCode.localResetIncomplete,
+        statusCode: finishError?.statusCode,
+        cause: (custody: custodyError, native: finishError),
+      );
+    }
+
+    _idleStatusError = null;
+    _publishTerminalNodes();
+    _stateController.add(NodeState.noState);
   }
 
   /// Terminates the supervised control isolate without touching native state.

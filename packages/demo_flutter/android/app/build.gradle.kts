@@ -23,7 +23,10 @@ android {
         applicationId = "com.dune.dunecoreflutter"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // This manual demo persists its node identity through Keybay, whose
+        // Android Keystore path requires Android 12 / API 31+. Use the
+        // explicitly ephemeral smoke harness for older Android versions.
+        minSdk = 31
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

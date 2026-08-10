@@ -11,10 +11,11 @@ import '_equality.dart';
 /// The node's position in the connection lifecycle. Mirrors Go's
 /// [`ipn.State`](https://pkg.go.dev/tailscale.com/ipn#State).
 enum NodeState {
-  /// No persisted credentials and the engine has not been started.
+  /// No authenticated logical state while the engine is idle.
   ///
-  /// This is the initial state when the node has never authenticated.
-  /// An auth key must be provided to [Tailscale.up] to proceed.
+  /// A persistent [Tailscale.up] may proceed without an auth key and let
+  /// upstream return [needsLogin] for interactive enrollment. Ephemeral mode
+  /// requires an auth key because it retains no local identity.
   noState,
 
   /// The node needs authentication. Open
@@ -34,11 +35,11 @@ enum NodeState {
   /// The node is connected and ready to send/receive traffic.
   running,
 
-  /// The engine is not running and recognized local state artifacts exist.
+  /// The engine is not running and an authenticated persistent StateStore
+  /// contains logical Tailscale state.
   ///
-  /// This is conservative filesystem occupancy, not proof that the state is
-  /// enrolled, valid, or sufficient to reconnect without an auth key. Call
-  /// [Tailscale.up] to determine the actual control-plane state.
+  /// This does not prove that control-plane credentials are still valid. Call
+  /// [Tailscale.up] to determine the current upstream state.
   stopped;
 
   /// Parses a Go `ipn.State` string into a [NodeState].
@@ -140,6 +141,13 @@ class TailscaleStatus {
   /// A status representing a stopped/uninitialized engine.
   static const stopped = TailscaleStatus(
     state: NodeState.stopped,
+    tailscaleIPs: [],
+    health: [],
+  );
+
+  /// A status representing an authenticated-empty or absent persistent store.
+  static const noState = TailscaleStatus(
+    state: NodeState.noState,
     tailscaleIPs: [],
     health: [],
   );

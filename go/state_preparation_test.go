@@ -140,6 +140,13 @@ func TestPersistentPreparationIsLatentAndTokenBound(t *testing.T) {
 	if !second.Matched || second.Pending || second.CustodyHeld {
 		t.Fatalf("non-custody abandon result = %+v", second)
 	}
+	runtimes.mu.Lock()
+	_, retainedOutcome := runtimes.completedPreparations[token+1]
+	_, retainedTombstone := runtimes.abandonedTokens[token+1]
+	runtimes.mu.Unlock()
+	if retainedOutcome || retainedTombstone {
+		t.Fatal("synchronous preparation quarantine retained bookkeeping")
+	}
 }
 
 func TestPersistentPreparationCompensatesFreshWriteBeforeEnvelope(t *testing.T) {

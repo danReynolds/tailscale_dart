@@ -31,6 +31,7 @@ final class PeerProcess {
         'HOSTNAME': hostname,
         'CONTROL_URL': ?controlUrl,
         'AUTH_KEY': ?authKey,
+        'TAILSCALE_TEST_KEYBAY_DIR': stateDir,
         if (ephemeral) 'EPHEMERAL': '1',
         'RESPONSE_BODY': ?responseBody,
         if (advertisedRoutes.isNotEmpty)

@@ -67,6 +67,8 @@ type nodeRuntime struct {
 	localClient *local.Client
 	store       ipn.StateStore
 	storeCloser io.Closer
+	stateLease  *stateLease
+	scratch     *ephemeralStateScratch
 	closeServer func(*tsnet.Server) error
 
 	preparationDone     chan struct{}
@@ -114,11 +116,29 @@ func (r *nodeRuntime) resultError(err error) error {
 	return err
 }
 
+func (r *nodeRuntime) scratchDirectory() string {
+	if r == nil || r.scratch == nil {
+		return ""
+	}
+	return r.scratch.directory()
+}
+
 // close is the sole post-Start teardown path. The epoch is bumped and the
 // runtime detached by runtimeController before this method runs, so slow
 // registry cleanup and Server.Close happen without the controller lock held.
 // The Server is always closed before its caller-owned StateStore.
 func (r *nodeRuntime) close() error {
+	return r.closeOwnedResources(true)
+}
+
+// closeUnstarted releases caller-owned resources after Server.Start returned
+// an error. Upstream owns unwinding its own partial start and must not receive
+// a competing Server.Close call.
+func (r *nodeRuntime) closeUnstarted() error {
+	return r.closeOwnedResources(false)
+}
+
+func (r *nodeRuntime) closeOwnedResources(closeStartedServer bool) error {
 	if r == nil {
 		return nil
 	}
@@ -133,7 +153,7 @@ func (r *nodeRuntime) close() error {
 		resetTailnetHTTPTransport()
 		StopWatch()
 
-		if r.server != nil {
+		if closeStartedServer && r.server != nil {
 			closeServer := r.closeServer
 			if closeServer == nil {
 				closeServer = func(server *tsnet.Server) error { return server.Close() }
@@ -145,6 +165,16 @@ func (r *nodeRuntime) close() error {
 		if r.storeCloser != nil {
 			if err := r.storeCloser.Close(); err != nil {
 				r.closeErr = errors.Join(r.closeErr, fmt.Errorf("close state store: %w", err))
+			}
+		}
+		if r.stateLease != nil {
+			if err := r.stateLease.Release(); err != nil {
+				r.closeErr = errors.Join(r.closeErr, fmt.Errorf("release state lease: %w", err))
+			}
+		}
+		if r.scratch != nil {
+			if err := r.scratch.Close(); err != nil {
+				r.closeErr = errors.Join(r.closeErr, fmt.Errorf("remove ephemeral state scratch: %w", err))
 			}
 		}
 	})
@@ -172,6 +202,14 @@ type preparationOutcome struct {
 	err error
 }
 
+// runtimeStartCall covers the narrow interval between a Dart worker entering
+// StartRuntimeWithToken and native lifecycle admission becoming observable as
+// a preparation, candidate, or runtime. Quarantine can wait on this receipt
+// instead of retaining an unbounded pre-admission tombstone.
+type runtimeStartCall struct {
+	done chan struct{}
+}
+
 const (
 	lifecycleOperationDown   = "down"
 	lifecycleOperationLogout = "logout"
@@ -197,12 +235,13 @@ type runtimeController struct {
 	current               *nodeRuntime
 	draining              *drainingRuntime
 	logout                *logoutOperation
+	reset                 *localResetOperation
 	persistentPreparation *persistentPreparation
+	startCalls            map[uint64]*runtimeStartCall
 	abandonedTokens       map[uint64]struct{}
 	completedPreparations map[uint64]preparationOutcome
 	completedLifecycle    map[uint64]lifecycleReceipt
 	cleanupFailure        *runtimeCleanupFailure
-	lastConfig            *runtimeConfig
 
 	configured      bool
 	stateRoot       string
@@ -212,6 +251,54 @@ type runtimeController struct {
 }
 
 var runtimes runtimeController
+
+func (c *runtimeController) beginStartCall(token uint64) (*runtimeStartCall, error) {
+	if token == 0 {
+		return nil, fmt.Errorf("runtime preparation token must be non-zero")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.startCalls == nil {
+		c.startCalls = make(map[uint64]*runtimeStartCall)
+	}
+	if c.startCalls[token] != nil {
+		return nil, fmt.Errorf("%w: start call for token %d is already active", ErrLifecycleBusy, token)
+	}
+	call := &runtimeStartCall{done: make(chan struct{})}
+	c.startCalls[token] = call
+	return call, nil
+}
+
+func (c *runtimeController) finishStartCall(token uint64, call *runtimeStartCall) {
+	if call == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.startCalls[token] == call {
+		delete(c.startCalls, token)
+		// Once the one token-qualified entry call has returned, no native work
+		// from that dispatch can cross admission later. Its tombstone is safe to
+		// retire even when it rejected before creating a candidate.
+		delete(c.abandonedTokens, token)
+		close(call.done)
+	}
+	c.mu.Unlock()
+}
+
+// RetireAbandonedRuntimeToken acknowledges that the originating Dart Future
+// or worker can no longer enter native code. If the entry call is already
+// active, its defer owns retirement; otherwise the unmatched pre-dispatch
+// tombstone can be removed now.
+func RetireAbandonedRuntimeToken(token uint64) {
+	if token == 0 {
+		return
+	}
+	runtimes.mu.Lock()
+	if runtimes.startCalls[token] == nil {
+		delete(runtimes.abandonedTokens, token)
+	}
+	runtimes.mu.Unlock()
+}
 
 // Configure freezes process-wide initialization identity. os.SameFile supplies
 // native path/inode identity, so lexical and symlink aliases cannot create two
@@ -462,10 +549,14 @@ func (c *runtimeController) reserve(token uint64, config runtimeConfig) (*nodeRu
 		return nil, nil, err
 	}
 	if _, abandoned := c.abandonedTokens[token]; abandoned {
+		delete(c.abandonedTokens, token)
 		return nil, nil, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
 	}
 	if c.logout != nil {
 		return nil, nil, fmt.Errorf("%w: logout token %d is still in progress", ErrLifecycleBusy, c.logout.token)
+	}
+	if c.reset != nil {
+		return nil, nil, fmt.Errorf("%w: local reset token %d is still in progress", ErrLifecycleBusy, c.reset.token)
 	}
 	if c.persistentPreparation != nil || c.candidate != nil || c.draining != nil {
 		return nil, nil, fmt.Errorf("%w: another node lifecycle transition is in progress", ErrLifecycleBusy)
@@ -479,11 +570,53 @@ func (c *runtimeController) reserve(token uint64, config runtimeConfig) (*nodeRu
 
 	candidate := newNodeRuntime(nodeEpoch.Load(), token, config)
 	c.candidate = candidate
-	// A fresh Server.Start may persist Hostname/ControlURL before the runtime
-	// can commit. Invalidate any older tuple now; rememberStartedConfig restores
-	// only a configuration that a successful Start proved was applied.
-	c.lastConfig = nil
 	return candidate, nil, nil
+}
+
+// activeRuntimeForConfig handles the one persistent-start case that does not
+// require new custody: an idempotent call against the already-active runtime.
+func (c *runtimeController) refreshActiveRuntime(
+	token uint64,
+	config runtimeConfig,
+	refresh func() error,
+) (*nodeRuntime, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if token == 0 {
+		return nil, fmt.Errorf("runtime preparation token must be non-zero")
+	}
+	if err := c.cleanupAdmissionErrorLocked(); err != nil {
+		return nil, err
+	}
+	if _, abandoned := c.abandonedTokens[token]; abandoned {
+		delete(c.abandonedTokens, token)
+		return nil, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, token)
+	}
+	if c.logout != nil || c.reset != nil || c.candidate != nil || c.draining != nil {
+		return nil, fmt.Errorf("%w: another node lifecycle transition is in progress", ErrLifecycleBusy)
+	}
+	if preparation := c.persistentPreparation; preparation != nil {
+		// A persistent start prepares and authenticates its Store before it
+		// reaches this common active-runtime probe. The exact preparation token
+		// is not a competing transition: let the caller continue to atomic
+		// adoption. A different token must remain fail-closed and busy.
+		if preparation.token == token && c.current == nil {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: another node lifecycle transition is in progress", ErrLifecycleBusy)
+	}
+	if c.current == nil {
+		return nil, nil
+	}
+	if c.current.config != config {
+		return nil, fmt.Errorf("%w: call down before changing hostname, control URL, or ephemeral mode", ErrConfigurationMismatch)
+	}
+	if refresh != nil {
+		if err := refresh(); err != nil {
+			return nil, err
+		}
+	}
+	return c.current, nil
 }
 
 func (c *runtimeController) cleanupAdmissionErrorLocked() error {
@@ -505,15 +638,6 @@ func runtimeCleanupAdmissionError() error {
 	return runtimes.cleanupAdmissionErrorLocked()
 }
 
-func (c *runtimeController) rememberStartedConfig(candidate *nodeRuntime) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if candidate != nil && c.candidate == candidate {
-		config := candidate.config
-		c.lastConfig = &config
-	}
-}
-
 func (c *runtimeController) commit(candidate *nodeRuntime) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -525,8 +649,6 @@ func (c *runtimeController) commit(candidate *nodeRuntime) error {
 	}
 	c.candidate = nil
 	c.current = candidate
-	config := candidate.config
-	c.lastConfig = &config
 	candidate.finishPreparation()
 	return nil
 }
@@ -615,18 +737,6 @@ func currentRuntime() *nodeRuntime {
 	runtimes.mu.Lock()
 	defer runtimes.mu.Unlock()
 	return runtimes.current
-}
-
-func lastRuntimeConfig() (runtimeConfig, error) {
-	runtimes.mu.Lock()
-	defer runtimes.mu.Unlock()
-	if runtimes.lastConfig == nil {
-		return runtimeConfig{}, fmt.Errorf(
-			"%w: persisted identity cannot be safely reopened for logout; start it once with its original hostname, control URL, and ephemeral mode",
-			ErrConfigurationMismatch,
-		)
-	}
-	return *runtimes.lastConfig, nil
 }
 
 // beginLogout reserves the exact current runtime through both upstream logout
@@ -750,6 +860,7 @@ func AbandonRuntime(token uint64) (RuntimeCloseResult, error) {
 	for {
 		runtimes.mu.Lock()
 		if receipt, ok := runtimes.takeLifecycleReceiptLocked(token); ok {
+			delete(runtimes.abandonedTokens, token)
 			runtimes.mu.Unlock()
 			return receipt.result, receipt.err
 		}
@@ -779,7 +890,12 @@ func AbandonRuntime(token uint64) (RuntimeCloseResult, error) {
 				return result, nil
 			}
 			result.Pending = false
-			return result, finishPersistentPreparation(preparation, nil)
+			finishErr := finishPersistentPreparation(preparation, nil)
+			runtimes.mu.Lock()
+			delete(runtimes.completedPreparations, token)
+			delete(runtimes.abandonedTokens, token)
+			runtimes.mu.Unlock()
+			return result, finishErr
 		}
 		if logout := runtimes.logout; logout != nil && logout.token == token {
 			done := logout.done
@@ -803,6 +919,12 @@ func AbandonRuntime(token uint64) (RuntimeCloseResult, error) {
 		}
 		runtime := runtimes.current
 		if runtime == nil || runtime.token != token {
+			// A token-qualified Start call can be executing before it has created
+			// a candidate. Report a quiescence barrier without claiming that the
+			// current (different-token) runtime matched this abandonment.
+			if call := runtimes.startCalls[token]; call != nil {
+				result.Pending = true
+			}
 			runtimes.mu.Unlock()
 			return result, nil
 		}
@@ -813,7 +935,11 @@ func AbandonRuntime(token uint64) (RuntimeCloseResult, error) {
 		runtimes.mu.Unlock()
 
 		err := runtime.close()
-		return result, finishRuntimeDrain(draining, err)
+		finishErr := finishRuntimeDrain(draining, err)
+		runtimes.mu.Lock()
+		delete(runtimes.abandonedTokens, token)
+		runtimes.mu.Unlock()
+		return result, finishErr
 	}
 }
 
@@ -830,7 +956,12 @@ func AwaitRuntimeQuiescence(token uint64) error {
 			done := preparation.done
 			runtimes.mu.Unlock()
 			<-done
-			return preparation.result()
+			err := preparation.result()
+			runtimes.mu.Lock()
+			delete(runtimes.completedPreparations, token)
+			delete(runtimes.abandonedTokens, token)
+			runtimes.mu.Unlock()
+			return err
 		}
 		if logout := runtimes.logout; logout != nil && logout.token == token {
 			done := logout.done
@@ -840,6 +971,7 @@ func AwaitRuntimeQuiescence(token uint64) error {
 		}
 		if outcome, ok := runtimes.completedPreparations[token]; ok {
 			delete(runtimes.completedPreparations, token)
+			delete(runtimes.abandonedTokens, token)
 			runtimes.mu.Unlock()
 			return outcome.err
 		}
@@ -858,18 +990,34 @@ func AwaitRuntimeQuiescence(token uint64) error {
 		} else if done == nil {
 			draining = nil
 		}
+		var startCall *runtimeStartCall
+		if done == nil {
+			startCall = runtimes.startCalls[token]
+			if startCall != nil {
+				done = startCall.done
+			}
+		}
 		runtimes.mu.Unlock()
 		if done == nil {
 			return nil
 		}
 		<-done
+		if startCall != nil {
+			// The entry-call defer removes its tombstone before closing done.
+			// Loop once more to consume any candidate cleanup receipt it left.
+			continue
+		}
 		if candidate != nil {
 			runtimes.mu.Lock()
 			delete(runtimes.completedPreparations, token)
+			delete(runtimes.abandonedTokens, token)
 			runtimes.mu.Unlock()
 			return candidate.preparationErr
 		}
 		if draining != nil {
+			runtimes.mu.Lock()
+			delete(runtimes.abandonedTokens, token)
+			runtimes.mu.Unlock()
 			return draining.err
 		}
 	}
@@ -989,45 +1137,4 @@ func closeCurrentRuntime() (bool, error) {
 		err := runtime.close()
 		return true, finishRuntimeDrain(draining, err)
 	}
-}
-
-// IdleStateClass is conservative filesystem occupancy, not enrollment truth.
-// R4 replaces the policy behind this seam with the authenticated secure-state
-// matrix while retaining exact legacy recognition.
-type IdleStateClass string
-
-const (
-	IdleStateAbsent IdleStateClass = "absent"
-	IdleStateLegacy IdleStateClass = "legacy"
-)
-
-// ClassifyIdleState recognizes legacy SQLite artifacts without opening or
-// creating a database. A machine key is not proof of enrollment, and this
-// classifier deliberately never reads one.
-func ClassifyIdleState(stateDir string) (IdleStateClass, error) {
-	if strings.TrimSpace(stateDir) == "" {
-		return "", fmt.Errorf("state directory is empty")
-	}
-	for _, name := range [...]string{"state.db", "state.db-wal", "state.db-shm"} {
-		_, err := os.Lstat(filepath.Join(stateDir, name))
-		switch {
-		case err == nil:
-			return IdleStateLegacy, nil
-		case os.IsNotExist(err):
-			continue
-		default:
-			return "", fmt.Errorf("inspect legacy state artifact %q: %w", name, err)
-		}
-	}
-	return IdleStateAbsent, nil
-}
-
-// ClassifyConfiguredIdleState applies the idle classifier only to the
-// process-owned state subtree selected by Configure.
-func ClassifyConfiguredIdleState() (IdleStateClass, error) {
-	stateDir, err := configuredStateDir()
-	if err != nil {
-		return "", err
-	}
-	return ClassifyIdleState(stateDir)
 }

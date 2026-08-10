@@ -28,20 +28,21 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 | [pub.dev](https://pub.dev/packages/tailscale) | Install, versions |
 | [CHANGELOG](https://github.com/danReynolds/tailscale_dart/blob/main/CHANGELOG.md) | Release notes and breaking changes |
 | [`example/`](https://github.com/danReynolds/tailscale_dart/tree/main/example) | Runnable Dart snippets |
-| [Rearchitecture plan](https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md) | Accepted target architecture, live PR disposition, workstreams, and acceptance gates |
+| [Rearchitecture plan](https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md) | Implementation status, remaining architecture work, live PR disposition, and acceptance gates |
 | [Runtime lifecycle ADR](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-runtime-ownership-and-lifecycle.md) | Per-lifecycle ownership, enrollment semantics, and automatic fail-safe teardown |
 | [Encrypted-state ADR](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md) | Direct Keybay custody binding, encrypted StateStore, failure matrix, and no-migration reset policy |
 | [`doc/`](https://github.com/danReynolds/tailscale_dart/tree/main/doc) | Status-labeled index of API docs, ADRs, RFCs, and current-architecture notes |
 | [`test/README.md`](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
 
-> **Architecture work in progress.** The rearchitecture documents describe the
-> accepted target, not behavior already present in `0.8.1`. Current-state docs
-> remain labeled separately and are updated as each implementation slice lands.
+> **Architecture work in progress.** The secure-state cutover and its lifecycle
+> foundations are implemented in the current source, but the rearchitecture
+> documents also describe later work and release evidence that has not landed.
+> Current-state documents remain labeled separately.
 
 ## What you can build
 
 - A **Flutter chat or collaboration app** where peers reach each other directly when possible — without you running relay or signaling infrastructure.
-- A **headless Dart service** that joins your tailnet and exposes private HTTPS without opening any public port.
+- A **headless Dart service** that joins ephemerally and exposes private HTTPS without opening any public port.
 - An **on-device dashboard** that calls private internal APIs (Grafana, Home Assistant, internal admin) without a corporate VPN.
 - A **shared Funnel endpoint** on desktop/server today — publish a local development server to the public internet, terminated with a real cert by Tailscale.
 - Anything you'd reach for a [WireGuard](https://www.wireguard.com/) or [libp2p](https://libp2p.io/) library for, but you'd rather use Tailscale's identity, ACLs, and DERP fallback than build them yourself.
@@ -103,19 +104,32 @@ dedicated Keybay namespace; keep the same `appId` and `stateDir` for the life
 of the installation. `init` validates and freezes that binding but does not
 access secure storage until a persistent runtime needs custody.
 
-Subsequent launches can call `up()` without an auth key. The node identity is persisted in `stateDir`.
+Persistent `up()` may omit the auth key on a fresh installation; upstream then
+returns `needsLogin` with an authorization URL for interactive enrollment.
+Supplying a key is the non-interactive path. Subsequent launches can omit it
+because the node identity is persisted in `stateDir`.
 
-> **Pre-launch storage warning.** The current SQLite StateStore is protected by
-> owner-only filesystem permissions but is not yet encrypted at rest. A copied
-> database can impersonate the node, so exclude `stateDir` from cloud backups and do not
-> ship this intermediate rearchitecture state in a client application. The
-> accepted [secure-state design](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md)
-> supplies a Keybay-custodied key to an authenticated encrypted Go StateStore
-> and removes SQLite atomically. Calling `logout()` is
-> remote-first: upstream removes the logged-in profile only after confirmed
-> control-plane success. The package preserves the lower-level StateStore
-> container in both the confirmed and indeterminate cases; R4's explicit local
-> forget/reset operation owns physical state destruction.
+Persistent nodes use one authenticated encrypted Go StateStore at
+`stateDir/tailscale/tailscaled.state.enc`. One random 32-byte data-encryption
+key (DEK) is stored in the dedicated Keybay namespace and retained in memory
+only for the runtime lifetime. Routine StateStore reads and writes do not call
+Keybay. Missing or unavailable custody, malformed or tampered ciphertext,
+unsafe permissions, and recognized pre-launch SQLite/FileStore layouts fail
+closed; legacy identities are not migrated.
+
+Only the logical Tailscale StateStore is encrypted by this mechanism. The
+package-owned `tailscale/` subtree can also contain upstream logs, log
+configuration, and TLS/certificate sidecars outside that encryption boundary.
+Keep those residuals owner-only and the entire `stateDir` private and excluded
+from backups.
+
+Calling `logout()` is remote-first: confirmed control-plane success removes
+the current logical profile, but the StateStore container and DEK remain.
+`forgetLocalIdentity()` is the explicit local-only reset: it stops any active
+runtime, records durable reset intent, deletes the exact DEK, and removes only
+the package-owned `tailscale/` subtree. It does not contact the control plane,
+so the remote node can remain until an administrator or expiry policy removes
+it.
 
 For short-lived CI jobs, preview environments, and disposable test nodes, pass
 `ephemeral: true` to register a node that Tailscale removes after it goes
@@ -129,15 +143,31 @@ await Tailscale.instance.up(
 );
 ```
 
-Use a fresh or cleared `stateDir` for each disposable identity. If `stateDir`
-already contains node credentials, `up(ephemeral: true)` reconnects as that
-existing node instead of registering a new ephemeral one.
+Ephemeral startup requires a non-empty auth key. It uses an in-memory
+StateStore and a fresh owner-only temporary runtime directory, removes that
+scratch directory on normal close, and never reads, writes, or deletes Keybay.
+It refuses to start if the configured persistent root contains recognized or
+unexpected package state; choose an empty `stateDir` rather than expecting
+ephemeral mode to reuse or clear a persistent identity.
+
+### Persistent-storage platform requirements
+
+- **iOS and macOS:** persistent nodes use Keybay's Keychain-backed custody.
+- **Android:** persistent nodes require Android 12 / API 31 or newer. Older
+  Android versions can use explicit ephemeral mode.
+- **Linux desktop:** persistent nodes require `secret-tool` and an available,
+  unlocked Secret Service collection. There is no supported Keybay custody
+  contract for headless Linux sessions, so headless services must use explicit
+  ephemeral mode.
+
+Persistent startup fails closed when these custody requirements are not met;
+there is no plaintext fallback.
 
 ## Feature support
 
 Area | API | Status | Notes
 --- | --- | --- | ---
-Lifecycle | `init`, `up`, `down`, `logout`, `status` | Supported | `up(ephemeral: true)` supports disposable CI/test nodes; `up()` resolves on the first stable state and quarantines a timed-out generation before returning. `logout()` is remote-first: confirmed success removes the upstream profile, while both success and indeterminate failure preserve the lower-level StateStore container.
+Lifecycle | `init`, `up`, `down`, `logout`, `forgetLocalIdentity`, `status` | Supported | Persistent state uses one Keybay-custodied DEK and an encrypted Go StateStore. `up(ephemeral: true)` uses an in-memory store and no Keybay. `logout()` is remote-first and retains local storage; `forgetLocalIdentity()` is the explicit local-only destructive reset.
 Reactive state | `onStateChange`, `onError`, `onNodeChanges` | Supported | Go pushes updates to Dart; callers do not poll.
 Node identity | `nodes`, `nodeByIp`, `whois` | Supported | Use stable node IDs for durable references.
 Outbound HTTP | `http.client` | Supported | A normal `package:http` client routed through tsnet.
@@ -260,9 +290,9 @@ not include Tailscale identity headers.
 Platform | Status | Notes
 --- | --- | ---
 iOS | Core supported | Userspace tsnet, no VPN entitlement. Core lifecycle and private data-plane smoke validated; `tls.bind` and Funnel are not currently supported on mobile.
-Android | Core supported | Userspace tsnet, no root. Core smoke validated; #90 must still produce the current x86_64 no-SIGSYS receipt, and `tls.bind`/Funnel are not currently supported on mobile.
+Android | Core supported | Userspace tsnet, no root. Persistent nodes require Android 12 / API 31+; older versions can run explicitly ephemeral nodes. Core smoke validated; #90 must still produce the current x86_64 no-SIGSYS receipt, and `tls.bind`/Funnel are not currently supported on mobile.
 macOS | Supported | Native asset and kqueue reactor path validated locally.
-Linux | Supported | Native asset and epoll reactor path validated in Headscale E2E.
+Linux | Supported with storage qualification | Native asset and epoll reactor path validated in Headscale E2E. Persistent nodes require a desktop session with `secret-tool` and an available, unlocked Secret Service; headless Linux supports ephemeral nodes only.
 Windows | Unsupported | Excluded from the package platform list until a Windows-native backend is designed.
 
 The package is intentionally POSIX-first because owned transports use native descriptors plus a shared kqueue/epoll reactor. Windows needs a different transport backend rather than a thin port of the POSIX implementation.

@@ -565,6 +565,16 @@ TailscaleErrorCode _parseErrorCode(String? raw) => switch (raw) {
   'startupAbandoned' => TailscaleErrorCode.startupAbandoned,
   'stateLeaseBusy' => TailscaleErrorCode.stateLeaseBusy,
   'invalidStateKey' => TailscaleErrorCode.invalidStateKey,
+  'missingStateKey' => TailscaleErrorCode.missingStateKey,
+  'orphanedStateKey' => TailscaleErrorCode.orphanedStateKey,
+  'localResetIncomplete' => TailscaleErrorCode.localResetIncomplete,
+  'conflictingStateFormats' => TailscaleErrorCode.conflictingStateFormats,
+  'legacyStateUnsupported' => TailscaleErrorCode.legacyStateUnsupported,
+  'unexpectedStateResidue' => TailscaleErrorCode.unexpectedStateResidue,
+  'atomicPersistenceFailure' => TailscaleErrorCode.atomicPersistenceFailure,
+  'stateAuthenticationFailed' => TailscaleErrorCode.stateAuthenticationFailed,
+  'unsupportedStateFormat' => TailscaleErrorCode.unsupportedStateFormat,
+  'invalidStateFormat' => TailscaleErrorCode.invalidStateFormat,
   'startupTimeout' => TailscaleErrorCode.startupTimeout,
   'logoutIndeterminate' => TailscaleErrorCode.logoutIndeterminate,
   'workerTerminated' => TailscaleErrorCode.workerTerminated,
@@ -584,21 +594,6 @@ TailscaleStatus _loadStatusSnapshot() {
               onError: TailscaleStatusException.new,
             )
             as Map<String, dynamic>;
-
-    // When the engine is not running, classify exact legacy filesystem
-    // occupancy without opening SQLite. This is conservative persistence
-    // state, not proof that enrollment ever completed.
-    if (parsed.isEmpty) {
-      final classification =
-          _callNativeJson(
-                native.duneClassifyState,
-                onError: TailscaleStatusException.new,
-              )
-              as Map<String, dynamic>;
-      if (classification['state'] == 'legacy') {
-        return TailscaleStatus.stopped;
-      }
-    }
 
     return TailscaleStatus.fromJson(parsed);
   } catch (error) {

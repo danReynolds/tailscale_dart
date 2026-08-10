@@ -207,12 +207,13 @@ class _DemoHomePageState extends State<DemoHomePage> {
   }
 
   Future<void> _loadStateDir() async {
-    String path;
+    late final String path;
     try {
-      final docs = await getApplicationDocumentsDirectory();
-      path = p.join(docs.path, 'tailscale_demo');
-    } catch (_) {
-      path = p.join(Directory.systemTemp.path, 'tailscale_demo');
+      final support = await getApplicationSupportDirectory();
+      path = p.join(support.path, 'tailscale_demo');
+    } catch (error) {
+      _log('application support directory unavailable: $error');
+      return;
     }
     if (!mounted) return;
     setState(() {

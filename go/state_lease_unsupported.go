@@ -9,3 +9,7 @@ import "fmt"
 func acquireStateLease(string, ...stateLeaseOption) (*stateLease, error) {
 	return nil, fmt.Errorf("persistent state leases are unsupported on this platform")
 }
+
+func (*stateLease) validatePathsLocked() error {
+	return fmt.Errorf("persistent state leases are unsupported on this platform")
+}

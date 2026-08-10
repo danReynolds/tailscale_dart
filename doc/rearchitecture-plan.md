@@ -2,16 +2,20 @@
 
 ## Status
 
-**Accepted for implementation — 2026-08-09.**
+**Accepted; implementation in progress — R4d code present 2026-08-10.**
 
 This is the source of truth for the target architecture and implementation
 order. It incorporates the August 2026 architecture alignment audit, review of
 the current repository and open pull requests, Keybay's current platform
 contract, and Tailscale v1.102.2 source behavior.
 
-Nothing in this document claims that the target architecture has shipped. The
-current `main` branch still uses the process-global runtime and SQLite
-StateStore described by the current-architecture documents.
+The current source now contains the `nodeRuntime`/supervisor foundations and
+R4d's atomic secure-state cutover: persistent nodes use the Keybay-backed
+encrypted StateStore, ephemeral nodes use an in-memory Store, local forget is
+explicit, and the SQLite runtime/dependency are gone. This does not mark the
+plan or a release complete. The outstanding Android/platform receipts, R5
+publication convergence, R6 storage/sidecar evidence, later ownership work,
+and R10 integrated gate remain authoritative requirements below.
 
 The two detailed decisions are:
 
@@ -337,6 +341,11 @@ its acceptance criteria are recorded.
 Each row is intentionally issue-sized. The dependency column is a merge-order
 constraint, not an instruction to combine the work into one large PR.
 
+Implementation snapshot: R2/R3 lifecycle foundations and R4a-R4d secure-state
+code are present in the current source. The table continues to state each
+workstream's full acceptance result; code presence does not satisfy uncollected
+platform or release receipts.
+
 | ID | Workstream | Depends on | Required result |
 | --- | --- | --- | --- |
 | R0 | Architecture baseline | — | This plan and both ADRs are reviewed and linked from repository docs. |
@@ -377,7 +386,7 @@ constraint, not an instruction to combine the work into one large PR.
   `up(authKey:)`. A supplied key is passed only while constructing a fresh
   Server; an active runtime preserves its identity and cannot be rebuilt merely
   to apply a different key.
-- Treat the current SQLite Store as an opaque `ipn.StateStore` plus closer until
+- Treat the then-current SQLite Store as an opaque `ipn.StateStore` plus closer until
   R4d deletes it. Do not patch its nil-delete behavior or build a SQLite query
   probe. Generalize the useful worktree tests for R4b instead.
 - Introduce the final storage-classifier seam now. Before R4d its implementation
@@ -501,9 +510,10 @@ Implement as a dependent review stack but one release gate:
    SQLite source, tests, artifacts, `DuneHasState`, and dependency in that same
    cutover. Add `forgetLocalIdentity()` here and verify #86 is already closed.
 
-Splitting these across releases would create plaintext fallback or mismatched
-key/file states. They may be separate review commits in one dependent stack,
-but the public release gate is one vertical slice.
+Splitting these across releases would have created plaintext fallback or
+mismatched key/file states. They were implemented as one current-source
+vertical slice; the public release still waits for the downstream evidence
+gates.
 
 Ephemeral occupancy in R4d is intentionally filesystem-only. Ephemeral startup
 never reads, writes, or deletes Keybay; it rejects recognized persistent
@@ -512,7 +522,7 @@ fresh scratch. A Keybay-only orphan cannot be observed without violating
 that rule, so ephemeral mode leaves it untouched and a later persistent probe
 reports it explicitly.
 
-No package release is cut between R2 and R4d. That release gate is what makes it
+No package release was cut between R2 and R4d. That release gate is what makes it
 safe to avoid polishing SQLite while the final runtime, rescue, and encrypted
 Store land as reviewable dependent changes.
 
@@ -716,7 +726,8 @@ Every workstream owns focused tests, and R10 reruns the integrated matrix.
 
 ## Documentation truth policy
 
-- This plan and the ADRs describe the target and must stay labeled as such.
+- This plan and the ADRs contain both implemented invariants and remaining
+  targets; their status sections must distinguish the two.
 - `current-architecture-and-api-feedback.md` and `concurrency.md` describe
   current `main` until the corresponding workstream lands.
 - Each implementation PR updates the current-state docs and API status for only

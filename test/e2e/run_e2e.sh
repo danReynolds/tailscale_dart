@@ -63,8 +63,7 @@ if [ -z "$PERSIST_AUTH_KEY" ]; then
     echo "ERROR: Failed to create persistence auth key"
     exit 1
 fi
-echo "Ephemeral auth key: ${AUTH_KEY:0:20}..."
-echo "Persistence auth key: ${PERSIST_AUTH_KEY:0:20}..."
+echo "Headscale auth keys created."
 
 # Run the E2E Dart test
 echo "=== Running E2E tests ==="

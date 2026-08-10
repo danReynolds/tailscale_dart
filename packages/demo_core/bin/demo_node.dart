@@ -569,14 +569,15 @@ void _printUsage() {
   stdout.writeln('''
 Usage:
   dart run --enable-experiment=native-assets bin/demo_node.dart serve \\
-    --state-dir /tmp/dune-a --hostname demo-a --auth-key tskey-auth-...
+    --state-dir /tmp/dune-a --hostname demo-a --auth-key tskey-auth-... \\
+    --ephemeral
 
   dart run --enable-experiment=native-assets bin/demo_node.dart probe \\
     --state-dir /tmp/dune-b --hostname demo-b --auth-key tskey-auth-... \\
-    --node 100.x.y.z
+    --node 100.x.y.z --ephemeral
 
   dart run --enable-experiment=native-assets bin/demo_node.dart pair \\
-    --auth-key tskey-auth-... --control-url http://localhost:8080
+    --auth-key tskey-auth-... --control-url http://localhost:8080 --ephemeral
 
 Commands:
   serve   Join, start HTTP/TCP/UDP demo services, print READY, stay alive.
@@ -590,7 +591,7 @@ Common options:
   --app-id ID
   --hostname NAME
   --auth-key KEY
-  --ephemeral
+  --ephemeral       Use an in-memory StateStore and no Keybay custody.
   --control-url URL
   --stdin-control
   --verbose

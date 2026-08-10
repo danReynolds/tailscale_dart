@@ -1,16 +1,35 @@
 ## Unreleased — rearchitecture in progress
 
-This intermediate state is not releaseable: runtime fail-safe work has landed,
-but the plaintext SQLite StateStore remains until the atomic Keybay-backed
-encrypted-state cutover.
+The R4d secure-state cutover and its lifecycle foundations are implemented in
+the current source. Platform Keybay restart receipts, backup-exclusion and
+sidecar inventory, and the remaining rearchitecture gates are still required
+before release.
 
 **Secure-state foundation:**
 
-- `Tailscale.init` now requires the embedding application's stable `appId` and
-  freezes its dedicated `<appId>.tailscale` Keybay namespace as part of the
-  process-wide native configuration identity. The package pins Keybay 0.1.0,
-  but this R4a slice deliberately performs no secure-storage I/O; custody and
-  the encrypted-StateStore cutover land in later R4 slices.
+- Persistent nodes now use a concurrency-safe Go StateStore persisted as one
+  authenticated encrypted envelope. One random 32-byte DEK lives in the
+  dedicated `<appId>.tailscale` Keybay namespace and is retained in memory for
+  the runtime lifetime; routine StateStore mutations do not call Keybay.
+- Persistent startup and idle status fail closed on missing or unavailable
+  custody, key/file or format conflicts, failed permission verification,
+  tampering, and incomplete reset. There is no plaintext fallback and no
+  migration from pre-launch SQLite or plaintext FileStore state.
+- Ephemeral startup now requires an auth key, uses an in-memory StateStore and
+  an owner-only temporary tsnet directory, and never accesses Keybay. It
+  rejects a configured root with filesystem-visible persistent package state.
+- Added `forgetLocalIdentity()`, the explicit local-only destructive reset. It
+  durably records intent, deletes the exact Keybay DEK, and removes only the
+  package-owned Tailscale subtree; interrupted reset remains fail closed and is
+  resumed by calling the method again.
+- Persistent custody follows Keybay's platform contract: Android requires API
+  31+, and Linux requires desktop `secret-tool` plus an available, unlocked
+  Secret Service. Older Android and headless Linux remain available only in
+  explicit ephemeral mode.
+- Only logical StateStore data is encrypted. Upstream log configuration, logs,
+  and TLS/certificate sidecars in the package subtree remain outside that
+  encryption boundary and still require owner-only enforcement, backup
+  exclusion, and the R6 inventory receipts.
 
 **Lifecycle hardening:**
 
@@ -27,12 +46,14 @@ encrypted-state cutover.
   subscribers cannot retain a stale tailnet inventory.
 - `up(timeout:)` quarantines its generation before reporting
   `startupTimeout`; a non-cancellable late `Server.Start` can no longer leave
-  an active node behind the failed Future.
+  an active node behind the failed Future. Pre-dispatch abandonment tombstones
+  are retired only after the originating Future settles or its worker exits,
+  keeping that race closed without unbounded bookkeeping growth.
 - `logout()` is remote-first. Failed or timed-out revocation closes the
   possibly-mutated runtime, preserves local state, and reports
   `logoutIndeterminate`. Confirmed success lets upstream remove the logical
   profile but still preserves the lower-level StateStore container; physical
-  deletion is reserved for the later explicit local-forget operation. A
+  deletion is reserved for `forgetLocalIdentity()`. A
   temporary runtime reconstructed after `down()` remains hidden from public
   state streams, so successful idle logout emits `noState` without a phantom
   second `stopped` transition.

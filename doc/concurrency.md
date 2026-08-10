@@ -4,11 +4,11 @@ How the Go layer stays correct now that native calls arrive from more than one
 Dart isolate. Read this before adding a lock, a process-global registry, or a
 new offloaded call.
 
-> **Current-state document.** The epoch and commit-gate invariants remain part
-> of the target, but process-global resource ownership will move incrementally
-> onto `nodeRuntime`. See the [rearchitecture plan](rearchitecture-plan.md) and
-> [runtime lifecycle ADR](adr-runtime-ownership-and-lifecycle.md). Update this
-> file in each ownership-migration PR so it continues to describe `main`.
+> **Current-state document.** Server, StateStore, DEK, state lease, and scratch
+> ownership now live on `nodeRuntime`. Several data-plane registries remain
+> process-global and are still protected by the epoch/commit gate until R7 moves
+> them. See the [rearchitecture plan](rearchitecture-plan.md) and [runtime
+> lifecycle ADR](adr-runtime-ownership-and-lifecycle.md).
 
 ## Two execution regimes
 
@@ -25,9 +25,13 @@ Every native call enters the Go layer from one of two places:
    retaining method tear-offs from a dead isolate.
 2. **Helper isolates (concurrent).** The long, contended calls — `tcp.dial`,
    `diag.ping`, `serve.forward`, `funnel.forward`, plus every HTTP client
-   request goroutine — run on short-lived `Isolate.run` helpers (capped at 32,
-   see `lib/src/worker/native_offload.dart`). These are concurrent with the
-   worker FIFO and with each other.
+   request goroutine — run on short-lived `Isolate.run` helpers (data-plane
+   offloads are capped at 32; see `lib/src/worker/native_offload.dart`). Native
+   secure-state preparation, probe, reset, quarantine, and quiescence calls also
+   use helper isolates. Rescue and lifecycle custody calls deliberately bypass
+   the data-plane gate so a saturated connection workload cannot block cleanup.
+   These calls are concurrent with the worker FIFO and with each other; native
+   token admission and the state lease provide their ordering.
 
 The consequence: **any offloaded call can race a lifecycle call.** A
 `serve.forward` can be mid-flight while `stop()` tears the node down. Code on
@@ -40,7 +44,10 @@ The caller isolate creates a unique runtime token before any asynchronous
 startup preparation and carries it through the worker into Go. The native
 `runtimeController` binds that exact token to one candidate/current/draining
 generation. An abandoned token is retired even when timeout happens before the
-worker reaches native code, so delayed preparation cannot later reuse it.
+worker reaches native code, so delayed preparation cannot later reuse it. A
+pre-dispatch tombstone remains until either the late native entry consumes it
+or Dart acknowledges that the originating Future settled/the worker exited;
+that handshake keeps the race closed without retaining one token per timeout.
 
 `up(timeout:)` establishes token-qualified quarantine before returning a
 `startupTimeout` error. If non-cancellable `tsnet.Server.Start` is still
@@ -51,10 +58,13 @@ caller-owned Store. Another lifecycle waits for that cleanup barrier.
 
 Every worker exit invokes the event-silent rescue entry point from a helper
 isolate. Pending worker RPCs fail promptly with `workerTerminated`; rescue
-closes only the captured token, joins native cleanup, classifies idle state,
-and only then permits worker replacement. Unexpected exit emits one `worker`
-incident followed by truthful terminal state. An exact expected-exit tag
-suppresses only that duplicate incident, not rescue or state reconciliation.
+closes only the captured token, joins native cleanup and any retained custody,
+and only then permits worker replacement. A runtime that had already started
+authenticated its Store before publication, so successful quarantine can emit
+`stopped` without a second Keybay read. An unpublished preparation emits no
+terminal transition; the next explicit idle `status()` performs a fresh secure
+probe. An exact expected-exit tag suppresses only the duplicate incident, not
+rescue or state reconciliation.
 
 Completed `down`/`logout` results are retained natively by token until the
 caller isolate acknowledges receipt. That acknowledgement is a tiny in-memory
@@ -64,13 +74,13 @@ but before delivery, rescue consumes the retained result instead: cleanup
 errors cannot be swallowed and a confirmed logout cannot be mislabeled as
 indeterminate.
 
-A failed Server close, Store close, or startup unwind poisons lifecycle
-admission for the rest of the process with
+A failed Server close, Store close, state-lease release, scratch removal, or
+startup unwind poisons lifecycle admission for the rest of the process with
 `runtimeCleanupFailed`. Detachment is not reported as a clean `stopped`
 transition unless quiescence was proved. This intentionally requires process
-restart instead of opening a replacement over unknown resources. R4's explicit
-local-forget path adds a durable encrypted-store reset marker for destructive
-key/file cleanup; ordinary logout does not use it.
+restart instead of opening a replacement over unknown resources.
+`forgetLocalIdentity()` uses a durable encrypted-store reset marker for
+destructive key/file cleanup; ordinary logout does not use it.
 
 Native status, error, and peer pushes carry their runtime token. Dart drops a
 push that is not owned by the worker's current/preparing token. `StopWatch`
@@ -79,19 +89,51 @@ before teardown completes, so a replacement port cannot race an old source.
 
 Logout is remote-first. It reconstructs a temporary runtime from persisted
 state after `down()` and asks upstream to log out the current profile. Confirmed
-success and failure both preserve the lower-level StateStore container; only
-the upstream profile mutation differs. Failure or timeout closes the
+success and failure both preserve the encrypted StateStore container and DEK;
+only the upstream profile mutation differs. Failure or timeout closes the
 possibly-mutated runtime and returns `logoutIndeterminate`.
 That temporary runtime is not a public lifecycle transition: logout from an
 already stopped node emits `noState`, not a second synthetic `stopped`.
 That is an operation receipt, not a claim that the physical Store disappeared.
-Until R4 can authenticate and inspect the replacement Store, a later idle
-`status()` conservatively reports a retained SQLite container as `stopped`.
+Idle reconstruction and later `status()` take the persistent-state lease and
+authenticate the envelope with Keybay. They never classify a file by presence
+alone or open legacy SQLite state.
 Starting a fresh candidate first invalidates the cached reopen tuple; only a
 successful `Server.Start` records the exact hostname, control URL, and
 ephemeral setting it proved it applied. An abandoned late success therefore
 remains safely revocable, while an unproven failed attempt cannot make logout
 reuse an older control plane.
+
+## Secure-state custody and state leases
+
+Persistent state has two owners that cannot share one transaction manager:
+Keybay runs asynchronously on the Dart caller isolate, while Go owns the
+synchronous StateStore file. One supervisor-created token and one native state
+lease join them.
+
+- The native preparation acquires process-local admission and the OS advisory
+  lock before any format probe or Keybay operation.
+- Keybay returns one 32-byte DEK. Go authenticates or creates the whole-map
+  envelope while the same token retains the lease, then the committed runtime
+  owns the Store, in-memory DEK, and lease together.
+- Keybay Futures are not treated as cancellable. Timeout or worker death
+  quarantines the token but retains admission until the late Future and any
+  exact-entry compensation settle. Native records whether the envelope rename
+  committed and returns either `compensateKey` or `preserveCoherentPair`; Dart
+  never guesses from a lost response.
+- Runtime close orders Server before Store/DEK/lease. Idle status, idle logout,
+  and local forget use the same lease rather than bypassing an active owner.
+- Local forget makes its reset marker durable before deleting the exact Keybay
+  entry, then removes only the package-owned subtree. An interrupted reset
+  blocks ordinary lifecycle calls until local forget resumes it.
+- Ephemeral startup uses the base-root lease only for a filesystem occupancy
+  check. It never accesses Keybay, uses an in-memory StateStore, and gives tsnet
+  a separately locked temporary directory that is removed before its live lock
+  is released.
+
+Routine encrypted StateStore reads and writes are protected by the Store's Go
+mutex and use the runtime's in-memory DEK; they do not cross into Dart or
+Keybay.
 
 ## The node epoch (teardown registration gate)
 
@@ -151,7 +193,7 @@ funnelMu       →  ff.mu (per-forwarder)
 watchMu  →  identityCache.mu
 runtimeController.mu, httpBindingMu, tcpFdListenerMu,
 udpFdBindingMu, tailnetHTTPTransports.mu, reactorMu, dartPortMu,
-hostNetworkMu, state_store.mu   (leaf, no nesting)
+hostNetworkMu, encryptedStateStore.mu   (leaf, no nesting)
 ```
 
 Rules that keep it acyclic:

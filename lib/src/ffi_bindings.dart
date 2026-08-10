@@ -44,13 +44,18 @@ external ffi.Pointer<Utf8> duneConfigure(
 );
 
 /// Acquires the configured root's token-bound persistent-state lease.
-///
-/// R4c leaves this path unwired from public startup; R4d calls it before any
-/// secure-state probe or Keybay operation.
+/// Public persistent operations call it before any secure-state probe or
+/// Keybay operation.
 @ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
   symbol: 'DuneBeginPersistentPreparation',
 )
 external ffi.Pointer<Utf8> duneBeginPersistentPreparation(int requestToken);
+
+/// Performs keyless format classification while the preparation lease is held.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneInspectPersistentPreparation',
+)
+external ffi.Pointer<Utf8> duneInspectPersistentPreparation(int requestToken);
 
 /// Marks that a non-cancellable caller-isolate Keybay operation may begin.
 @ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
@@ -64,6 +69,15 @@ external ffi.Pointer<Utf8> duneMarkCustodyActive(int requestToken);
 )
 external ffi.Pointer<Utf8> duneMarkCustodyWriteAttempted(int requestToken);
 
+/// Combines the native layout with Keybay presence without accepting a key.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Int32)>(
+  symbol: 'DuneResolvePersistentCustody',
+)
+external ffi.Pointer<Utf8> duneResolvePersistentCustody(
+  int requestToken,
+  int dekPresent,
+);
+
 /// Supplies exactly 32 raw DEK bytes to the matching native preparation.
 @ffi.Native<
   ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Pointer<ffi.Uint8>, ffi.Int64)
@@ -72,6 +86,40 @@ external ffi.Pointer<Utf8> duneSupplyPreparedDek(
   int requestToken,
   ffi.Pointer<ffi.Uint8> key,
   int keyLength,
+);
+
+/// Authenticates an existing envelope or creates the initial empty one.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DunePreparePersistentState',
+)
+external ffi.Pointer<Utf8> dunePreparePersistentState(int requestToken);
+
+/// Completes normal (non-abandoned) Keybay custody.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneCompletePersistentCustody',
+)
+external ffi.Pointer<Utf8> duneCompletePersistentCustody(int requestToken);
+
+/// Closes a normal idle/no-state preparation and releases its lease.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneFinishPreparedPersistentState',
+)
+external ffi.Pointer<Utf8> duneFinishPreparedPersistentState(int requestToken);
+
+/// Stops any active runtime without releasing its state lease, then creates a
+/// durable local-reset marker before Keybay custody may be changed.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneBeginLocalReset',
+)
+external ffi.Pointer<Utf8> duneBeginLocalReset(int requestToken);
+
+/// Completes local reset after the exact Keybay DEK deletion settles.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Int32)>(
+  symbol: 'DuneFinishLocalReset',
+)
+external ffi.Pointer<Utf8> duneFinishLocalReset(
+  int requestToken,
+  int custodyDeletionSucceeded,
 );
 
 /// Releases abandoned custody after its Future and compensation have settled.
@@ -310,11 +358,6 @@ external ffi.Pointer<Utf8> duneDiagDERPMap();
 @ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneDiagCheckUpdate')
 external ffi.Pointer<Utf8> duneDiagCheckUpdate();
 
-/// Classifies idle storage without opening or creating a StateStore.
-/// Returns `{"state": "absent"|"legacy"}` or `{"error": "..."}`.
-@ffi.Native<ffi.Pointer<Utf8> Function()>(symbol: 'DuneClassifyState')
-external ffi.Pointer<Utf8> duneClassifyState();
-
 /// Performs remote-first logout for the exact active/preparation token.
 @ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Pointer<Utf8>)>(
   symbol: 'DuneLogout',
@@ -333,6 +376,13 @@ external ffi.Pointer<Utf8> duneAbandon(int requestToken);
   symbol: 'DuneAwaitRuntimeQuiescence',
 )
 external ffi.Pointer<Utf8> duneAwaitRuntimeQuiescence(int requestToken);
+
+/// Retires an unmatched pre-dispatch quarantine after its originating Dart
+/// Future or worker can no longer enter native code.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneRetireAbandonedRuntimeToken',
+)
+external ffi.Pointer<Utf8> duneRetireAbandonedRuntimeToken(int requestToken);
 
 /// Retires a terminal lifecycle receipt after the caller isolate receives it.
 @ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'DuneAcknowledgeLifecycle')

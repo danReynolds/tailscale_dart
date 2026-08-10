@@ -6,14 +6,16 @@ purpose, and a copy-pasteable
 example. For the forward-looking phase plan, see
 [`api-roadmap.md`](api-roadmap.md).
 
-> **Architecture transition:** this file describes callable APIs on current
-> `main`. The [accepted rearchitecture plan](rearchitecture-plan.md) and its
+> **Architecture transition:** this file describes callable APIs in the current
+> source. R4d's persistent StateStore is one authenticated encrypted Go
+> envelope whose 32-byte DEK is held by Keybay; ephemeral nodes use an
+> in-memory StateStore and no Keybay. The [rearchitecture
+> plan](rearchitecture-plan.md) and its
 > [runtime](adr-runtime-ownership-and-lifecycle.md) and
-> [encrypted-state](adr-encrypted-node-state.md) ADRs describe target behavior
-> that has not all shipped. Current persistent StateStore paths are created and
-> revalidated with owner-only modes; startup fails closed when their type,
-> identity, or permissions cannot be established. The data is not yet
-> application-layer encrypted.
+> [encrypted-state](adr-encrypted-node-state.md) ADRs also describe later work
+> and release evidence that has not all shipped. Encryption covers logical
+> StateStore data, not every upstream log, config, or TLS sidecar in the package
+> subtree.
 
 The **core mobile public path** is lifecycle + private HTTP/TCP/UDP, identity,
 diagnostics, prefs, and exit-node controls. Platform-qualified TLS and
@@ -32,6 +34,12 @@ and that [`Tailscale.init`](#lifecycle-top-level) has already been called.
 fd-backed data plane depends on native descriptors plus kqueue/epoll. Windows
 is intentionally unsupported until a Windows-native backend or fallback carrier
 is designed.
+
+Persistent-node custody follows Keybay's narrower platform contract. Android
+requires Android 12 / API 31+. Linux requires desktop `secret-tool` plus an
+available, unlocked Secret Service; headless Linux has no supported persistent
+custody path. Older Android and headless Linux can use explicit ephemeral mode,
+which never accesses Keybay.
 
 **Implementation model:** this package aligns to both upstream
 `tsnet.Server` and upstream `local.Client`. Transport primitives such as
@@ -84,11 +92,12 @@ returning a transitional state such as `starting`.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `Tailscale.init({stateDir, appId, logLevel})` | ✅ | Freezes one process-wide native path/inode + exact log-level + validated host-app/derived Keybay namespace identity. Repeating the exact tuple is a no-op; a mismatch throws `TailscaleConfigurationException`. Binding is lazy: R4a performs no Keybay I/O. Native lifecycle calls derive the owned `tailscale/` subtree from this root. | `Tailscale.init(stateDir: '/app/state', appId: 'com.example.myapp');` |
-| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; `ephemeral: true` registers short-lived CI/test nodes. Same-config active calls are idempotent and an auth key never replaces the active identity. Concurrent startup returns `lifecycleBusy`; active tuple mismatch returns `configurationMismatch`. Resolves on the first stable state only. The deadline bounds startup/state waiting; `startupTimeout` returns only after token-qualified quarantine is established. Pending native cleanup continues behind the recovery barrier, and later lifecycle work waits for it. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
+| `Tailscale.init({stateDir, appId, logLevel})` | ✅ | Freezes one process-wide native path/inode + exact log-level + validated host-app/derived Keybay namespace identity. Repeating the exact tuple is a no-op; a mismatch throws `TailscaleConfigurationException`. Initialization is lazy and performs no Keybay I/O. Native lifecycle calls derive the owned `tailscale/` subtree from this root. | `Tailscale.init(stateDir: '/app/state', appId: 'com.example.myapp');` |
+| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine. Persistent mode authenticates or provisions the encrypted Store through one Keybay DEK and fails closed on custody/layout errors; recognized legacy state is not migrated. `ephemeral: true` requires an auth key, uses an in-memory Store plus fresh scratch, never accesses Keybay, and rejects filesystem-visible persistent package state. Same-config active calls are idempotent and an auth key never replaces the active identity. Resolves on the first stable state only; timeout returns only after token-qualified quarantine is established. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
 | `down()` | ✅ | Stop the exact active generation and keep persisted credentials. A completed native result survives worker-response loss. Cleanup failure returns `runtimeCleanupFailed`, publishes no false clean-state transition, and blocks replacement until process restart. | `await tsnet.down();` |
-| `logout()` | ✅ | Remote-first revocation. Confirmed success lets upstream remove the logical profile while preserving the lower-level StateStore container; physical deletion belongs to the later explicit local-forget API. Reconstructs a temporary runtime after `down()` using only a configuration proven by `Server.Start`; that internal runtime stays event-silent, so idle logout emits `noState` without a phantom `stopped`. Missing/stale configuration fails closed. Failure preserves local recovery evidence and returns `logoutIndeterminate`. A confirmed result survives worker-response loss. | `await tsnet.logout();` |
-| `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. Waits for worker recovery; a failed post-incident state classification remains a typed status error rather than guessed state. While idle, `stopped` means recognized local state artifacts exist; it does not prove valid enrollment or reconnectability. | `final s = await tsnet.status();` |
+| `logout()` | ✅ | Remote-first revocation. Confirmed success lets upstream remove the logical profile while preserving the encrypted StateStore container and DEK. Reconstructs a temporary runtime after `down()` using authenticated persisted state; that internal runtime stays event-silent. Failure preserves local recovery evidence and returns `logoutIndeterminate`. A confirmed result survives worker-response loss. | `await tsnet.logout();` |
+| `forgetLocalIdentity()` | ✅ | Irreversible local-only reset. Stops any active runtime, durably records reset intent, deletes the exact Keybay DEK, and removes only the package-owned state subtree. It does not contact the control plane, so the remote node may remain. An interrupted reset returns `localResetIncomplete` and must be resumed with the same method. | `await tsnet.forgetLocalIdentity();` |
+| `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. While idle, it takes the state lease and authenticates the encrypted Store through Keybay: absent/authenticated-empty is `noState`, authenticated logical state is `stopped`, and custody, legacy, tamper, or reset-marker problems fail closed with typed errors. | `final s = await tsnet.status();` |
 | `nodes()` → `List<TailscaleNode>` | ✅ | Current node inventory. | `final nodes = await tsnet.nodes();` |
 | `nodeByIp(ip)` → `TailscaleNode?` | ✅ | Lookup a known node by Tailscale IP from the current inventory. | `final node = await tsnet.nodeByIp('100.64.0.5');` |
 | `onStateChange` → `Stream<NodeState>` | ✅ | Duplicate-filtered state transitions. Repeated `needsLogin` remains observable so callers can refresh `status().authUrl`. | `tsnet.onStateChange.listen(print);` |
@@ -372,13 +381,14 @@ surface `featureDisabled`, rethrow otherwise).
 
 | Type | Status | Thrown by | Example |
 | ---- | ------ | --------- | ------- |
-| `TailscaleErrorCode` enum | ✅ | Includes lifecycle codes `lifecycleBusy`, `runtimeCleanupFailed`, `configurationMismatch`, `staleRuntime`, `startupAbandoned`, `startupTimeout`, `logoutIndeterminate`, and `workerTerminated`; LocalAPI codes `notFound`, `forbidden`, `conflict`, `preconditionFailed`, `featureDisabled`; and `unknown`. | `if (e.code == TailscaleErrorCode.conflict) retry();` |
+| `TailscaleErrorCode` enum | ✅ | Includes lifecycle codes plus secure-state outcomes such as `stateLeaseBusy`, `missingStateKey`, `orphanedStateKey`, `localResetIncomplete`, `legacyStateUnsupported`, `stateAuthenticationFailed`, `invalidStateFormat`, `secureStorageLocked`, and `secureStorageUnavailable`; LocalAPI codes; and `unknown`. | `if (e.code == TailscaleErrorCode.secureStorageLocked) retryLater();` |
 | `TailscaleUsageException` | ✅ | Misuse: `http.client` before `up()`, empty `stateDir`, invalid `appId`, etc. | `on TailscaleUsageException catch (_) { ... }` |
 | `TailscaleConfigurationException` | ✅ | A repeated `init` conflicts with the process-owned state root or log level. | `on TailscaleConfigurationException catch (_) { ... }` |
 | `TailscaleUpException` | ✅ | `up()` failed before reaching a stable state. | `on TailscaleUpException catch (e) { showAuth(e); }` |
 | `TailscaleHttpException` | ✅ | `http.*`. | `on TailscaleHttpException catch (_) { ... }` |
 | `TailscaleStatusException` | ✅ | `status()`. | `on TailscaleStatusException catch (_) { ... }` |
 | `TailscaleLogoutException` | ✅ | `logout()`. | `on TailscaleLogoutException catch (_) { ... }` |
+| `TailscaleForgetLocalIdentityException` | ✅ | `forgetLocalIdentity()`. | `on TailscaleForgetLocalIdentityException catch (_) { ... }` |
 | `TailscaleTaildropException` | ✅ | `taildrop.*`. | `on TailscaleTaildropException catch (_) { ... }` |
 | `TailscaleServeException` | ✅ | `serve.*` incl. ETag conflicts. | `on TailscaleServeException catch (e) { ... }` |
 | `TailscalePrefsException` | ✅ | `prefs.*`. | `on TailscalePrefsException catch (_) { ... }` |

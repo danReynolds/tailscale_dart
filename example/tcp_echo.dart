@@ -48,6 +48,7 @@ Future<void> main(List<String> args) async {
   final status = await tsnet.up(
     hostname: 'tcp-echo-${args[0]}',
     authKey: authKey,
+    ephemeral: true,
   );
   if (!status.isRunning) {
     stderr.writeln('Node did not reach running state: ${status.state}');

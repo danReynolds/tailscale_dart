@@ -15,7 +15,7 @@ const testKeybayNamespace = "dev.tailscale.dart.test.tailscale"
 
 func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	runtimes.mu.Lock()
-	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil || runtimes.persistentPreparation != nil {
+	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil || runtimes.reset != nil || runtimes.persistentPreparation != nil {
 		runtimes.mu.Unlock()
 		t.Fatal("test requires an idle runtime controller")
 	}
@@ -25,22 +25,24 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	previousKeybayNamespace := runtimes.keybayNamespace
 	previousLogLevel := runtimes.logLevel
 	previousAbandonedTokens := runtimes.abandonedTokens
+	previousStartCalls := runtimes.startCalls
 	previousCompletedPreparations := runtimes.completedPreparations
 	previousCompletedLifecycle := runtimes.completedLifecycle
 	previousCleanupFailure := runtimes.cleanupFailure
-	previousLastConfig := runtimes.lastConfig
 	previousPersistentPreparation := runtimes.persistentPreparation
+	previousReset := runtimes.reset
 	runtimes.configured = false
 	runtimes.stateRoot = ""
 	runtimes.stateRootInfo = nil
 	runtimes.keybayNamespace = ""
 	runtimes.logLevel = 0
 	runtimes.abandonedTokens = nil
+	runtimes.startCalls = nil
 	runtimes.completedPreparations = nil
 	runtimes.completedLifecycle = nil
 	runtimes.cleanupFailure = nil
-	runtimes.lastConfig = nil
 	runtimes.persistentPreparation = nil
+	runtimes.reset = nil
 	runtimes.mu.Unlock()
 	t.Cleanup(func() {
 		runtimes.mu.Lock()
@@ -50,11 +52,12 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 		runtimes.keybayNamespace = previousKeybayNamespace
 		runtimes.logLevel = previousLogLevel
 		runtimes.abandonedTokens = previousAbandonedTokens
+		runtimes.startCalls = previousStartCalls
 		runtimes.completedPreparations = previousCompletedPreparations
 		runtimes.completedLifecycle = previousCompletedLifecycle
 		runtimes.cleanupFailure = previousCleanupFailure
-		runtimes.lastConfig = previousLastConfig
 		runtimes.persistentPreparation = previousPersistentPreparation
+		runtimes.reset = previousReset
 		runtimes.mu.Unlock()
 	})
 
@@ -63,9 +66,6 @@ func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	}
 	if err := Logout(); !errors.Is(err, ErrConfigurationMismatch) {
 		t.Fatalf("Logout error = %v, want ErrConfigurationMismatch", err)
-	}
-	if _, err := ClassifyConfiguredIdleState(); !errors.Is(err, ErrConfigurationMismatch) {
-		t.Fatalf("ClassifyConfiguredIdleState error = %v, want ErrConfigurationMismatch", err)
 	}
 }
 
@@ -146,10 +146,6 @@ func TestRuntimeController_ReservationAndConfigIdentity(t *testing.T) {
 	if err := controller.commit(candidate); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	if controller.lastConfig == nil || *controller.lastConfig != config {
-		t.Fatalf("committed config cache = %v, want %+v", controller.lastConfig, config)
-	}
-
 	next, active, err := controller.reserve(3, config)
 	if err != nil || next != nil || active != candidate {
 		t.Fatalf("same-config reserve = (%v, %v, %v), want current runtime", next, active, err)
@@ -163,6 +159,31 @@ func TestRuntimeController_ReservationAndConfigIdentity(t *testing.T) {
 		t.Fatal("configuration mismatch replaced the active runtime")
 	}
 	candidate.cancel()
+}
+
+func TestRuntimeController_AbandonedTokenCannotRefreshActiveRuntime(t *testing.T) {
+	config := runtimeConfig{hostname: "active", controlURL: "https://control.example/"}
+	active := newNodeRuntime(nodeEpoch.Load(), 301, config)
+	defer active.cancel()
+	const abandonedToken = 302
+	controller := runtimeController{
+		current:         active,
+		abandonedTokens: map[uint64]struct{}{abandonedToken: {}},
+	}
+	refreshCalled := false
+	refreshed, err := controller.refreshActiveRuntime(abandonedToken, config, func() error {
+		refreshCalled = true
+		return nil
+	})
+	if !errors.Is(err, ErrStartupAbandoned) {
+		t.Fatalf("active refresh error = %v, want ErrStartupAbandoned", err)
+	}
+	if refreshed != nil || refreshCalled {
+		t.Fatalf("abandoned refresh = runtime:%p callback:%v, want neither", refreshed, refreshCalled)
+	}
+	if controller.current != active {
+		t.Fatal("abandoned active refresh detached the current runtime")
+	}
 }
 
 func TestRuntimeController_CleanupFailurePoisonsReplacementAdmission(t *testing.T) {
@@ -179,25 +200,6 @@ func TestRuntimeController_CleanupFailurePoisonsReplacementAdmission(t *testing.
 	if _, _, err := controller.reserve(70002, runtimeConfig{}); !errors.Is(err, ErrRuntimeCleanupFailed) {
 		t.Fatalf("replacement reserve error = %v, want ErrRuntimeCleanupFailed", err)
 	}
-}
-
-func TestRuntimeController_FreshStartInvalidatesStaleReopenConfig(t *testing.T) {
-	oldConfig := runtimeConfig{hostname: "old", controlURL: "https://old/"}
-	newConfig := runtimeConfig{hostname: "new", controlURL: "https://new/", ephemeral: true}
-	controller := runtimeController{lastConfig: &oldConfig}
-
-	candidate, _, err := controller.reserve(70003, newConfig)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	if controller.lastConfig != nil {
-		t.Fatalf("reserve retained stale reopen config: %+v", controller.lastConfig)
-	}
-	controller.rememberStartedConfig(candidate)
-	if controller.lastConfig == nil || *controller.lastConfig != newConfig {
-		t.Fatalf("started reopen config = %+v, want %+v", controller.lastConfig, newConfig)
-	}
-	controller.release(candidate, nil)
 }
 
 func TestCloseRuntime_TerminalReceiptSurvivesUntilRescueConsumesIt(t *testing.T) {
@@ -263,12 +265,77 @@ func TestAbandonRuntime_RetiresTokenBeforeNativeReservation(t *testing.T) {
 	if _, _, reserveErr := runtimes.reserve(abandonedToken, runtimeConfig{}); !errors.Is(reserveErr, ErrStartupAbandoned) {
 		t.Fatalf("retired-token reserve error = %v, want ErrStartupAbandoned", reserveErr)
 	}
+	runtimes.mu.Lock()
+	_, retained := runtimes.abandonedTokens[abandonedToken]
+	runtimes.mu.Unlock()
+	if retained {
+		t.Fatal("consumed pre-reservation tombstone remained retained")
+	}
 
 	candidate, active, reserveErr := runtimes.reserve(72002, runtimeConfig{})
 	if reserveErr != nil || candidate == nil || active != nil {
 		t.Fatalf("fresh-token reserve = (%v, %v, %v), want candidate", candidate, active, reserveErr)
 	}
 	runtimes.release(candidate, nil)
+}
+
+func TestAbandonRuntime_ExplicitDispatchRetirementStaysBounded(t *testing.T) {
+	configureFreshStateRootForTest(t)
+	const firstToken uint64 = 72100
+	for offset := uint64(0); offset < 1024; offset++ {
+		token := firstToken + offset
+		result, err := AbandonRuntime(token)
+		if err != nil || result.Matched || result.Pending {
+			t.Fatalf("pre-dispatch abandon %d = (%+v, %v)", token, result, err)
+		}
+		RetireAbandonedRuntimeToken(token)
+	}
+	runtimes.mu.Lock()
+	retained := len(runtimes.abandonedTokens)
+	runtimes.mu.Unlock()
+	if retained != 0 {
+		t.Fatalf("retained abandoned tokens = %d after explicit retirement, want 0", retained)
+	}
+}
+
+func TestAbandonRuntime_EntryCallOwnsRetirementUntilQuiescent(t *testing.T) {
+	configureFreshStateRootForTest(t)
+	const token uint64 = 73100
+	call, err := runtimes.beginStartCall(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := AbandonRuntime(token)
+	if err != nil || result.Matched || !result.Pending {
+		t.Fatalf("in-entry abandon = (%+v, %v), want unmatched pending", result, err)
+	}
+	RetireAbandonedRuntimeToken(token)
+	runtimes.mu.Lock()
+	_, retainedWhileActive := runtimes.abandonedTokens[token]
+	runtimes.mu.Unlock()
+	if !retainedWhileActive {
+		t.Fatal("dispatch retirement removed an active entry-call tombstone")
+	}
+
+	awaited := make(chan error, 1)
+	go func() { awaited <- AwaitRuntimeQuiescence(token) }()
+	select {
+	case err := <-awaited:
+		t.Fatalf("quiescence returned before entry call: %v", err)
+	default:
+	}
+	runtimes.finishStartCall(token, call)
+	if err := <-awaited; err != nil {
+		t.Fatalf("AwaitRuntimeQuiescence: %v", err)
+	}
+	runtimes.mu.Lock()
+	_, retainedAfterExit := runtimes.abandonedTokens[token]
+	_, activeAfterExit := runtimes.startCalls[token]
+	runtimes.mu.Unlock()
+	if retainedAfterExit || activeAfterExit {
+		t.Fatal("entry-call completion retained quarantine bookkeeping")
+	}
 }
 
 func TestAbandonRuntime_StaleTokenCannotCloseNewerRuntime(t *testing.T) {
@@ -372,7 +439,7 @@ func TestStartRuntime_ConfigMismatchDoesNotTearDown(t *testing.T) {
 func configureFreshStateRootForTest(t *testing.T) string {
 	t.Helper()
 	runtimes.mu.Lock()
-	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil || runtimes.persistentPreparation != nil {
+	if runtimes.current != nil || runtimes.candidate != nil || runtimes.draining != nil || runtimes.logout != nil || runtimes.reset != nil || runtimes.persistentPreparation != nil {
 		runtimes.mu.Unlock()
 		t.Fatal("test requires an idle runtime controller")
 	}
@@ -382,25 +449,31 @@ func configureFreshStateRootForTest(t *testing.T) string {
 	previousKeybayNamespace := runtimes.keybayNamespace
 	previousLogLevel := runtimes.logLevel
 	previousAbandonedTokens := runtimes.abandonedTokens
+	previousStartCalls := runtimes.startCalls
 	previousCompletedPreparations := runtimes.completedPreparations
 	previousCompletedLifecycle := runtimes.completedLifecycle
 	previousCleanupFailure := runtimes.cleanupFailure
-	previousLastConfig := runtimes.lastConfig
 	previousPersistentPreparation := runtimes.persistentPreparation
+	previousReset := runtimes.reset
 	runtimes.configured = false
 	runtimes.stateRoot = ""
 	runtimes.stateRootInfo = nil
 	runtimes.keybayNamespace = ""
 	runtimes.logLevel = 0
 	runtimes.abandonedTokens = nil
+	runtimes.startCalls = nil
 	runtimes.completedPreparations = nil
 	runtimes.completedLifecycle = nil
 	runtimes.cleanupFailure = nil
-	runtimes.lastConfig = nil
 	runtimes.persistentPreparation = nil
+	runtimes.reset = nil
 	runtimes.mu.Unlock()
 	previousNativeLogLevel := atomic.LoadInt32(&LogLevel)
 	previousRawDisco, hadRawDisco := os.LookupEnv("TS_ENABLE_RAW_DISCO")
+	// Register the TempDir cleanup before the runtime-controller cleanup below.
+	// testing runs cleanups in LIFO order, so any live state lease is released
+	// while its configured root still exists instead of poisoning admission.
+	root := t.TempDir()
 	t.Cleanup(func() {
 		_, _ = closeCurrentRuntime()
 		runtimes.mu.Lock()
@@ -410,11 +483,12 @@ func configureFreshStateRootForTest(t *testing.T) string {
 		runtimes.keybayNamespace = previousKeybayNamespace
 		runtimes.logLevel = previousLogLevel
 		runtimes.abandonedTokens = previousAbandonedTokens
+		runtimes.startCalls = previousStartCalls
 		runtimes.completedPreparations = previousCompletedPreparations
 		runtimes.completedLifecycle = previousCompletedLifecycle
 		runtimes.cleanupFailure = previousCleanupFailure
-		runtimes.lastConfig = previousLastConfig
 		runtimes.persistentPreparation = previousPersistentPreparation
+		runtimes.reset = previousReset
 		runtimes.mu.Unlock()
 		atomic.StoreInt32(&LogLevel, previousNativeLogLevel)
 		if hadRawDisco {
@@ -424,7 +498,6 @@ func configureFreshStateRootForTest(t *testing.T) string {
 		}
 	})
 
-	root := t.TempDir()
 	if _, err := Configure(root, testKeybayNamespace, 0); err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
@@ -505,31 +578,6 @@ func TestNodeRuntime_ConcurrentCloseInvokesOwnedClosersOnce(t *testing.T) {
 	}
 	if got := closer.calls.Load(); got != 1 {
 		t.Fatalf("Store.Close calls = %d, want 1", got)
-	}
-}
-
-func TestClassifyIdleState_ExactLegacyNamesOnly(t *testing.T) {
-	for _, name := range []string{"state.db", "state.db-wal", "state.db-shm"} {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, name)
-			if err := os.WriteFile(path, []byte("opaque"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			state, err := ClassifyIdleState(dir)
-			if err != nil || state != IdleStateLegacy {
-				t.Fatalf("ClassifyIdleState = (%q, %v), want legacy", state, err)
-			}
-		})
-	}
-
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "state.db.backup"), []byte("opaque"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	state, err := ClassifyIdleState(dir)
-	if err != nil || state != IdleStateAbsent {
-		t.Fatalf("unrecognized occupancy = (%q, %v), want absent", state, err)
 	}
 }
 

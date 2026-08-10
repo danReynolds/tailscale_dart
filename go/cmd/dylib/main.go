@@ -186,6 +186,14 @@ func DuneFinishCustody(requestToken C.ulonglong, cleanupSucceeded C.int) *C.char
 	return C.CString(`{"ok":true}`)
 }
 
+//export DuneDataPlaneReady
+func DuneDataPlaneReady(runtimeToken C.ulonglong) C.int {
+	if tailscale.DataPlaneReady(uint64(runtimeToken)) {
+		return 1
+	}
+	return 0
+}
+
 //export DuneHttpStart
 func DuneHttpStart(runtimeToken C.ulonglong, method *C.char, url *C.char, headersJSON *C.char, contentLength C.longlong, followRedirects C.int, maxRedirects C.int) *C.char {
 	req, err := tailscale.HttpStart(

@@ -8,11 +8,14 @@ import (
 )
 
 func TestStopWatchJoinsSourcesAndDropsDelayedCallbacks(t *testing.T) {
-	StopWatch()
+	host := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
+	t.Cleanup(host.cancel)
 	ctx, cancel := context.WithCancel(context.Background())
 	var messagesMu sync.Mutex
 	var messages []string
-	state := &watchState{
+	state := &watcherRun{
+		runtime:      host,
+		generation:   nodeEpoch.Load(),
 		ctx:          ctx,
 		cancel:       cancel,
 		done:         make(chan struct{}),
@@ -33,24 +36,24 @@ func TestStopWatchJoinsSourcesAndDropsDelayedCallbacks(t *testing.T) {
 		<-ctx.Done()
 		close(watcherCanceled)
 		<-releaseWatcher
-		state.postIfCurrent(map[string]any{"type": "status", "runtimeToken": state.runtimeToken})
-		state.postIfCurrent(map[string]any{"type": "error", "runtimeToken": state.runtimeToken})
+		postWatcherMessage(state, map[string]any{"type": "status", "runtimeToken": state.runtimeToken})
+		postWatcherMessage(state, map[string]any{"type": "error", "runtimeToken": state.runtimeToken})
 		close(state.done)
 	}()
 	go func() {
 		<-ctx.Done()
 		close(publisherCanceled)
 		<-releasePublisher
-		state.postIfCurrent(map[string]any{"type": "peers", "runtimeToken": state.runtimeToken})
+		postWatcherMessage(state, map[string]any{"type": "peers", "runtimeToken": state.runtimeToken})
 		state.publishWG.Done()
 	}()
 
-	watchMu.Lock()
-	activeWatch = state
-	watchMu.Unlock()
+	host.watchMu.Lock()
+	host.watch = state
+	host.watchMu.Unlock()
 	stopDone := make(chan struct{})
 	go func() {
-		StopWatch()
+		host.stopWatch()
 		close(stopDone)
 	}()
 
@@ -81,7 +84,9 @@ func TestStopWatchJoinsSourcesAndDropsDelayedCallbacks(t *testing.T) {
 	messagesMu.Unlock()
 
 	replacementCtx, replacementCancel := context.WithCancel(context.Background())
-	replacement := &watchState{
+	replacement := &watcherRun{
+		runtime:      host,
+		generation:   nodeEpoch.Load(),
 		ctx:          replacementCtx,
 		cancel:       replacementCancel,
 		done:         make(chan struct{}),
@@ -89,14 +94,14 @@ func TestStopWatchJoinsSourcesAndDropsDelayedCallbacks(t *testing.T) {
 		post:         state.post,
 	}
 	close(replacement.done)
-	watchMu.Lock()
-	activeWatch = replacement
-	watchMu.Unlock()
-	state.postIfCurrent(map[string]any{"type": "status", "runtimeToken": state.runtimeToken})
-	state.postIfCurrent(map[string]any{"type": "error", "runtimeToken": state.runtimeToken})
-	state.postIfCurrent(map[string]any{"type": "peers", "runtimeToken": state.runtimeToken})
-	replacement.postIfCurrent(map[string]any{"type": "replacement-status", "runtimeToken": replacement.runtimeToken})
-	StopWatch()
+	host.watchMu.Lock()
+	host.watch = replacement
+	host.watchMu.Unlock()
+	postWatcherMessage(state, map[string]any{"type": "status", "runtimeToken": state.runtimeToken})
+	postWatcherMessage(state, map[string]any{"type": "error", "runtimeToken": state.runtimeToken})
+	postWatcherMessage(state, map[string]any{"type": "peers", "runtimeToken": state.runtimeToken})
+	postWatcherMessage(replacement, map[string]any{"type": "replacement-status", "runtimeToken": replacement.runtimeToken})
+	host.stopWatch()
 
 	messagesMu.Lock()
 	defer messagesMu.Unlock()

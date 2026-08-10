@@ -27,9 +27,9 @@ func installBootstrapWatcherForTest(
 	post func(map[string]any),
 ) *watcherRun {
 	t.Helper()
-	StopWatch()
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &watcherRun{
+		runtime:      runtime,
 		generation:   runtime.generation,
 		runtimeToken: runtime.token,
 		ctx:          ctx,
@@ -37,15 +37,15 @@ func installBootstrapWatcherForTest(
 		done:         make(chan struct{}),
 		post:         post,
 	}
-	watchMu.Lock()
-	activeWatch = run
-	watchMu.Unlock()
+	runtime.watchMu.Lock()
+	runtime.watch = run
+	runtime.watchMu.Unlock()
 	t.Cleanup(func() {
-		watchMu.Lock()
-		if activeWatch == run {
-			activeWatch = nil
+		runtime.watchMu.Lock()
+		if runtime.watch == run {
+			runtime.watch = nil
 		}
-		watchMu.Unlock()
+		runtime.watchMu.Unlock()
 		cancel()
 		run.finish()
 	})
@@ -391,9 +391,9 @@ func TestPublicationBootstrapRejectsSupersededWatcher(t *testing.T) {
 
 	var posts atomic.Int32
 	run := installBootstrapWatcherForTest(t, runtime, func(map[string]any) { posts.Add(1) })
-	watchMu.Lock()
-	activeWatch = nil
-	watchMu.Unlock()
+	runtime.watchMu.Lock()
+	runtime.watch = nil
+	runtime.watchMu.Unlock()
 	if manager.publishBootstrapSuccess(run) {
 		t.Fatal("superseded watcher published bootstrap success")
 	}

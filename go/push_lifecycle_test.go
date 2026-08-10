@@ -7,12 +7,14 @@ import (
 )
 
 func TestWatcherPublicationRejectsSupersededOwnerAndGeneration(t *testing.T) {
-	StopWatch()
-	t.Cleanup(StopWatch)
+	host := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
+	t.Cleanup(host.cancel)
+	t.Cleanup(host.stopWatch)
 
 	epoch := nodeEpoch.Load()
 	oldCtx, oldCancel := context.WithCancel(context.Background())
 	old := &watcherRun{
+		runtime:    host,
 		generation: epoch,
 		ctx:        oldCtx,
 		cancel:     oldCancel,
@@ -20,15 +22,16 @@ func TestWatcherPublicationRejectsSupersededOwnerAndGeneration(t *testing.T) {
 	}
 	newCtx, newCancel := context.WithCancel(context.Background())
 	current := &watcherRun{
+		runtime:    host,
 		generation: epoch,
 		ctx:        newCtx,
 		cancel:     newCancel,
 		done:       make(chan struct{}),
 	}
 
-	watchMu.Lock()
-	activeWatch = current
-	watchMu.Unlock()
+	host.watchMu.Lock()
+	host.watch = current
+	host.watchMu.Unlock()
 	if postWatcherMessage(old, map[string]any{"type": "status"}) {
 		t.Fatal("superseded watcher published delayed state")
 	}
@@ -38,14 +41,15 @@ func TestWatcherPublicationRejectsSupersededOwnerAndGeneration(t *testing.T) {
 
 	wrongGenerationCtx, wrongGenerationCancel := context.WithCancel(context.Background())
 	wrongGeneration := &watcherRun{
+		runtime:    host,
 		generation: epoch + 1,
 		ctx:        wrongGenerationCtx,
 		cancel:     wrongGenerationCancel,
 		done:       make(chan struct{}),
 	}
-	watchMu.Lock()
-	activeWatch = wrongGeneration
-	watchMu.Unlock()
+	host.watchMu.Lock()
+	host.watch = wrongGeneration
+	host.watchMu.Unlock()
 	if postWatcherMessage(wrongGeneration, map[string]any{"type": "status"}) {
 		t.Fatal("stale-generation watcher published delayed state")
 	}
@@ -53,9 +57,9 @@ func TestWatcherPublicationRejectsSupersededOwnerAndGeneration(t *testing.T) {
 		t.Fatal("stale-generation watcher published delayed peers")
 	}
 
-	watchMu.Lock()
-	activeWatch = nil
-	watchMu.Unlock()
+	host.watchMu.Lock()
+	host.watch = nil
+	host.watchMu.Unlock()
 	oldCancel()
 	old.finish()
 	newCancel()
@@ -65,10 +69,12 @@ func TestWatcherPublicationRejectsSupersededOwnerAndGeneration(t *testing.T) {
 }
 
 func TestStopWatchJoinsWatcherBeforeReturning(t *testing.T) {
-	StopWatch()
+	host := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
+	t.Cleanup(host.cancel)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &watcherRun{
+		runtime:    host,
 		generation: nodeEpoch.Load(),
 		ctx:        ctx,
 		cancel:     cancel,
@@ -81,12 +87,12 @@ func TestStopWatchJoinsWatcherBeforeReturning(t *testing.T) {
 		finishWatcherRun(run)
 	}()
 
-	watchMu.Lock()
-	activeWatch = run
-	watchMu.Unlock()
+	host.watchMu.Lock()
+	host.watch = run
+	host.watchMu.Unlock()
 	stopped := make(chan struct{})
 	go func() {
-		StopWatch()
+		host.stopWatch()
 		close(stopped)
 	}()
 
@@ -105,10 +111,12 @@ func TestStopWatchJoinsWatcherBeforeReturning(t *testing.T) {
 }
 
 func TestStopWatchJoinsFiredDebounceCallbackBeforeReturning(t *testing.T) {
-	StopWatch()
+	host := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
+	t.Cleanup(host.cancel)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &watcherRun{
+		runtime:    host,
 		generation: nodeEpoch.Load(),
 		ctx:        ctx,
 		cancel:     cancel,
@@ -117,13 +125,13 @@ func TestStopWatchJoinsFiredDebounceCallbackBeforeReturning(t *testing.T) {
 	callbackStarted := make(chan struct{})
 	releaseCallback := make(chan struct{})
 
-	watchMu.Lock()
-	activeWatch = run
+	host.watchMu.Lock()
+	host.watch = run
 	scheduleWatcherTimerLocked(run, 0, func() {
 		close(callbackStarted)
 		<-releaseCallback
 	})
-	watchMu.Unlock()
+	host.watchMu.Unlock()
 	<-callbackStarted
 
 	// Stand in for a watcher that exits naturally before StopWatch is called.
@@ -135,10 +143,10 @@ func TestStopWatchJoinsFiredDebounceCallbackBeforeReturning(t *testing.T) {
 	cancel()
 	deadline := time.Now().Add(time.Second)
 	for {
-		watchMu.Lock()
+		host.watchMu.Lock()
 		timerDraining := run.timer == nil
-		stillOwned := activeWatch == run
-		watchMu.Unlock()
+		stillOwned := host.watch == run
+		host.watchMu.Unlock()
 		if timerDraining {
 			if !stillOwned {
 				t.Fatal("naturally exiting watcher became undiscoverable before callback drain")
@@ -153,7 +161,7 @@ func TestStopWatchJoinsFiredDebounceCallbackBeforeReturning(t *testing.T) {
 
 	stopped := make(chan struct{})
 	go func() {
-		StopWatch()
+		host.stopWatch()
 		close(stopped)
 	}()
 

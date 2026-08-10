@@ -87,6 +87,9 @@ type nodeRuntime struct {
 	httpTransportClosed bool
 
 	fd fdResources
+
+	watchMu sync.Mutex
+	watch   *watcherRun
 }
 
 // tailnetTransport returns this runtime's one outbound HTTP transport (an
@@ -194,7 +197,7 @@ func (r *nodeRuntime) closeOwnedResources(closeStartedServer, preserveBootstrapF
 	}
 	r.closeOnce.Do(func() {
 		r.cancel()
-		StopWatch()
+		r.stopWatch()
 
 		// Publication cleanup is best-effort and bounded. Do not let a stale
 		// ServeConfig cleanup failure strand Server/Store/lease ownership: the

@@ -67,22 +67,7 @@ void _workerEntrypoint(SendPort sendPort) {
               :ephemeral,
               :hostname,
               :hostNetworkSnapshot,
-              :stateDir,
             ) = request;
-
-            if (authKey.isEmpty) {
-              final stateDirPtr = stateDir.toNativeUtf8();
-              try {
-                if (native.duneHasState(stateDirPtr) == 0) {
-                  throw const TailscaleUpException(
-                    'No auth key provided and no existing session state. '
-                    'Pass an authKey to authenticate.',
-                  );
-                }
-              } finally {
-                calloc.free(stateDirPtr);
-              }
-            }
 
             // Allocate inside the try so any partial-allocation failure
             // (hypothetically OOM mid-sequence) still hits the finally and
@@ -91,41 +76,37 @@ void _workerEntrypoint(SendPort sendPort) {
             ffi.Pointer<Utf8>? hostnamePtr;
             ffi.Pointer<Utf8>? authKeyPtr;
             ffi.Pointer<Utf8>? controlUrlPtr;
-            ffi.Pointer<Utf8>? stateDirPtr;
             ffi.Pointer<Utf8>? hostNetworkSnapshotPtr;
 
             try {
               hostnamePtr = hostname.toNativeUtf8();
               authKeyPtr = authKey.toNativeUtf8();
               controlUrlPtr = controlUrl.toNativeUtf8();
-              stateDirPtr = stateDir.toNativeUtf8();
               hostNetworkSnapshotPtr = hostNetworkSnapshot.toNativeUtf8();
 
-              native.duneStopWatch();
-              _callNativeJson(
-                () => native.duneSetNetworkInterfaces(hostNetworkSnapshotPtr!),
-                onError: TailscaleUpException.new,
-              );
+              final result =
+                  _callNativeJson(
+                        () => native.duneStart(
+                          hostnamePtr!,
+                          authKeyPtr!,
+                          controlUrlPtr!,
+                          ephemeral ? 1 : 0,
+                          hostNetworkSnapshotPtr!,
+                        ),
+                        onError: TailscaleUpException.new,
+                      )
+                      as Map<String, dynamic>;
 
-              _callNativeJson(
-                () => native.duneStart(
-                  hostnamePtr!,
-                  authKeyPtr!,
-                  controlUrlPtr!,
-                  stateDirPtr!,
-                  ephemeral ? 1 : 0,
-                ),
-                onError: TailscaleUpException.new,
-              );
+              final alreadyActive = result['alreadyActive'] == true;
+              if (!alreadyActive) {
+                native.duneStartWatch();
+              }
 
-              native.duneStartWatch();
-
-              sendPort.send(const _WorkerStartResponse());
+              sendPort.send(_WorkerStartResponse(alreadyActive: alreadyActive));
             } finally {
               if (hostnamePtr != null) calloc.free(hostnamePtr);
               if (authKeyPtr != null) calloc.free(authKeyPtr);
               if (controlUrlPtr != null) calloc.free(controlUrlPtr);
-              if (stateDirPtr != null) calloc.free(stateDirPtr);
               if (hostNetworkSnapshotPtr != null) {
                 calloc.free(hostNetworkSnapshotPtr);
               }
@@ -349,12 +330,8 @@ void _workerEntrypoint(SendPort sendPort) {
                 clientVersion: _parseClientVersion(result),
               ),
             );
-          case _WorkerStatusCommand(:final stateDir):
-            sendPort.send(
-              _WorkerStatusResponse(
-                status: _loadStatusSnapshot(stateDir: stateDir),
-              ),
-            );
+          case _WorkerStatusCommand():
+            sendPort.send(_WorkerStatusResponse(status: _loadStatusSnapshot()));
           case _WorkerPeersCommand():
             sendPort.send(_WorkerPeersResponse(peers: _loadPeerSnapshot()));
           case _WorkerPrefsGetCommand():
@@ -427,18 +404,13 @@ void _workerEntrypoint(SendPort sendPort) {
             native.duneStop();
 
             sendPort.send(const _WorkerAckResponse(_WorkerOperation.down));
-          case _WorkerLogoutCommand request:
+          case _WorkerLogoutCommand():
             native.duneStopWatch();
 
-            final stateDirPtr = request.stateDir.toNativeUtf8();
-            try {
-              _callNativeJson(
-                () => native.duneLogout(stateDirPtr),
-                onError: TailscaleLogoutException.new,
-              );
-            } finally {
-              calloc.free(stateDirPtr);
-            }
+            _callNativeJson(
+              native.duneLogout,
+              onError: TailscaleLogoutException.new,
+            );
 
             sendPort.send(const _WorkerAckResponse(_WorkerOperation.logout));
         }
@@ -527,6 +499,9 @@ dynamic _callNativeJson(
 }
 
 TailscaleErrorCode _parseErrorCode(String? raw) => switch (raw) {
+  'lifecycleBusy' => TailscaleErrorCode.lifecycleBusy,
+  'configurationMismatch' => TailscaleErrorCode.configurationMismatch,
+  'staleRuntime' => TailscaleErrorCode.staleRuntime,
   'notFound' => TailscaleErrorCode.notFound,
   'forbidden' => TailscaleErrorCode.forbidden,
   'conflict' => TailscaleErrorCode.conflict,
@@ -535,7 +510,7 @@ TailscaleErrorCode _parseErrorCode(String? raw) => switch (raw) {
   _ => TailscaleErrorCode.unknown,
 };
 
-TailscaleStatus _loadStatusSnapshot({String? stateDir}) {
+TailscaleStatus _loadStatusSnapshot() {
   try {
     final parsed =
         _callNativeJson(
@@ -544,18 +519,18 @@ TailscaleStatus _loadStatusSnapshot({String? stateDir}) {
             )
             as Map<String, dynamic>;
 
-    // When the engine isn't running, duneStatus returns {} which parses
-    // to noState. If we have a stateDir to check and persisted credentials
-    // exist, report stopped instead so consumers can distinguish "was
-    // previously authenticated" from "never authenticated".
-    if (parsed.isEmpty && stateDir != null) {
-      final stateDirPtr = stateDir.toNativeUtf8();
-      try {
-        if (native.duneHasState(stateDirPtr) != 0) {
-          return TailscaleStatus.stopped;
-        }
-      } finally {
-        calloc.free(stateDirPtr);
+    // When the engine is not running, classify exact legacy filesystem
+    // occupancy without opening SQLite. This is conservative persistence
+    // state, not proof that enrollment ever completed.
+    if (parsed.isEmpty) {
+      final classification =
+          _callNativeJson(
+                native.duneClassifyState,
+                onError: TailscaleStatusException.new,
+              )
+              as Map<String, dynamic>;
+      if (classification['state'] == 'legacy') {
+        return TailscaleStatus.stopped;
       }
     }
 

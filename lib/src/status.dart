@@ -34,12 +34,11 @@ enum NodeState {
   /// The node is connected and ready to send/receive traffic.
   running,
 
-  /// The engine is not running but persisted credentials exist.
+  /// The engine is not running and recognized local state artifacts exist.
   ///
-  /// Returned by [Tailscale.status] when the node was previously
-  /// authenticated but [Tailscale.up] has not been called yet, or after
-  /// [Tailscale.down]. The next [Tailscale.up] can reconnect without an
-  /// auth key.
+  /// This is conservative filesystem occupancy, not proof that the state is
+  /// enrolled, valid, or sufficient to reconnect without an auth key. Call
+  /// [Tailscale.up] to determine the actual control-plane state.
   stopped;
 
   /// Parses a Go `ipn.State` string into a [NodeState].

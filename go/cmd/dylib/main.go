@@ -12,7 +12,7 @@ import "C"
 
 import (
 	"encoding/json"
-	"sync/atomic"
+	"errors"
 	"time"
 	"unsafe"
 
@@ -20,29 +20,31 @@ import (
 )
 
 //export DuneStart
-func DuneStart(hostname *C.char, authKey *C.char, controlURL *C.char, stateDir *C.char, ephemeral C.int) *C.char {
+func DuneStart(hostname *C.char, authKey *C.char, controlURL *C.char, ephemeral C.int, hostNetworkSnapshot *C.char) *C.char {
 	name := C.GoString(hostname)
 	key := C.GoString(authKey)
 	ctl := C.GoString(controlURL)
-	dir := C.GoString(stateDir)
+	network := C.GoString(hostNetworkSnapshot)
 
-	err := tailscale.Start(name, key, ctl, dir, ephemeral != 0)
+	alreadyActive, err := tailscale.StartRuntimeWithHostNetwork(name, key, ctl, ephemeral != 0, network)
 	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+		return lifecycleError(err)
 	}
-	return C.CString(`{"ok":true}`)
+	b, _ := json.Marshal(map[string]any{
+		"ok":            true,
+		"alreadyActive": alreadyActive,
+	})
+	return C.CString(string(b))
 }
 
-//export DuneSetNetworkInterfaces
-func DuneSetNetworkInterfaces(snapshot *C.char) *C.char {
-	if err := tailscale.ConfigureHostNetworkSnapshot(C.GoString(snapshot)); err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+//export DuneConfigure
+func DuneConfigure(stateRoot *C.char, logLevel C.int) *C.char {
+	resolved, err := tailscale.Configure(C.GoString(stateRoot), int32(logLevel))
+	if err != nil {
+		return lifecycleError(err)
 	}
-	return C.CString(`{"ok":true}`)
+	b, _ := json.Marshal(map[string]any{"stateDir": resolved})
+	return C.CString(string(b))
 }
 
 //export DuneHttpStart
@@ -131,9 +133,7 @@ func DuneTcpDialFd(host *C.char, port C.int, timeoutMillis C.longlong) *C.char {
 
 	conn, err := tailscale.TcpDialFd(h, int(port), timeout)
 	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+		return C.CString(tailscale.ErrorJSON(err))
 	}
 	result, _ := json.Marshal(map[string]any{
 		"fd":            conn.FD,
@@ -342,24 +342,34 @@ func DuneDiagCheckUpdate() *C.char {
 	return C.CString(tailscale.DiagCheckUpdate())
 }
 
-//export DuneHasState
-func DuneHasState(stateDir *C.char) C.int {
-	dir := C.GoString(stateDir)
-	if tailscale.HasState(dir) {
-		return 1
+//export DuneClassifyState
+func DuneClassifyState() *C.char {
+	state, err := tailscale.ClassifyConfiguredIdleState()
+	if err != nil {
+		return lifecycleError(err)
 	}
-	return 0
+	b, _ := json.Marshal(map[string]any{"state": state})
+	return C.CString(string(b))
 }
 
 //export DuneLogout
-func DuneLogout(stateDir *C.char) *C.char {
-	dir := C.GoString(stateDir)
-	if err := tailscale.Logout(dir); err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+func DuneLogout() *C.char {
+	if err := tailscale.Logout(); err != nil {
+		return lifecycleError(err)
 	}
 	return C.CString(`{"ok":true}`)
+}
+
+func lifecycleError(err error) *C.char {
+	m := map[string]string{"error": err.Error()}
+	switch {
+	case errors.Is(err, tailscale.ErrLifecycleBusy):
+		m["code"] = "lifecycleBusy"
+	case errors.Is(err, tailscale.ErrConfigurationMismatch):
+		m["code"] = "configurationMismatch"
+	}
+	b, _ := json.Marshal(m)
+	return C.CString(string(b))
 }
 
 //export DuneStop
@@ -410,11 +420,6 @@ func DuneServeClear(payloadJSON *C.char) *C.char {
 //export DuneFree
 func DuneFree(ptr *C.char) {
 	C.free(unsafe.Pointer(ptr))
-}
-
-//export DuneSetLogLevel
-func DuneSetLogLevel(level C.int) {
-	atomic.StoreInt32(&tailscale.LogLevel, int32(level))
 }
 
 //export DuneInitDartAPI

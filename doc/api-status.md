@@ -84,11 +84,11 @@ returning a transitional state such as `starting`.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `Tailscale.init({stateDir, logLevel})` | ✅ | One-time library configuration at app startup. | `Tailscale.init(stateDir: '/app/state');` |
-| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; `ephemeral: true` registers short-lived CI/test nodes. Resolves on the first stable state only. Throws `TailscaleUpException` if startup fails before that. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
+| `Tailscale.init({stateDir, logLevel})` | ✅ | Freezes one native path/inode + log-level identity. Repeating the exact tuple is a no-op; a mismatch throws `TailscaleConfigurationException`. Native lifecycle calls derive the owned `tailscale/` subtree from this root. | `Tailscale.init(stateDir: '/app/state');` |
+| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; `ephemeral: true` registers short-lived CI/test nodes. Same-config active calls are idempotent and an auth key never replaces the active identity. Concurrent startup returns `lifecycleBusy`; active tuple mismatch returns `configurationMismatch`. Resolves on the first stable state only. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
 | `down()` | ✅ | Stop engine, keep persisted credentials. | `await tsnet.down();` |
 | `logout()` | ✅ | Stop + wipe persisted credentials. | `await tsnet.logout();` |
-| `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. | `final s = await tsnet.status();` |
+| `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. While idle, `stopped` means recognized local state artifacts exist; it does not prove valid enrollment or reconnectability. | `final s = await tsnet.status();` |
 | `nodes()` → `List<TailscaleNode>` | ✅ | Current node inventory. | `final nodes = await tsnet.nodes();` |
 | `nodeByIp(ip)` → `TailscaleNode?` | ✅ | Lookup a known node by Tailscale IP from the current inventory. | `final node = await tsnet.nodeByIp('100.64.0.5');` |
 | `onStateChange` → `Stream<NodeState>` | ✅ | Duplicate-filtered state transitions. Repeated `needsLogin` remains observable so callers can refresh `status().authUrl`. | `tsnet.onStateChange.listen(print);` |
@@ -372,8 +372,9 @@ surface `featureDisabled`, rethrow otherwise).
 
 | Type | Status | Thrown by | Example |
 | ---- | ------ | --------- | ------- |
-| `TailscaleErrorCode` enum | ✅ | `notFound` / `forbidden` / `conflict` / `preconditionFailed` / `featureDisabled` / `unknown`. | `if (e.code == TailscaleErrorCode.conflict) retry();` |
+| `TailscaleErrorCode` enum | ✅ | Includes lifecycle codes `lifecycleBusy`, `configurationMismatch`, and `staleRuntime`; LocalAPI codes `notFound`, `forbidden`, `conflict`, `preconditionFailed`, `featureDisabled`; and `unknown`. | `if (e.code == TailscaleErrorCode.conflict) retry();` |
 | `TailscaleUsageException` | ✅ | Misuse: `http.client` before `up()`, empty `stateDir`, etc. | `on TailscaleUsageException catch (_) { ... }` |
+| `TailscaleConfigurationException` | ✅ | A repeated `init` conflicts with the process-owned state root or log level. | `on TailscaleConfigurationException catch (_) { ... }` |
 | `TailscaleUpException` | ✅ | `up()` failed before reaching a stable state. | `on TailscaleUpException catch (e) { showAuth(e); }` |
 | `TailscaleHttpException` | ✅ | `http.*`. | `on TailscaleHttpException catch (_) { ... }` |
 | `TailscaleStatusException` | ✅ | `status()`. | `on TailscaleStatusException catch (_) { ... }` |

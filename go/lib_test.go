@@ -11,63 +11,23 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 )
-
-// --- HasState tests ---
-
-func TestHasState_NoDir(t *testing.T) {
-	if HasState("/nonexistent/path") {
-		t.Error("HasState should return false for nonexistent directory")
-	}
-}
-
-func TestHasState_EmptyDB(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "state.db")
-
-	// Create an empty store (no machine key written)
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.Close()
-
-	if HasState(dir) {
-		t.Error("HasState should return false for empty database")
-	}
-}
-
-func TestHasState_WithMachineKey(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "state.db")
-
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.WriteState(ipn.MachineKeyStateKey, []byte("fake-machine-key")); err != nil {
-		t.Fatal(err)
-	}
-	store.Close()
-
-	if !HasState(dir) {
-		t.Error("HasState should return true when machine key exists")
-	}
-}
 
 // --- Logout tests ---
 
 func TestLogout_RemovesDir(t *testing.T) {
-	dir := t.TempDir()
-	stateDir := filepath.Join(dir, "tailscale_state")
-	os.MkdirAll(stateDir, 0700)
+	stateDir := configureFreshStateRootForTest(t)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	// Write a file so the dir isn't empty
-	os.WriteFile(filepath.Join(stateDir, "state.db"), []byte("data"), 0600)
+	if err := os.WriteFile(filepath.Join(stateDir, "state.db"), []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	if err := Logout(stateDir); err != nil {
+	if err := Logout(); err != nil {
 		t.Fatalf("Logout returned error: %v", err)
 	}
 
@@ -154,16 +114,13 @@ func TestStop_WhenNotStarted(t *testing.T) {
 // --- Start behavior tests ---
 
 func TestStart_NoOpWithoutAuthKey(t *testing.T) {
-	mu.Lock()
-	srv = &tsnet.Server{}
-	mu.Unlock()
-	defer func() {
-		mu.Lock()
-		srv = nil
-		mu.Unlock()
-	}()
+	configureFreshStateRootForTest(t)
+	withLiveServer(t, &tsnet.Server{}, runtimeConfig{
+		hostname:   "host",
+		controlURL: "https://control",
+	})
 
-	if err := Start("host", "", "https://control", t.TempDir(), false); err != nil {
+	if err := Start("host", "", "https://control", false); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 }
@@ -171,30 +128,37 @@ func TestStart_NoOpWithoutAuthKey(t *testing.T) {
 func TestStart_AppliesEphemeralFlag(t *testing.T) {
 	Stop()
 	t.Cleanup(Stop)
+	t.Setenv("TS_LOGS_DIR", "embedding-app-log-dir")
 
-	if err := Start("ephemeral-test", "", "", t.TempDir(), true); err != nil {
+	stateDir := configureFreshStateRootForTest(t)
+	if err := Start("ephemeral-test", "", "", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if srv == nil {
+	runtime := currentRuntime()
+	if runtime == nil {
 		t.Fatal("Start did not commit a server")
 	}
-	if !srv.Ephemeral {
+	if !runtime.server.Ephemeral {
 		t.Fatal("Start did not apply Ephemeral=true to tsnet.Server")
+	}
+	if got := os.Getenv("TS_LOGS_DIR"); got != "embedding-app-log-dir" {
+		t.Fatalf("TS_LOGS_DIR = %q after Start, want prior value restored", got)
+	}
+	if got := os.Getenv("TS_ENABLE_RAW_DISCO"); got != "false" {
+		t.Fatalf("TS_ENABLE_RAW_DISCO = %q, want compatibility value false", got)
+	}
+	if info, err := os.Stat(filepath.Join(stateDir, "logs")); err != nil || !info.IsDir() {
+		t.Fatalf("runtime log directory missing: info=%v err=%v", info, err)
 	}
 }
 
-func TestStart_StopLockedClosesListeners(t *testing.T) {
+func TestStart_RuntimeCloseClosesListeners(t *testing.T) {
 	oldLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	mu.Lock()
-	srv = nil
-	mu.Unlock()
 	httpBindingMu.Lock()
 	httpBindingRegistry[99] = &httpBindingState{
 		binding:  HttpBinding{ID: 99, TailnetPort: 80},
@@ -204,15 +168,14 @@ func TestStart_StopLockedClosesListeners(t *testing.T) {
 	}
 	httpBindingMu.Unlock()
 
-	mu.Lock()
-	stopLocked()
-	mu.Unlock()
+	withLiveServer(t, nil, runtimeConfig{})
+	Stop()
 
 	httpBindingMu.Lock()
 	_, stillRegistered := httpBindingRegistry[99]
 	httpBindingMu.Unlock()
 	if stillRegistered {
-		t.Error("HTTP binding should be removed after stopLocked")
+		t.Error("HTTP binding should be removed by runtime close")
 	}
 
 	// Old listeners should be closed — Accept returns immediately with an

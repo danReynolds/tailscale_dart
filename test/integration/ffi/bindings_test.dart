@@ -13,13 +13,25 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+import 'package:tailscale/tailscale.dart';
 import 'package:tailscale/src/ffi_bindings.dart' as native;
 
+import '../support/process_state_root.dart';
+
 void main() {
+  late Directory configuredStateBaseDir;
+
   setUpAll(() {
-    // Suppress Go stderr logging during tests.
-    native.duneSetLogLevel(0);
+    configuredStateBaseDir = processIntegrationStateRoot();
+    clearProcessIntegrationState(configuredStateBaseDir);
+    Tailscale.init(stateDir: configuredStateBaseDir.path);
+  });
+
+  tearDownAll(() {
+    native.duneStop();
+    clearProcessIntegrationState(configuredStateBaseDir);
   });
 
   group('symbol resolution', () {
@@ -28,26 +40,37 @@ void main() {
     });
   });
 
-  group('duneHasState', () {
-    test('returns 0 for nonexistent directory', () {
-      final dir =
-          '/tmp/tailscale_test_nonexistent_${DateTime.now().millisecondsSinceEpoch}';
-      final dirPtr = dir.toNativeUtf8();
-      final result = native.duneHasState(dirPtr);
-      calloc.free(dirPtr);
+  group('duneClassifyState', () {
+    test('reports absent without creating package state', () {
+      clearProcessIntegrationState(configuredStateBaseDir);
+      final resultPtr = native.duneClassifyState();
+      final result = jsonDecode(resultPtr.toDartString());
+      native.duneFree(resultPtr);
 
-      expect(result, 0);
+      expect(result, {'state': 'absent'});
+      expect(
+        Directory(
+          p.join(configuredStateBaseDir.path, 'tailscale'),
+        ).existsSync(),
+        isFalse,
+      );
     });
 
-    test('returns 0 for empty directory', () {
-      final dir = Directory.systemTemp.createTempSync('tailscale_test_empty_');
-      addTearDown(() => dir.deleteSync(recursive: true));
+    test('recognizes an exact legacy artifact without opening it', () {
+      clearProcessIntegrationState(configuredStateBaseDir);
+      final ownedDir = Directory(
+        p.join(configuredStateBaseDir.path, 'tailscale'),
+      )..createSync();
+      final artifact = File(p.join(ownedDir.path, 'state.db'))
+        ..writeAsStringSync('opaque');
+      addTearDown(() => clearProcessIntegrationState(configuredStateBaseDir));
 
-      final dirPtr = dir.path.toNativeUtf8();
-      final result = native.duneHasState(dirPtr);
-      calloc.free(dirPtr);
+      final resultPtr = native.duneClassifyState();
+      final result = jsonDecode(resultPtr.toDartString());
+      native.duneFree(resultPtr);
 
-      expect(result, 0);
+      expect(result, {'state': 'legacy'});
+      expect(artifact.readAsStringSync(), 'opaque');
     });
   });
 
@@ -106,36 +129,25 @@ void main() {
     });
   });
 
-  group('duneSetLogLevel', () {
-    test('can set to silent without crashing', () {
-      native.duneSetLogLevel(0);
-    });
-
-    test('can set to info without crashing', () {
-      native.duneSetLogLevel(2);
-      native.duneSetLogLevel(0);
-    });
-  });
-
   group('duneStart error handling', () {
     test('returns valid JSON for unreachable control URL', () {
-      final dir = Directory.systemTemp.createTempSync('tailscale_test_start_');
+      clearProcessIntegrationState(configuredStateBaseDir);
       addTearDown(() {
         native.duneStop();
-        dir.deleteSync(recursive: true);
+        clearProcessIntegrationState(configuredStateBaseDir);
       });
 
       final hostname = 'test-node'.toNativeUtf8();
       final authKey = 'tskey-fake-key'.toNativeUtf8();
       final controlUrl = 'http://127.0.0.1:1/'.toNativeUtf8();
-      final stateDir = dir.path.toNativeUtf8();
+      final hostNetworkSnapshot = '{}'.toNativeUtf8();
 
       final resultPtr = native.duneStart(
         hostname,
         authKey,
         controlUrl,
-        stateDir,
         0,
+        hostNetworkSnapshot,
       );
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
@@ -143,7 +155,7 @@ void main() {
       calloc.free(hostname);
       calloc.free(authKey);
       calloc.free(controlUrl);
-      calloc.free(stateDir);
+      calloc.free(hostNetworkSnapshot);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
       expect(

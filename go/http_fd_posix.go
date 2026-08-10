@@ -392,11 +392,9 @@ func runHttpFdRequest(
 //
 // INVARIANT: the *tsnet.Server pointer is a proxy for identity. This is correct
 // only because every identity change produces a *distinct* server — Start
-// always allocates a fresh tsnet.Server (lib.go) and routes an existing node
-// through stopLocked (reset) first, so the identity and the pointer change
-// together. If a live server were ever re-authenticated in place (same pointer,
-// new identity, without Start), this key would fail open and keep serving the
-// old identity's connections; such a path must also reset() this cache.
+// always allocates a fresh tsnet.Server (lib.go), and the controller refuses to
+// replace or re-authenticate an active runtime in place. Runtime drain resets
+// this cache before the next candidate can start.
 type httpTransportCache struct {
 	mu        sync.Mutex
 	owner     any
@@ -425,8 +423,8 @@ func (c *httpTransportCache) get(owner any, build func() *http.Transport) *http.
 // Stop can't repopulate the cache with a dead server behind
 // resetTailnetHTTPTransport's sweep. The check runs under c.mu — the same lock
 // the reset sweeps under — so there is no check-to-cache window; and because
-// it is a lock-free atomic load it needs no global mu, keeping mu off the
-// per-request hot path entirely.
+// it is a lock-free atomic load it needs no controller lock, keeping lifecycle
+// coordination off the per-request hot path entirely.
 func (c *httpTransportCache) getCurrent(gate nodeGate, build func() *http.Transport) (transport *http.Transport, oneOff bool) {
 	c.mu.Lock()
 	if !gate.stillCurrent() {
@@ -492,8 +490,8 @@ func applyTailnetTLS(base *http.Transport) *http.Transport {
 }
 
 // resetTailnetHTTPTransport drops the cached HTTP transport and closes its idle
-// connections. Called from stopLocked so pooled connections never survive a
-// node/identity change.
+// connections. Called from nodeRuntime.close so pooled connections never
+// survive a node/identity change.
 func resetTailnetHTTPTransport() {
 	tailnetHTTPTransports.reset()
 }

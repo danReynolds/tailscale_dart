@@ -90,7 +90,7 @@ func TestHttpTransportCache_NoReuseAcrossIdentityChange(t *testing.T) {
 }
 
 // TestHttpTransportCache_ResetForcesFreshConnection covers node teardown: after
-// reset() (called from stopLocked), the next request must dial anew.
+// reset() (called from nodeRuntime.close), the next request must dial anew.
 func TestHttpTransportCache_ResetForcesFreshConnection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
@@ -193,7 +193,7 @@ func TestGetCurrent_OneOffForStaleGate(t *testing.T) {
 
 	staleGate := liveGate(t)
 	nodeEpoch.Add(1) // teardown begins
-	cache.reset()    // stopLocked's sweep
+	cache.reset()    // nodeRuntime.close's sweep
 
 	// Stale request against the empty cache: one-off, cache stays empty.
 	tr, oneOff := cache.getCurrent(staleGate, func() *http.Transport { return &http.Transport{} })

@@ -212,6 +212,23 @@ func TestClassifyLocalAPIError_UnknownError(t *testing.T) {
 	}
 }
 
+func TestRuntimeLocalClient_CancelsAndClassifiesStaleGeneration(t *testing.T) {
+	runtime := newNodeRuntime(nodeEpoch.Load(), runtimeConfig{})
+	access := &runtimeLocalClient{runtime: runtime}
+	ctx, cancel := access.callContext(0)
+	defer cancel()
+
+	runtime.cancel()
+	<-ctx.Done()
+	if err := access.resultError(errors.New("late LocalAPI result")); !errors.Is(err, ErrRuntimeStale) {
+		t.Fatalf("resultError = %v, want ErrRuntimeStale", err)
+	}
+	code, status := classifyLocalAPIError(ErrRuntimeStale)
+	if code != "staleRuntime" || status != 0 {
+		t.Fatalf("stale classification = (%q, %d), want (staleRuntime, 0)", code, status)
+	}
+}
+
 func TestClassifyLocalAPIError_FunnelPortPolicy(t *testing.T) {
 	code, _ := classifyLocalAPIError(errors.New("port 80 is not allowed for funnel"))
 	if code != "forbidden" {
@@ -571,13 +588,15 @@ func resetServePublicationRegistryForTest(t *testing.T) {
 // If someone renames one, this test fails loudly.
 func TestClassifyLocalAPIError_KnownCodesAreStable(t *testing.T) {
 	wantedCodes := []string{
-		"notFound", "forbidden", "conflict",
+		"staleRuntime", "notFound", "forbidden", "conflict",
 		"preconditionFailed", "featureDisabled",
 	}
 	for _, want := range wantedCodes {
 		// Synthesize an error that should classify as `want`.
 		var err error
 		switch want {
+		case "staleRuntime":
+			err = ErrRuntimeStale
 		case "notFound":
 			err = fakeHTTPErr{status: http.StatusNotFound, msg: "x"}
 		case "forbidden":
@@ -596,7 +615,7 @@ func TestClassifyLocalAPIError_KnownCodesAreStable(t *testing.T) {
 	}
 	// Also make sure we didn't drop a code.
 	for _, code := range wantedCodes {
-		if !strings.Contains("notFound,forbidden,conflict,preconditionFailed,featureDisabled", code) {
+		if !strings.Contains("staleRuntime,notFound,forbidden,conflict,preconditionFailed,featureDisabled", code) {
 			t.Errorf("untracked code %q", code)
 		}
 	}

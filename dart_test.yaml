@@ -1,6 +1,6 @@
 # Integration tests under test/integration/ drive the embedded Go runtime,
-# which holds per-process global state (tsnet.Server, SQLiteStore). Running
-# them in parallel isolates causes the processes to stomp each other's state.
+# which intentionally has one process-scoped configuration and node runtime.
+# Running them in parallel isolates would make lifecycle assertions overlap.
 # Pure-Dart tests are fast enough that forcing the whole run serial is cheaper
 # than tagging selectively.
 concurrency: 1

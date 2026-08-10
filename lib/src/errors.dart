@@ -13,6 +13,15 @@ library;
 /// [LocalAPI](https://pkg.go.dev/tailscale.com/client/local) surface
 /// exposes (e.g. `IsAccessDeniedError`, `IsPreconditionsFailedError`).
 enum TailscaleErrorCode {
+  /// Another start/stop transition currently owns the process lifecycle.
+  lifecycleBusy,
+
+  /// Immutable active-runtime configuration differs from the request.
+  configurationMismatch,
+
+  /// The operation belongs to a node runtime that has already stopped.
+  staleRuntime,
+
   /// Target does not exist (unknown node, waiting file, profile, route...).
   notFound,
 
@@ -59,6 +68,12 @@ sealed class TailscaleException implements Exception {
 /// Thrown when the API is used in an invalid lifecycle state.
 final class TailscaleUsageException extends TailscaleException {
   const TailscaleUsageException(super.message, {super.cause});
+}
+
+/// Thrown when `Tailscale.init` conflicts with the process-wide state root or
+/// logging configuration already frozen by an earlier successful call.
+final class TailscaleConfigurationException extends TailscaleException {
+  const TailscaleConfigurationException(super.message, {super.cause});
 }
 
 /// Base class for operation-specific failures such as `up()` or `listen()`.

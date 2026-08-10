@@ -100,7 +100,10 @@ func startTestNode(tb testing.TB) string {
 	if url == "" || key == "" {
 		tb.Skip("set HEADSCALE_URL and HEADSCALE_AUTH_KEY to run the live identity benchmark")
 	}
-	if err := Start("dune-bench", key, url, tb.TempDir(), true); err != nil {
+	if _, err := Configure(tb.TempDir(), 0); err != nil {
+		tb.Fatalf("Configure: %v", err)
+	}
+	if err := Start("dune-bench", key, url, true); err != nil {
 		tb.Fatalf("Start: %v", err)
 	}
 	tb.Cleanup(Stop)

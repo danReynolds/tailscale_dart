@@ -23,6 +23,7 @@ import 'package:test/test.dart';
 import '../e2e/support/native_asset_workaround.dart';
 import '../e2e/support/peer_process.dart';
 import '../e2e/support/state_waiters.dart';
+import '../integration/support/process_state_root.dart';
 import 'support/tailscale_api.dart';
 
 const _defaultRoutes = ['0.0.0.0/0', '::/0'];
@@ -77,7 +78,7 @@ void main() {
     }
     try {
       final dir = clientStateDir;
-      if (dir != null) Directory(dir).deleteSync(recursive: true);
+      if (dir != null) clearProcessIntegrationState(Directory(dir));
     } catch (_) {}
     try {
       final dir = exitStateDir;
@@ -154,9 +155,9 @@ Future<void> _setUpLiveTailnet({
 
   final api = LiveTailscaleApi(apiKey: apiKey, tailnetId: tailnetId);
   onApi(api);
-  final clientStateDir = Directory.systemTemp
-      .createTempSync('tailscale_live_client_')
-      .path;
+  final processStateRoot = processIntegrationStateRoot();
+  clearProcessIntegrationState(processStateRoot);
+  final clientStateDir = processStateRoot.path;
   final exitStateDir = Directory.systemTemp
       .createTempSync('tailscale_live_exit_')
       .path;

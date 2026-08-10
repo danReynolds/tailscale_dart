@@ -307,6 +307,7 @@ func TestStateLeaseReleaseIsConcurrentAndIdempotent(t *testing.T) {
 
 func TestStateLeaseUnlockFailurePoisonsAdmission(t *testing.T) {
 	root := t.TempDir()
+	clearStateLeaseAdmissionAfterTest(t, root)
 	injected := errors.New("unlock failed")
 	lease, err := acquireStateLease(root, withStateLeaseTestHooks(stateLeaseTestHooks{
 		unlock: func(fd int) error {
@@ -327,6 +328,7 @@ func TestStateLeaseUnlockFailurePoisonsAdmission(t *testing.T) {
 
 func TestStateLeaseCloseFailurePoisonsAdmission(t *testing.T) {
 	root := t.TempDir()
+	clearStateLeaseAdmissionAfterTest(t, root)
 	injected := errors.New("close failed")
 	lease, err := acquireStateLease(root, withStateLeaseTestHooks(stateLeaseTestHooks{
 		close: func(file *os.File) error {
@@ -347,6 +349,7 @@ func TestStateLeaseCloseFailurePoisonsAdmission(t *testing.T) {
 
 func TestStateLeaseAcquisitionCloseFailurePoisonsAdmission(t *testing.T) {
 	root := t.TempDir()
+	clearStateLeaseAdmissionAfterTest(t, root)
 	lockFailure := errors.New("lock failed")
 	closeFailure := errors.New("close failed")
 	_, err := acquireStateLease(root, withStateLeaseTestHooks(stateLeaseTestHooks{
@@ -381,6 +384,27 @@ func assertStateLeasePoisoned(t *testing.T, root string) {
 	if !errors.Is(err, errStateLeasePoisoned) {
 		t.Fatalf("acquireStateLease(%q) error = %v, want poisoned admission", root, err)
 	}
+}
+
+// Poison is intentionally process-lifetime state in production. Tests that
+// inject cleanup uncertainty must remove only their own admission afterward;
+// otherwise a deleted TempDir inode can be reused by a later Linux test and
+// make that unrelated root appear poisoned.
+func clearStateLeaseAdmissionAfterTest(t *testing.T, root string) {
+	t.Helper()
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID, err := stateLeaseIdentity(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stateLeaseAdmissions.Lock()
+		delete(stateLeaseAdmissions.byRoot, rootID)
+		stateLeaseAdmissions.Unlock()
+	})
 }
 
 func TestStateLeaseIdentityUsesDeviceAndInode(t *testing.T) {

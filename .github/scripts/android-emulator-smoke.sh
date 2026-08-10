@@ -21,6 +21,13 @@ fi
 # contain unrelated seccomp failures from emulator services and should not make
 # this receipt flaky.
 adb logcat -d --pid="$APP_PID" > /tmp/logcat.txt || true
+echo "--- confirming Tailscale.init completed ---"
+if ! grep -Fq 'TAILSCALE_DART_SMOKE_READY' /tmp/logcat.txt; then
+  echo "FAIL: app process survived, but Tailscale.init did not report completion."
+  tail -200 /tmp/logcat.txt
+  exit 1
+fi
+
 echo "--- searching the app log for seccomp kills ---"
 if grep -Eq 'SIGSYS|SYS_SECCOMP|seccomp prevented' /tmp/logcat.txt; then
   echo "FAIL: seccomp killed the process; issue #81 has regressed."

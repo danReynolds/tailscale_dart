@@ -17,12 +17,15 @@ on:
   pull_request:
     paths:
       - '.github/workflows/android-emulator-smoke.yml'
+      - '.github/scripts/android-emulator-smoke.sh'
       - 'go/go.mod'
       - 'go/go.sum'
       - 'go/reactor*.go'
       - 'go/cmd/dylib/**'
       - 'hook/build.dart'
       - 'lib/src/fd_transport.dart'
+      - 'lib/src/ffi_bindings.dart'
+      - 'lib/src/posix_reactor.dart'
   workflow_dispatch:
     inputs:
       api-level:
@@ -86,6 +89,7 @@ jobs:
             Tailscale.init(
               stateDir: '${Directory.systemTemp.path}/ts-smoke',
             );
+            print('TAILSCALE_DART_SMOKE_READY');
             runApp(const MaterialApp(home: Scaffold(body: Text('up'))));
           }
           DART

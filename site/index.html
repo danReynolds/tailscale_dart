@@ -345,7 +345,7 @@ print(res.statusCode);</code></pre>
           <div class="architecture-notes">
             <article>
               <h3>Go owns Tailscale state</h3>
-              <p>Authentication, WireGuard, ACLs, MagicDNS, DERP, TLS certs, and socket establishment stay inside upstream tsnet. Current 0.8.0 state paths are created owner-only and tightened best-effort, but are not yet application-layer encrypted or fail-closed on chmod verification.</p>
+              <p>Authentication, WireGuard, ACLs, MagicDNS, DERP, TLS certs, and socket establishment stay inside upstream tsnet. Current 0.8.1 state paths are created owner-only and tightened best-effort, but are not yet application-layer encrypted or fail-closed on chmod verification.</p>
             </article>
             <article>
               <h3>Dart owns application shape</h3>
@@ -376,7 +376,7 @@ print(res.statusCode);</code></pre>
             </p>
           </div>
           <pre><code>dependencies:
-  tailscale: ^0.8.0</code></pre>
+  tailscale: ^0.8.1</code></pre>
           <div class="install-actions">
             <a class="button button-primary" href="https://pub.dev/packages/tailscale">Open pub.dev</a>
             <a class="button button-secondary" href="api/">Generated Dart docs</a>

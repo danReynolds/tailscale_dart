@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Directory;
 
 import 'package:ffi/ffi.dart';
 import 'package:http/http.dart' as pkg_http;
@@ -1102,6 +1103,15 @@ class Tailscale implements TailscaleClient {
       keybayNamespacePtr,
       logLevel.nativeValue,
     );
+    // Ephemeral scratch must live in a platform-writable temporary location.
+    // Dart resolves the app's real one (Go's os.TempDir() fallback is not
+    // app-writable on Android); native ignores empty and repeated values.
+    final scratchParentPtr = Directory.systemTemp.path.toNativeUtf8();
+    try {
+      native.duneSetEphemeralScratchParent(scratchParentPtr);
+    } finally {
+      calloc.free(scratchParentPtr);
+    }
     try {
       final decoded = jsonDecode(resultPtr.toDartString());
       if (decoded is! Map<String, dynamic>) {

@@ -19,7 +19,11 @@ the Keybay-backed encrypted StateStore, ephemeral nodes use an in-memory Store,
 local forget is explicit, and the SQLite runtime/dependency are gone. This does
 not mark the plan or a release complete. Hosted Funnel-tailnet and replacement
 receipts plus the macOS production-Keybay persisted process-crash/restart
-receipt passed on 2026-08-10. Android/mobile and remaining platform receipts,
+receipt passed on 2026-08-10, and an Android arm64 emulator runtime receipt
+(API 33 app process: two full init/up/down generations reaching upstream
+NeedsLogin with zero SIGSYS, raw-disco pin as shipped, no tailnet traffic)
+passed the same day after fixing ephemeral scratch to use the Dart-supplied
+platform temp directory. Android/mobile custody and remaining platform receipts,
 R6 permission/backup/sidecar evidence, later ownership work, and the R10
 integrated gate remain authoritative requirements below.
 

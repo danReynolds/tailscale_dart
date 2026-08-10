@@ -72,11 +72,13 @@ Ephemeral nodes use an in-memory StateStore and do not create a DEK or
 persistent StateStore. Because tsnet still requires a writable `Server.Dir` for
 logs and possible certificate sidecars, each ephemeral runtime receives a fresh
 random `0700` scratch directory in an app cache/temporary location, never the
-persistent state root. The current implementation hardcodes the process
-temporary directory (Go `os.TempDir()`) as that scratch parent; a
-host-configurable scratch parent is an expected R6 follow-up so the platform
-backup-exclusion receipts (for example Android `noBackupFilesDir`) can bind
-scratch to an app-owned cache location. Normal close removes it. Startup may
+persistent state root. The Dart side supplies the platform's writable
+temporary directory as the scratch parent at initialization
+(`SetEphemeralScratchParent`), because Go's own `os.TempDir()` fallback is not
+app-writable on Android (`/data/local/tmp` is shell-only — the 2026-08-10
+arm64 emulator receipt caught ephemeral startup failing exactly there).
+Binding scratch to an explicitly app-owned no-backup cache location remains
+the platform backup-exclusion receipt's R6 concern. Normal close removes it. Startup may
 sweep an old package-prefixed scratch directory only after validating
 ownership and age and acquiring that directory's nonblocking live lock; age
 alone can never authorize deleting a suspended or still-running process's

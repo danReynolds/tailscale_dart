@@ -73,6 +73,11 @@ func DuneConfigure(stateRoot *C.char, keybayNamespace *C.char, logLevel C.int) *
 	return C.CString(string(b))
 }
 
+//export DuneSetEphemeralScratchParent
+func DuneSetEphemeralScratchParent(parent *C.char) {
+	tailscale.SetEphemeralScratchParent(C.GoString(parent))
+}
+
 //export DuneBeginPersistentPreparation
 func DuneBeginPersistentPreparation(requestToken C.ulonglong) *C.char {
 	if err := tailscale.BeginPersistentPreparation(uint64(requestToken)); err != nil {

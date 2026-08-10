@@ -7,6 +7,16 @@ receipt passed on 2026-08-10; remaining mobile/platform Keybay and publication
 receipts, backup-exclusion and sidecar inventory, and the remaining
 rearchitecture gates are still required before release.
 
+**Android:**
+
+- Fixed ephemeral startup on Android app processes: the ephemeral scratch
+  parent is now the Dart-supplied platform temporary directory instead of Go's
+  `os.TempDir()` fallback, which resolves to the shell-only `/data/local/tmp`
+  inside an app sandbox and made every ephemeral `up()` fail with permission
+  denied. Found by the first arm64 emulator runtime receipt, which now passes:
+  two full lifecycle generations in one app process reach upstream NeedsLogin
+  with no seccomp SIGSYS.
+
 **Secure-state foundation:**
 
 - Persistent nodes now use a concurrency-safe Go StateStore persisted as one

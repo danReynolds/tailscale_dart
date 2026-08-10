@@ -304,6 +304,7 @@ type runtimeController struct {
 	stateRootInfo   os.FileInfo
 	keybayNamespace string
 	logLevel        int32
+	scratchParent   string
 }
 
 var runtimes runtimeController
@@ -351,6 +352,33 @@ func RetireAbandonedRuntimeToken(token uint64) {
 		delete(runtimes.abandonedTokens, token)
 	}
 	runtimes.mu.Unlock()
+}
+
+// SetEphemeralScratchParent supplies the host platform's writable temporary
+// directory for ephemeral scratch. Android app processes cannot write Go's
+// os.TempDir() fallback (/data/local/tmp is shell-writable only), while the
+// embedding Dart runtime knows the app's real cache/temporary location, so
+// Dart supplies it immediately after Configure. Empty or repeated values are
+// ignored: the parent is environmental, set once, and deliberately outside
+// the frozen configuration identity tuple.
+func SetEphemeralScratchParent(parent string) {
+	trimmed := strings.TrimSpace(parent)
+	if trimmed == "" {
+		return
+	}
+	runtimes.configureMu.Lock()
+	defer runtimes.configureMu.Unlock()
+	runtimes.mu.Lock()
+	defer runtimes.mu.Unlock()
+	if runtimes.scratchParent == "" {
+		runtimes.scratchParent = filepath.Clean(trimmed)
+	}
+}
+
+func configuredEphemeralScratchParent() string {
+	runtimes.mu.Lock()
+	defer runtimes.mu.Unlock()
+	return runtimes.scratchParent
 }
 
 // Configure freezes process-wide initialization identity. os.SameFile supplies

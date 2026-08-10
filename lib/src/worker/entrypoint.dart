@@ -148,68 +148,11 @@ void _workerEntrypoint(SendPort sendPort) {
                 calloc.free(hostNetworkSnapshotPtr);
               }
             }
-          case _WorkerHttpBindCommand request:
-            final result =
-                _callNativeJson(
-                      () => native.duneHttpBind(request.tailnetPort),
-                      onError: TailscaleHttpException.new,
-                    )
-                    as Map<String, dynamic>;
-
-            final bindingId = result['bindingId'] as int?;
-            final tailnetPort = result['tailnetPort'] as int?;
-            if (bindingId == null ||
-                bindingId <= 0 ||
-                tailnetPort == null ||
-                tailnetPort <= 0) {
-              throw const TailscaleHttpException(
-                'Native runtime did not return a usable HTTP binding.',
-              );
-            }
-
-            sendPort.send(
-              _WorkerHttpBindResponse(
-                bindingId: bindingId,
-                tailnetAddress: result['tailnetAddress'] as String? ?? '',
-                tailnetPort: tailnetPort,
-              ),
-            );
           case _WorkerHttpCloseBindingCommand request:
             native.duneHttpCloseBinding(request.bindingId);
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.httpCloseBinding),
             );
-          case _WorkerTcpListenFdCommand request:
-            final hostPtr = request.tailnetHost.toNativeUtf8();
-            try {
-              final result =
-                  _callNativeJson(
-                        () => native.duneTcpListenFd(
-                          request.tailnetPort,
-                          hostPtr,
-                        ),
-                        onError: TailscaleTcpException.new,
-                      )
-                      as Map<String, dynamic>;
-
-              final listenerId = result['listenerId'] as int?;
-              final localPort = result['localPort'] as int?;
-              if (listenerId == null || listenerId <= 0 || localPort == null) {
-                throw const TailscaleTcpException(
-                  'Native runtime did not return a usable TCP listener.',
-                );
-              }
-
-              sendPort.send(
-                _WorkerTcpListenFdResponse(
-                  listenerId: listenerId,
-                  localAddress: result['localAddress'] as String? ?? '',
-                  localPort: localPort,
-                ),
-              );
-            } finally {
-              calloc.free(hostPtr);
-            }
           case _WorkerTcpCloseFdListenerCommand request:
             native.duneTcpCloseFdListener(request.listenerId);
             sendPort.send(
@@ -220,71 +163,6 @@ void _workerEntrypoint(SendPort sendPort) {
             sendPort.send(
               const _WorkerAckResponse(_WorkerOperation.udpCloseBinding),
             );
-          case _WorkerTlsListenFdCommand request:
-            final hostPtr = request.tailnetHost.toNativeUtf8();
-            try {
-              final result =
-                  _callNativeJson(
-                        () => native.duneTlsListenFd(
-                          request.tailnetPort,
-                          hostPtr,
-                        ),
-                        onError: TailscaleTlsException.new,
-                      )
-                      as Map<String, dynamic>;
-
-              final listenerId = result['listenerId'] as int?;
-              final localPort = result['localPort'] as int?;
-              if (listenerId == null || listenerId <= 0 || localPort == null) {
-                throw const TailscaleTlsException(
-                  'Native runtime did not return a usable TLS listener.',
-                );
-              }
-
-              sendPort.send(
-                _WorkerTlsListenFdResponse(
-                  listenerId: listenerId,
-                  localAddress: result['localAddress'] as String? ?? '',
-                  localPort: localPort,
-                ),
-              );
-            } finally {
-              calloc.free(hostPtr);
-            }
-          case _WorkerUdpBindFdCommand request:
-            final hostPtr = request.host.toNativeUtf8();
-            try {
-              final result =
-                  _callNativeJson(
-                        () => native.duneUdpBindFd(hostPtr, request.port),
-                        onError: TailscaleUdpException.new,
-                      )
-                      as Map<String, dynamic>;
-
-              final fd = result['fd'] as int?;
-              final bindingId = result['bindingId'] as int?;
-              final localPort = result['localPort'] as int?;
-              if (fd == null ||
-                  fd < 0 ||
-                  bindingId == null ||
-                  bindingId <= 0 ||
-                  localPort == null) {
-                throw const TailscaleUdpException(
-                  'Native runtime did not return a usable UDP binding.',
-                );
-              }
-
-              sendPort.send(
-                _WorkerUdpBindFdResponse(
-                  fd: fd,
-                  bindingId: bindingId,
-                  localAddress: result['localAddress'] as String? ?? '',
-                  localPort: localPort,
-                ),
-              );
-            } finally {
-              calloc.free(hostPtr);
-            }
           case _WorkerWhoIsCommand request:
             final ipPtr = request.ip.toNativeUtf8();
             try {

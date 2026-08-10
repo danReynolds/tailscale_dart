@@ -85,12 +85,15 @@ type httpBindingState struct {
 // counter stays process-global while the maps live on the runtime.
 var httpBindingID int64
 
-func HttpBind(tailnetPort int) (*HttpBinding, error) {
+// HttpBind starts an fd-backed inbound HTTP binding for the exact captured
+// runtime token. Offloaded like TcpListenFd (go/tcp_fd_posix.go) — see that
+// function's comment for why this must never execute on the worker FIFO.
+func HttpBind(runtimeToken uint64, tailnetPort int) (*HttpBinding, error) {
 	if tailnetPort < 0 || tailnetPort > 65535 {
 		return nil, fmt.Errorf("invalid tailnet port %d", tailnetPort)
 	}
 
-	gate, err := gateForCurrentRuntime("HttpBind")
+	gate, err := gateForRuntimeToken("HttpBind", runtimeToken)
 	if err != nil {
 		return nil, err
 	}

@@ -582,43 +582,9 @@ final class Worker {
   /// bootstrap budget instead of inheriting the completed call's deadline.
   void markUpSettled(int token) => native.duneMarkUpSettled(token);
 
-  Future<({int bindingId, TailscaleEndpoint tailnet})> httpBind({
-    required int tailnetPort,
-  }) async {
-    final response = await _request<_WorkerHttpBindResponse>(
-      _WorkerHttpBindCommand(tailnetPort: tailnetPort),
-    );
-    return (
-      bindingId: response.bindingId,
-      tailnet: TailscaleEndpoint(
-        address: response.tailnetAddress,
-        port: response.tailnetPort,
-      ),
-    );
-  }
-
   Future<void> httpCloseBinding({required int bindingId}) async {
     await _request<_WorkerAckResponse>(
       _WorkerHttpCloseBindingCommand(bindingId: bindingId),
-    );
-  }
-
-  Future<({int listenerId, TailscaleEndpoint local})> tcpListenFd({
-    required int tailnetPort,
-    required String tailnetHost,
-  }) async {
-    final response = await _request<_WorkerTcpListenFdResponse>(
-      _WorkerTcpListenFdCommand(
-        tailnetPort: tailnetPort,
-        tailnetHost: tailnetHost,
-      ),
-    );
-    return (
-      listenerId: response.listenerId,
-      local: TailscaleEndpoint(
-        address: response.localAddress,
-        port: response.localPort,
-      ),
     );
   }
 
@@ -631,42 +597,6 @@ final class Worker {
   Future<void> udpCloseBinding({required int bindingId}) async {
     await _request<_WorkerAckResponse>(
       _WorkerUdpCloseBindingCommand(bindingId: bindingId),
-    );
-  }
-
-  Future<({int listenerId, TailscaleEndpoint local})> tlsListenFd({
-    required int tailnetPort,
-    required String tailnetHost,
-  }) async {
-    final response = await _request<_WorkerTlsListenFdResponse>(
-      _WorkerTlsListenFdCommand(
-        tailnetPort: tailnetPort,
-        tailnetHost: tailnetHost,
-      ),
-    );
-    return (
-      listenerId: response.listenerId,
-      local: TailscaleEndpoint(
-        address: response.localAddress,
-        port: response.localPort,
-      ),
-    );
-  }
-
-  Future<({int fd, int bindingId, TailscaleEndpoint local})> udpBindFd({
-    required String host,
-    required int port,
-  }) async {
-    final response = await _request<_WorkerUdpBindFdResponse>(
-      _WorkerUdpBindFdCommand(host: host, port: port),
-    );
-    return (
-      fd: response.fd,
-      bindingId: response.bindingId,
-      local: TailscaleEndpoint(
-        address: response.localAddress,
-        port: response.localPort,
-      ),
     );
   }
 

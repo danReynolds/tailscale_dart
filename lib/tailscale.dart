@@ -826,8 +826,11 @@ class Tailscale implements TailscaleClient {
         timeout: timeout,
       ),
     ),
-    listenFn: (tailnetPort, tailnetHost) => _withWorker(
-      (worker) => worker.tcpListenFd(
+    // Offloaded like dial: bind admission joins the native first-`Up`
+    // bootstrap, which must not park the worker FIFO.
+    listenFn: (tailnetPort, tailnetHost) => _withNativeRuntime(
+      (runtimeToken) => offloadTcpListenFd(
+        runtimeToken: runtimeToken,
         tailnetPort: tailnetPort,
         tailnetHost: tailnetHost,
       ),
@@ -837,8 +840,9 @@ class Tailscale implements TailscaleClient {
   );
   @override
   late final Tls tls = createTls(
-    listenFn: (tailnetPort, tailnetHost) => _withWorker(
-      (worker) => worker.tlsListenFd(
+    listenFn: (tailnetPort, tailnetHost) => _withNativeRuntime(
+      (runtimeToken) => offloadTlsListenFd(
+        runtimeToken: runtimeToken,
         tailnetPort: tailnetPort,
         tailnetHost: tailnetHost,
       ),
@@ -849,8 +853,10 @@ class Tailscale implements TailscaleClient {
   );
   @override
   late final Udp udp = createUdp(
-    bindFn: (host, port) =>
-        _withWorker((worker) => worker.udpBindFd(host: host, port: port)),
+    bindFn: (host, port) => _withNativeRuntime(
+      (runtimeToken) =>
+          offloadUdpBindFd(runtimeToken: runtimeToken, host: host, port: port),
+    ),
     defaultAddressFn: () async => (await status()).ipv4,
     closeFn: (bindingId) =>
         _withWorker((worker) => worker.udpCloseBinding(bindingId: bindingId)),
@@ -914,8 +920,10 @@ class Tailscale implements TailscaleClient {
   @override
   late final Http http = createHttp(
     clientGetter: () => _http,
-    bindFn: (port) =>
-        _withWorker((worker) => worker.httpBind(tailnetPort: port)),
+    bindFn: (port) => _withNativeRuntime(
+      (runtimeToken) =>
+          offloadHttpBind(runtimeToken: runtimeToken, tailnetPort: port),
+    ),
     closeBindingFn: (bindingId) =>
         _withWorker((worker) => worker.httpCloseBinding(bindingId: bindingId)),
   );

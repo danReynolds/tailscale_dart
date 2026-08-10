@@ -128,17 +128,6 @@ func gateForRuntimeToken(op string, runtimeToken uint64) (nodeGate, error) {
 	)
 }
 
-// gateForCurrentRuntime admits worker-FIFO work that carries no runtime token
-// against whatever runtime is current, with the one standard typed
-// before-Start error.
-func gateForCurrentRuntime(op string) (nodeGate, error) {
-	gate, ok := acquireNodeGate()
-	if !ok {
-		return nodeGate{}, fmt.Errorf("%w: %s called before Start", ErrRuntimeStale, op)
-	}
-	return gate, nil
-}
-
 // stillCurrent reports whether the gated lifecycle is still the live one. Safe
 // to call under any registry lock (lock-free atomic load; never touches mu).
 // Callers must hold the destination registry's lock from this check through

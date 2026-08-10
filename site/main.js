@@ -110,14 +110,15 @@ print(server.tailnet);`,
   },
   funnel: {
     title: "serve_funnel.dart",
-    code: `// Desktop/server only for Funnel; mobile is not yet supported.
-// Forward an existing loopback HTTP server.
+    code: `// Desktop/server qualified; mobile HTTPS remains unqualified.
+// Serve and Funnel share one mapping authority.
 final serve = await ts.serve.forward(
-  tailnetPort: 443,
+  tailnetPort: 8443,
   localPort: 8080,
   path: '/admin',
 );
 
+// Funnel visibility is port-wide, so use a dedicated public port.
 final funnel = await ts.funnel.forward(
   publicPort: 443,
   localPort: 8080,

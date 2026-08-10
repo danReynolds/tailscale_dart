@@ -4,8 +4,9 @@ How the Go layer stays correct now that native calls arrive from more than one
 Dart isolate. Read this before adding a lock, a process-global registry, or a
 new offloaded call.
 
-> **Current-state document.** Server, StateStore, DEK, state lease, and scratch
-> ownership now live on `nodeRuntime`. Several data-plane registries remain
+> **Current-state document.** Server, StateStore, DEK, state lease, scratch, and
+> the R5 publication/bootstrap manager now live on `nodeRuntime`. Several
+> data-plane registries and the watcher publication surface remain
 > process-global and are still protected by the epoch/commit gate until R7 moves
 > them. See the [rearchitecture plan](rearchitecture-plan.md) and [runtime
 > lifecycle ADR](adr-runtime-ownership-and-lifecycle.md).
@@ -26,12 +27,21 @@ Every native call enters the Go layer from one of two places:
 2. **Helper isolates (concurrent).** The long, contended calls — `tcp.dial`,
    `diag.ping`, `serve.forward`, `funnel.forward`, plus every HTTP client
    request goroutine — run on short-lived `Isolate.run` helpers (data-plane
-   offloads are capped at 32; see `lib/src/worker/native_offload.dart`). Native
+   offloads are capped at 32 by the shared gate in the supported caller isolate;
+   see `lib/src/native_offload_gate.dart`). Native
    secure-state preparation, probe, reset, quarantine, and quiescence calls also
    use helper isolates. Rescue and lifecycle custody calls deliberately bypass
    the data-plane gate so a saturated connection workload cannot block cleanup.
    These calls are concurrent with the worker FIFO and with each other; native
    token admission and the state lease provide their ordering.
+
+Before yielding to recovery or the shared helper gate, the caller isolate
+captures the current runtime token for `tcp.dial`, `diag.ping`, Serve, and
+Funnel. `TailscaleHttpClient` retains the token from its construction. Native
+rejects a zero or superseded token before touching a replacement runtime's
+Server or LocalClient. Listener and binding commands still enter through the
+worker FIFO and use the worker's current runtime at native entry; R7b moves
+their registries and returned handles onto explicit runtime capabilities.
 
 The consequence: **any offloaded call can race a lifecycle call.** A
 `serve.forward` can be mid-flight while `stop()` tears the node down. Code on
@@ -86,6 +96,52 @@ Native status, error, and peer pushes carry their runtime token. Dart drops a
 push that is not owned by the worker's current/preparing token. `StopWatch`
 cancels and joins both the IPN watcher and any in-flight debounced peer publish
 before teardown completes, so a replacement port cannot race an old source.
+
+## First-`Up` and publication authority
+
+Every runtime owns one `publicationManager`, one `publicationBootstrap`, the
+cached in-process LocalAPI client, its mapping-token table, and one mutation
+mutex. Serve and Funnel are not separate registries: both mutate a fresh copy of
+the same upstream `ServeConfig`; Funnel additionally selects the host:port
+`AllowFunnel` mode.
+
+The state watcher is the only trigger for the mandatory first-`Up` reset. Its
+first Running observation starts exactly one bounded Go worker and suppresses
+that Running event. Before Running, identity-bound data-plane calls fail
+immediately with `dataPlaneNotReady`; while bootstrap is running they join its
+single result; after success they proceed. Bootstrap success opens the gate
+under `watchMu` and posts synthetic Running only when Running is still the
+watcher's latest state; a newer non-Running event is preserved and a later real
+Running publishes normally. Watcher ownership, state publication, and
+readiness therefore cannot split. A bootstrap/watcher failure before readiness
+detaches and drains the exact runtime from a separate reaper; `Server.Close`
+never races the `Up` worker.
+
+Publication mutations hold `publicationManager.mu` across the bounded LocalAPI
+get/copy/apply/set transaction. A typed ETag precondition failure releases no
+partial ownership and retries from a fresh config, with three total attempts.
+Known-not-applied errors return directly. An error after a Set may have applied
+is tracked as an indeterminate mapping and triggers exact-generation quarantine
+before Dart receives `publicationCommitIndeterminate`.
+
+Each successful forward gets a runtime generation and monotonically increasing
+mapping token. Exact handle close checks both without a LocalAPI round trip when
+stale. Explicit `serve.clear`/`funnel.clear` is deliberately coordinate-based
+and invalidates the package token only after a confirmed mutation. Runtime
+keeps a confirmed mapping in pending-delivery custody until Dart validates and
+acknowledges the exact generation/token receipt. Malformed or lost delivery
+actively quarantines that runtime; a 30-second native timer is the fallback if
+the helper or caller isolate cannot compensate. Explicit compensation preserves
+the original synchronous Dart error as the sole error owner, while timer expiry
+publishes one asynchronous runtime error. Runtime close cancels pending timers,
+joins bootstrap first, performs a bounded best-effort cleanup of owned mappings,
+then sweeps the remaining registries and closes Server before Store/lease; the
+next runtime's mandatory bootstrap is the final stale-config barrier.
+
+This acknowledgement proves delivery of validated metadata to the supervised
+caller isolate; it is not a lifetime lease on the Dart object. The returned
+handle's finalizer is best-effort, explicit `close()` is the deterministic API,
+and runtime teardown remains the backstop for every package-owned mapping.
 
 Logout is remote-first. It reconstructs a temporary runtime from persisted
 state after `down()` and asks upstream to log out the current profile. Confirmed
@@ -143,8 +199,8 @@ behind teardown's sweep" race:
 - `nodeEpoch` (atomic, written only under `runtimeController.mu`) counts
   lifecycles. The controller increments it **before** `nodeRuntime.close`
   sweeps any registry.
-- An op that will register durable state (serve mount, funnel forwarder,
-  listener, UDP bridge, cached transport) calls `acquireNodeGate()` at entry —
+- An op that will register durable state (listener, UDP bridge, cached
+  transport) calls `acquireNodeGate()` at entry —
   snapshotting `(nodeRuntime, server, generation)` — does its slow work with no
   locks held, and
   re-checks `gate.stillCurrent()` **inside the destination registry's lock** at
@@ -168,9 +224,10 @@ per-subsystem server-pointer compare or a boolean "stopping" latch):
   epoch compare refuses *any* later lifecycle.
 
 What the epoch does **not** replace: the teardown sweeps themselves
-(`closeAll*`), and the mid-lifecycle self-heal reaps (a funnel forwarder or
-HTTP binding whose listener dies is reaped by its Serve goroutine). Those
-handle resource death; the epoch handles registration ordering.
+(`closeAll*`) or mid-lifecycle self-heal when an HTTP binding's listener dies.
+Those handle resource death; the epoch handles registration ordering. The
+runtime-owned publication manager uses the same captured generation but commits
+under its own manager mutex instead of a process-global registry.
 
 The cached in-process `LocalClient` is captured together with its runtime.
 Ordinary calls derive their bounded context from `nodeRuntime.ctx` and validate
@@ -188,12 +245,12 @@ Relevant nested orders; take locks left to right, never right to left:
 
 ```
 runtimeController.configureMu  →  runtimeController.mu
-serveConfigMu  →  servePublicationMu
-funnelMu       →  ff.mu (per-forwarder)
 watchMu  →  identityCache.mu
+watchMu  →  publicationBootstrap.mu
 runtimeController.mu, httpBindingMu, tcpFdListenerMu,
 udpFdBindingMu, tailnetHTTPTransports.mu, reactorMu, dartPortMu,
-hostNetworkMu, encryptedStateStore.mu   (leaf, no nesting)
+hostNetworkMu, publicationManager.mu, encryptedStateStore.mu
+  (leaf, no package-lock nesting)
 ```
 
 Rules that keep it acyclic:
@@ -208,14 +265,14 @@ Rules that keep it acyclic:
   no runtime path acquires those locks in the opposite order.
 - Registry locks never nest with each other; `nodeRuntime.close` takes them one
   at a time.
-- Calls that can block on the tailnet or the IPN bus (`ListenFunnel`, `Up`,
-  dials) run with **no** package lock held; results are committed afterward
-  under the registry lock with a gate check. One deliberate exception:
-  `serveConfigMu` is held across *loopback LocalAPI* round trips
-  (`GetServeConfig`/`SetServeConfig`/`StatusWithoutPeers`) — serializing that
-  get-modify-set is the lock's entire purpose, and those are local-socket
-  calls, not tailnet waits. Never extend that exception to the runtime
-  controller or to calls that wait on the network.
+- Calls that can block on the tailnet (`Up`, dials, listens) run with **no**
+  package lock held; results are committed afterward under the destination
+  registry lock with a gate check. One deliberate exception is
+  `publicationManager.mu` across the in-process LocalAPI
+  `StatusWithoutPeers`/`GetServeConfig`/`SetServeConfig` transaction:
+  serialization of that optimistic get-modify-set is the lock's entire
+  purpose. Never extend that exception to the runtime controller or to calls
+  that wait on the tailnet.
 - `UdpCloseBinding`/`closeAllUdpBindings` invoke a bridge's close callback
   only after releasing `udpFdBindingMu` (the callback re-enters the registry
   to deregister — Go mutexes are not reentrant).

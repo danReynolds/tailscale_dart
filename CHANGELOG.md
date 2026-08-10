@@ -1,9 +1,10 @@
 ## Unreleased — rearchitecture in progress
 
-The R4d secure-state cutover and its lifecycle foundations are implemented in
-the current source. Platform Keybay restart receipts, backup-exclusion and
-sidecar inventory, and the remaining rearchitecture gates are still required
-before release.
+The R4d secure-state cutover, lifecycle foundations, and R5 runtime-owned
+publication convergence are implemented in the current source. Hosted R5
+tailnet/swap receipts passed on 2026-08-10; crash/restart, mobile/platform Keybay
+and publication receipts, backup-exclusion and sidecar inventory, and the
+remaining rearchitecture gates are still required before release.
 
 **Secure-state foundation:**
 
@@ -60,6 +61,36 @@ before release.
 - Idle logout reconstruction uses only the exact configuration proven applied
   by a successful `Server.Start`; a fresh failed attempt invalidates any older
   cached tuple instead of risking the wrong control plane.
+
+**Serve/Funnel convergence:**
+
+- Serve and Funnel now mutate one runtime-owned upstream `ServeConfig`
+  authority. Funnel is the public-visibility mode of the same handler used by
+  Serve; the package-owned `ListenFunnel` listener/reverse-proxy path and its
+  separate registries are removed.
+- Every runtime performs one bounded automatic first-`Up` reset when upstream
+  first reaches Running. Package Running and all identity-bound HTTP/TCP/UDP/
+  TLS/Serve/Funnel operations remain gated until it succeeds; failure
+  quarantines and drains the exact generation.
+- ServeConfig writes use one serialized get/copy/apply/ETag transaction with at
+  most three total attempts. Only typed precondition conflicts retry. A result
+  that may have committed without a response closes the generation before the
+  typed `publicationCommitIndeterminate` error is returned.
+- Publication handles carry the exact runtime generation and a unique mapping
+  token. Closing or finalizing a replaced/old-generation handle is an
+  idempotent stale no-op and cannot clear its successor; explicit `clear()`
+  remains a coordinate operation.
+- A confirmed publication remains in native pending-delivery custody until Dart
+  validates and acknowledges its exact handle. Malformed or lost delivery
+  quarantines that runtime, with a bounded native timer covering helper/caller
+  isolate loss so committed ingress cannot silently lose its owner.
+- HTTP admission, `tcp.dial`, `diag.ping`, Serve, and Funnel share a 32-call
+  caller-isolate helper cap. Each captures an exact runtime token before it can
+  queue, so delayed work from an old runtime cannot execute as its replacement.
+- Added opt-in hosted-Tailscale tests for Funnel's tailnet reachability and
+  Serve -> Funnel -> Serve replacement/exact-handle behavior. Both passed
+  serially against hosted Tailscale on 2026-08-10; they also compile and skip
+  without credentials. The crash/restart stale-config receipt remains pending.
 
 ## 0.8.1
 

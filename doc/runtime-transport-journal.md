@@ -4,6 +4,41 @@ This journal records implementation notes for the fd-backed runtime transport
 direction. It is intentionally practical: what changed, what was learned, what
 still needs a decision.
 
+## 2026-08-10: R5 converges Serve and Funnel on one runtime authority
+
+### Changes
+
+- Removed the package-owned `ListenFunnel` listener/reverse proxy. Serve and
+  Funnel now mutate one runtime-owned upstream `ServeConfig`; Funnel is the
+  `AllowFunnel` visibility mode of the same handler.
+- Added one automatic bounded first-`Up` reset per runtime. Running and all
+  identity-bound data-plane operations remain gated until it succeeds, and a
+  failure drains the exact generation.
+- Serialized optimistic ServeConfig writes with three total ETag attempts,
+  retrying typed precondition failures only. A possibly-applied response loss
+  quarantines the generation.
+- Added exact generation/mapping-token publication handles so a stale close or
+  finalizer cannot remove a replacement.
+- Added one caller-isolate 32-call native-admission cap shared by HTTP,
+  `tcp.dial`, `diag.ping`, Serve, and Funnel. Each operation presents the exact
+  runtime token it captured before queueing, and native refuses stale work
+  before touching a replacement runtime.
+- Kept a committed publication in native delivery custody until its validated
+  exact metadata reaches the supervised caller isolate. Active compensation
+  handles malformed/lost results; a bounded native timer is the fallback.
+- Added opt-in hosted tests for Funnel tailnet reachability and
+  Serve -> Funnel -> Serve replacement. Peer subprocesses wait for public
+  package Running before using HTTP.
+
+### Validation status
+
+- Focused Go and Dart contract tests cover bootstrap, readiness gates, bounded
+  conflicts, indeterminate commits, and exact handles.
+- The hosted Funnel-tailnet and Serve -> Funnel -> Serve tests passed serially
+  on 2026-08-10 and compile/skip without credentials. Crash/restart stale-config
+  proof, real-device mobile handshakes, and sidecar inventory remain pending
+  receipts.
+
 ## 2026-05-01: TLS listener moves onto the fd transport
 
 ### Changes

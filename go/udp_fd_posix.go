@@ -3,6 +3,7 @@
 package tailscale
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -125,6 +126,9 @@ func UdpBindFd(host string, port int) (*UdpFdBinding, error) {
 	gate, ok := acquireNodeGate()
 	if !ok {
 		return nil, errors.New("UdpBindFd called before Start")
+	}
+	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+		return nil, fmt.Errorf("udp bind data plane: %w", err)
 	}
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))

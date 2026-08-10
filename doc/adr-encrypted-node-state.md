@@ -772,13 +772,13 @@ For any supported TLS/Serve/Funnel path in the first secure-state release:
 Do not spoof Kubernetes detection to reach upstream's StateStore-backed cert
 path. That would couple security to an unrelated environment heuristic.
 
-On iOS and Android, the default LocalAPI certificate endpoint is compiled out,
-so current `ListenTLS` and `ListenFunnel` paths cannot complete their default
-certificate handshake. R5 replaces package Funnel with ServeConfig/
-`AllowFunnel`; that target path does not use the same LocalAPI call and is
-therefore **unqualified**, not proven impossible. It must pass real-device
-Serve/Funnel handshakes and the same sidecar inventory before support is
-claimed. `tls.bind` still needs an alternate certificate path.
+On iOS and Android, the LocalAPI certificate endpoint is compiled out, so the
+current `tls.bind` certificate callback cannot complete its handshake. R5 has
+replaced package Funnel with ServeConfig/`AllowFunnel`; that path does not use
+the same package-side certificate call and is therefore **unqualified**, not
+proven impossible. It must pass real-device Serve/Funnel handshakes and the
+same sidecar inventory before support is claimed. `tls.bind` still needs an
+alternate certificate path.
 
 ## Backup-exclusion ownership and receipts
 
@@ -978,10 +978,9 @@ do not expose the DEK, StateStore values, or auth key.
   packaged backup rules, and ephemeral scratch policy in first-party example
   apps; on Linux/custom hosts, record the operator-owned exclusion and the
   residual that CI cannot configure it;
-- keep current direct `ListenTLS`/`ListenFunnel` marked unsupported on mobile;
-  keep `tls.bind` unsupported until an alternate certificate path passes; and
-  keep target ServeConfig Funnel unqualified until full real-device handshakes
-  and its sidecar inventory pass.
+- keep `tls.bind` unsupported on mobile until an alternate certificate path
+  passes; and keep R5 ServeConfig Funnel/HTTPS Serve unqualified until full
+  real-device handshakes and their sidecar inventory pass.
 
 ### Performance
 

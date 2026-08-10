@@ -30,6 +30,21 @@ void _workerEntrypoint(SendPort sendPort) {
         final parsed = jsonDecode(message) as Map<String, dynamic>;
         final runtimeToken = parsed['runtimeToken'] as int? ?? 0;
 
+        if (parsed['type'] == 'runtimeTerminated') {
+          sendPort.send(
+            _WorkerRuntimeTerminatedEvent(
+              runtimeToken: runtimeToken,
+              message:
+                  parsed['error'] as String? ?? 'Native runtime terminated.',
+              code: parseTailscaleErrorCode(parsed['code'] as String?),
+              emitStopped: parsed['emitStopped'] == true,
+              cleanupFailed: parsed['cleanupFailed'] == true,
+              reportRuntimeError: parsed['reportRuntimeError'] == true,
+            ),
+          );
+          return;
+        }
+
         if (parsed['type'] == 'error') {
           sendPort.send(
             _WorkerRuntimeErrorEvent(
@@ -75,6 +90,7 @@ void _workerEntrypoint(SendPort sendPort) {
               :ephemeral,
               :hostname,
               :hostNetworkSnapshot,
+              :bootstrapBudgetMillis,
             ) = request;
 
             // Allocate inside the try so any partial-allocation failure
@@ -101,6 +117,7 @@ void _workerEntrypoint(SendPort sendPort) {
                           controlUrlPtr!,
                           ephemeral ? 1 : 0,
                           hostNetworkSnapshotPtr!,
+                          bootstrapBudgetMillis,
                         ),
                         onError: TailscaleUpException.new,
                       )
@@ -330,7 +347,6 @@ void _workerEntrypoint(SendPort sendPort) {
                 snapshot: NodeStateSnapshot(
                   epoch: result['epoch'] as int? ?? 0,
                   servePublications: result['servePublications'] as int? ?? 0,
-                  funnelForwarders: result['funnelForwarders'] as int? ?? 0,
                   httpBindings: result['httpBindings'] as int? ?? 0,
                   tcpListeners: result['tcpListeners'] as int? ?? 0,
                   udpBridges: result['udpBridges'] as int? ?? 0,
@@ -436,7 +452,7 @@ void _workerEntrypoint(SendPort sendPort) {
                 emitStopped: result['emitStopped'] == true,
                 cleanupFailed: result['cleanupFailed'] == true,
                 errorMessage: result['error'] as String?,
-                errorCode: _parseErrorCode(result['code'] as String?),
+                errorCode: parseTailscaleErrorCode(result['code'] as String?),
                 statusCode: result['statusCode'] as int?,
               ),
             );
@@ -465,7 +481,7 @@ void _workerEntrypoint(SendPort sendPort) {
                 noState: result['noState'] == true,
                 cleanupFailed: result['cleanupFailed'] == true,
                 errorMessage: result['error'] as String?,
-                errorCode: _parseErrorCode(result['code'] as String?),
+                errorCode: parseTailscaleErrorCode(result['code'] as String?),
                 statusCode: result['statusCode'] as int?,
               ),
             );
@@ -546,7 +562,7 @@ dynamic _callNativeJson(
     if (error != null) {
       throw onError(
         error,
-        code: _parseErrorCode(result['code'] as String?),
+        code: parseTailscaleErrorCode(result['code'] as String?),
         statusCode: result['statusCode'] as int?,
       );
     }
@@ -557,34 +573,9 @@ dynamic _callNativeJson(
 dynamic _decodeNativeJson(ffi.Pointer<Utf8> Function() fn) =>
     jsonDecode(_callNativeString(fn));
 
-TailscaleErrorCode _parseErrorCode(String? raw) => switch (raw) {
-  'lifecycleBusy' => TailscaleErrorCode.lifecycleBusy,
-  'runtimeCleanupFailed' => TailscaleErrorCode.runtimeCleanupFailed,
-  'configurationMismatch' => TailscaleErrorCode.configurationMismatch,
-  'staleRuntime' => TailscaleErrorCode.staleRuntime,
-  'startupAbandoned' => TailscaleErrorCode.startupAbandoned,
-  'stateLeaseBusy' => TailscaleErrorCode.stateLeaseBusy,
-  'invalidStateKey' => TailscaleErrorCode.invalidStateKey,
-  'missingStateKey' => TailscaleErrorCode.missingStateKey,
-  'orphanedStateKey' => TailscaleErrorCode.orphanedStateKey,
-  'localResetIncomplete' => TailscaleErrorCode.localResetIncomplete,
-  'conflictingStateFormats' => TailscaleErrorCode.conflictingStateFormats,
-  'legacyStateUnsupported' => TailscaleErrorCode.legacyStateUnsupported,
-  'unexpectedStateResidue' => TailscaleErrorCode.unexpectedStateResidue,
-  'atomicPersistenceFailure' => TailscaleErrorCode.atomicPersistenceFailure,
-  'stateAuthenticationFailed' => TailscaleErrorCode.stateAuthenticationFailed,
-  'unsupportedStateFormat' => TailscaleErrorCode.unsupportedStateFormat,
-  'invalidStateFormat' => TailscaleErrorCode.invalidStateFormat,
-  'startupTimeout' => TailscaleErrorCode.startupTimeout,
-  'logoutIndeterminate' => TailscaleErrorCode.logoutIndeterminate,
-  'workerTerminated' => TailscaleErrorCode.workerTerminated,
-  'notFound' => TailscaleErrorCode.notFound,
-  'forbidden' => TailscaleErrorCode.forbidden,
-  'conflict' => TailscaleErrorCode.conflict,
-  'preconditionFailed' => TailscaleErrorCode.preconditionFailed,
-  'featureDisabled' => TailscaleErrorCode.featureDisabled,
-  _ => TailscaleErrorCode.unknown,
-};
+@visibleForTesting
+TailscaleErrorCode parseTailscaleErrorCode(String? raw) =>
+    parseNativeErrorCode(raw);
 
 TailscaleStatus _loadStatusSnapshot() {
   try {

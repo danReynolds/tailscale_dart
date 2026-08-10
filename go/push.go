@@ -12,6 +12,7 @@ import "C"
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 	"unsafe"
@@ -107,12 +108,14 @@ func StartWatch() {
 	watcher, err := lc.WatchIPNBus(ctx,
 		ipn.NotifyInitialState|ipn.NotifyInitialNetMap)
 	if err != nil {
-		postRuntimeWatcherMessage(runtime, map[string]any{
-			"type":         "error",
-			"runtimeToken": runtime.token,
-			"code":         "watcher",
-			"error":        err.Error(),
-		})
+		if !failPublicationBootstrap(runtime, fmt.Errorf("start state watcher: %w", err)) {
+			postRuntimeWatcherMessage(runtime, map[string]any{
+				"type":         "error",
+				"runtimeToken": runtime.token,
+				"code":         "watcher",
+				"error":        err.Error(),
+			})
+		}
 		cancel()
 		return
 	}
@@ -154,10 +157,20 @@ func StartWatch() {
 				// fall back to a live WhoIs instead of using a frozen netmap.
 				watchMu.Lock()
 				current := watcherRunCurrentLocked(run)
+				preReady := current && !runtime.publication.bootstrapReady()
 				if current {
 					identityCache.invalidate()
 				}
+				if preReady {
+					// Make an Up success racing this watcher failure observe lost
+					// ownership before it can release readiness.
+					run.cancel()
+				}
 				watchMu.Unlock()
+				if preReady {
+					_ = failPublicationBootstrap(runtime, fmt.Errorf("state watcher stopped before readiness: %w", err))
+					return
+				}
 				// Context cancellation and supersession are normal shutdown.
 				if current {
 					postWatcherMessage(run, map[string]any{
@@ -171,11 +184,17 @@ func StartWatch() {
 			}
 
 			if n.State != nil {
-				postWatcherMessage(run, map[string]any{
-					"type":         "status",
-					"runtimeToken": run.runtimeToken,
-					"state":        n.State.String(),
-				})
+				suppress, bootstrap := runtime.publication.observeState(*n.State)
+				if bootstrap != nil {
+					go runPublicationBootstrap(runtime, run, bootstrap)
+				}
+				if !suppress {
+					postWatcherMessage(run, map[string]any{
+						"type":         "status",
+						"runtimeToken": run.runtimeToken,
+						"state":        n.State.String(),
+					})
+				}
 			}
 			if n.ErrMessage != nil {
 				postWatcherMessage(run, map[string]any{

@@ -2,8 +2,9 @@
 
 ## Status
 
-**Current implementation reference.** The runtime/fail-safe foundations and R4d
-secure-state cutover are reflected here. See the [accepted rearchitecture
+**Current implementation reference.** The runtime/fail-safe foundations, R4d
+secure-state cutover, and R5 publication convergence are reflected here. See
+the [accepted rearchitecture
 plan](rearchitecture-plan.md), [runtime lifecycle
 ADR](adr-runtime-ownership-and-lifecycle.md), and [encrypted-state
 ADR](adr-encrypted-node-state.md) for implemented invariants plus the remaining
@@ -14,9 +15,11 @@ authenticated loopback session design with fd-backed local capabilities.
 
 The implementation is no longer a throwaway spike. HTTP, TCP, and UDP are
 implemented and validated through unit tests, package tests, Flutter demo tests,
-and Headscale E2E. The R4d secure-state implementation has focused Go and Dart
-coverage, but it remains pre-production/beta until the platform Keybay,
-backup-exclusion, sidecar-inventory, and remaining rearchitecture gates pass.
+and Headscale E2E. R4d secure state and R5 publication ownership have focused Go
+and Dart coverage. The hosted R5 Funnel-tailnet and swap receipts passed on
+2026-08-10, but this remains pre-production/beta until crash/restart,
+platform Keybay/publication, backup-exclusion, sidecar-inventory, and remaining
+rearchitecture gates pass.
 
 ## Summary
 
@@ -32,6 +35,8 @@ Go owns:
 - ACL enforcement
 - peer/node identity from Tailscale
 - tailnet TCP, UDP, and HTTP establishment
+- one automatic first-`Up` readiness gate and one runtime-owned Serve/Funnel
+  ServeConfig authority
 
 Dart owns:
 
@@ -184,6 +189,27 @@ Inbound HTTP:
 - each request is exposed as a `TailscaleHttpRequest`
 - request body and response body are fd-backed streams
 - there is no `localPort` in v1
+
+### Serve and Funnel publications
+
+`serve.forward` and `funnel.forward` publish an app-owned loopback HTTP server;
+they are distinct from the fd-native `http.bind` server. Both mutate one fresh
+copy of upstream `ServeConfig` through the runtime's cached in-process
+LocalClient. Funnel is the same handler with public `AllowFunnel` visibility,
+not an independent `ListenFunnel` listener or package reverse proxy.
+
+The watcher automatically crosses upstream's per-Server first-`Up` reset before
+the package exposes Running or data-plane readiness. Publication writes are
+serialized, retry only typed ETag conflicts within a three-attempt bound, and
+close the exact generation if a possibly-applied Set loses its response. A
+returned handle captures the runtime generation and a unique mapping token;
+closing a replaced or old-runtime handle is a stale no-op. Explicit `clear()`
+remains a coordinate operation.
+
+The implementation is desktop/server-qualified. Hosted Funnel-tailnet and
+Serve/Funnel swap tests passed on 2026-08-10. HTTPS Serve/Funnel remains
+unqualified on mobile pending real-device handshakes and persistent-sidecar
+inventory.
 
 ## Example Use Cases
 
@@ -457,8 +483,9 @@ Known remaining work:
 
 - Real Keybay restart, failure, backup-exclusion, and full sidecar-inventory
   receipts on each persistent platform.
-- Runtime-owned Serve/Funnel publication convergence and remaining R7 ownership
-  moves.
+- The R5 crash/restart stale-config receipt; hosted Funnel-tailnet and
+  replacement tests passed 2026-08-10.
+- Remaining R7 transport/watcher ownership moves.
 - Windows support decision.
 - More HTTP fd server lifecycle/error tests.
 - More stress tests for backpressure and resource limits.

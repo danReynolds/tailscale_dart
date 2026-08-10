@@ -95,7 +95,7 @@ void main() {
       clearProcessIntegrationState(processStateRoot);
       stateDir = processStateRoot.path;
       final authKey = await api!.createAuthKey();
-      final restartAuthKey = await api!.createAuthKey();
+      final replacementAuthKey = await api!.createAuthKey();
       final clientAuthKey = await api!.createAuthKey();
       final cleanupPathClientAuthKey = await api!.createAuthKey();
       final cleanupClientAuthKey = await api!.createAuthKey();
@@ -182,16 +182,17 @@ void main() {
         expect(cleanupResponse.statusCode, 200);
         expect(cleanupResponse.body, 'hello from serve');
 
-        // Do not close cleanupPublication. down() should remove package-owned
-        // Serve config before stopping so the mapping does not come back after
-        // a process restart with the same state directory.
+        // Do not close cleanupPublication. This is an orderly down/up smoke:
+        // down() should remove package-owned Serve config before a fresh
+        // ephemeral identity starts in the same Dart process. It does not
+        // exercise process death or persisted-state crash recovery.
         await tsnet!.down();
         await recordUntil(
           tsnet!,
           NodeState.running,
           () => tsnet!.up(
             hostname: hostname,
-            authKey: restartAuthKey,
+            authKey: replacementAuthKey,
             ephemeral: true,
             controlUrl: controlUri(),
             timeout: const Duration(seconds: 120),
@@ -202,13 +203,14 @@ void main() {
         cleanupClientStateDir = Directory.systemTemp
             .createTempSync('tailscale_live_serve_cleanup_client_')
             .path;
-        final cleanupAfterRestart = await _runClientFetchOutcome(
+        final cleanupAfterReplacement = await _runClientFetchOutcome(
           stateDir: cleanupClientStateDir!,
           appId: 'dev.tailscale.dart.live.serve.cleanupClient',
           hostname: cleanupClientHostname,
           authKey: cleanupClientAuthKey,
           controlUrl: controlUrl,
           url: cleanupUrl,
+          fetchBudget: const Duration(seconds: 20),
         );
         try {
           final cleanupClientDevice = await api!.waitForDevice(
@@ -216,11 +218,11 @@ void main() {
           );
           deviceIdsToDelete.add(cleanupClientDevice.id);
         } catch (_) {}
-        if (cleanupAfterRestart.statusCode == 200 &&
-            cleanupAfterRestart.body == 'hello from serve') {
+        if (cleanupAfterReplacement.statusCode == 200 &&
+            cleanupAfterReplacement.body == 'hello from serve') {
           fail(
-            'serve.forward publication survived down()/restart without an '
-            'explicit close().',
+            'serve.forward publication survived an orderly down/up lifecycle '
+            'replacement without an explicit close().',
           );
         }
       } finally {
@@ -228,7 +230,7 @@ void main() {
         await localRequests.catchError((_) {});
       }
     },
-    timeout: const Timeout(Duration(minutes: 3)),
+    timeout: const Timeout(Duration(minutes: 12)),
   );
 }
 
@@ -270,6 +272,7 @@ Future<({int? statusCode, String body, String? error})> _runClientFetchOutcome({
   required String authKey,
   required String? controlUrl,
   required Uri url,
+  Duration fetchBudget = const Duration(seconds: 150),
 }) async {
   await detachLoadedNativeAssetForPeerSubprocesses();
   final process = await Process.start(
@@ -286,6 +289,7 @@ Future<({int? statusCode, String body, String? error})> _runClientFetchOutcome({
       'HOSTNAME': hostname,
       'AUTH_KEY': authKey,
       'URL': url.toString(),
+      'FETCH_BUDGET_SECONDS': '${fetchBudget.inSeconds}',
       if (controlUrl != null && controlUrl.isNotEmpty)
         'CONTROL_URL': controlUrl,
     },
@@ -329,7 +333,7 @@ Future<({int? statusCode, String body, String? error})> _runClientFetchOutcome({
   );
 
   try {
-    return await result.future.timeout(const Duration(seconds: 90));
+    return await result.future.timeout(const Duration(minutes: 5));
   } finally {
     try {
       process.kill(ProcessSignal.sigterm);

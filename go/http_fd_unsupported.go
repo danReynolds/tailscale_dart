@@ -32,6 +32,7 @@ type HttpIncomingRequest struct {
 }
 
 func HttpStart(
+	runtimeToken uint64,
 	method string,
 	rawURL string,
 	headersJSON string,
@@ -39,6 +40,7 @@ func HttpStart(
 	followRedirects bool,
 	maxRedirects int,
 ) (*HttpFdRequest, error) {
+	_ = runtimeToken
 	return nil, fmt.Errorf("HTTP fd transport is not supported on this platform")
 }
 

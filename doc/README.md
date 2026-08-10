@@ -8,8 +8,8 @@ the checked-in code until their workstream lands.
 
 | Document | Status | Purpose |
 | --- | --- | --- |
-| [Rearchitecture plan](rearchitecture-plan.md) | In progress; R4d code present, release gates pending | North Star, decisions, live PR disposition, implementation order, and release gates. |
-| [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | Implemented through R4d; R5/R7 pending | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
+| [Rearchitecture plan](rearchitecture-plan.md) | In progress; R5 code present, evidence/release gates pending | North Star, decisions, live PR disposition, implementation order, and release gates. |
+| [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | R2-R5 code present; R6 evidence and R7 ownership pending | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
 | [Encrypted node state ADR](adr-encrypted-node-state.md) | Implemented through R4d; R6 evidence pending | Direct Keybay custody binding, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
 | [Current architecture and API feedback](current-architecture-and-api-feedback.md) | Current implementation | Existing Go/Dart/fd ownership and public API shape. |
 | [Concurrency model](concurrency.md) | Current implementation | Existing epoch, registries, lock order, and teardown commit protocol. |
@@ -64,6 +64,8 @@ Documentation must not say that the entire package or tsnet subtree is
 encrypted: on non-Kubernetes paths, upstream ACME/TLS private-key sidecars, a
 credential-bearing log config, and sensitive logs can bypass StateStore. The
 whole state root still needs owner-only permissions and backup exclusion.
-Current direct `ListenTLS`/`ListenFunnel` are unsupported on mobile; target
-ServeConfig Funnel remains unqualified until real-device and sidecar receipts
-pass, while `tls.bind` requires an alternate certificate path.
+`tls.bind` still depends on a mobile-disabled certificate endpoint and requires
+an alternate path before mobile qualification. R5 has removed the direct
+`ListenFunnel` implementation in favor of shared ServeConfig/`AllowFunnel`, but
+HTTPS Serve and Funnel remain unqualified on mobile until real-device and
+sidecar receipts pass.

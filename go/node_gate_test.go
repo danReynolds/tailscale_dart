@@ -6,13 +6,11 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"golang.org/x/sys/unix"
-	"tailscale.com/client/local"
 	"tailscale.com/tsnet"
 )
 
@@ -68,6 +66,33 @@ func TestAcquireNodeGate_RequiresLiveServer(t *testing.T) {
 	gate := liveGate(t)
 	if !gate.stillCurrent() {
 		t.Fatal("a just-acquired gate must be current")
+	}
+}
+
+func TestAcquireNodeGateForRuntimeTokenRejectsSupersededRuntime(t *testing.T) {
+	superseded := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
+	t.Cleanup(superseded.cancel)
+	withLiveServer(t, &tsnet.Server{})
+	replacement := currentRuntime()
+	if replacement == nil || replacement.token == superseded.token {
+		t.Fatal("test requires distinct superseded and replacement runtime tokens")
+	}
+
+	if _, ok := acquireNodeGateForRuntimeToken(0); ok {
+		t.Fatal("zero runtime token acquired the replacement runtime")
+	}
+	if _, ok := acquireNodeGateForRuntimeToken(superseded.token); ok {
+		t.Fatal("superseded runtime token acquired the replacement runtime")
+	}
+	gate, ok := acquireNodeGateForRuntimeToken(replacement.token)
+	if !ok || gate.runtime != replacement || gate.s != replacement.server {
+		t.Fatalf("replacement token gate = %+v, ok=%v; want exact replacement", gate, ok)
+	}
+}
+
+func TestNodeGenerationIsNeverZero(t *testing.T) {
+	if generation := nodeEpoch.Load(); generation == 0 {
+		t.Fatal("node generation zero is reserved for an absent FFI capability")
 	}
 }
 
@@ -196,24 +221,8 @@ func TestCommitGates_RefuseStaleAcrossRegistries(t *testing.T) {
 			},
 			sweep: func() { tailnetHTTPTransports.reset() },
 		},
-		{
-			name: "funnel-forwarder",
-			register: func(t *testing.T, gate nodeGate) bool {
-				ln, err := net.Listen("tcp", "127.0.0.1:0")
-				if err != nil {
-					t.Fatalf("listen: %v", err)
-				}
-				_, err = installFunnelForwarder(gate, 8443, "harness.ts.net", ln, "/", funnelTarget{})
-				// installFunnelForwarder closed ln on refusal.
-				return err == nil
-			},
-			count: func() int {
-				funnelMu.Lock()
-				defer funnelMu.Unlock()
-				return len(funnelForwarders)
-			},
-			sweep: closeAllFunnelForwarders,
-		},
+		// No Funnel row: Funnel is an AllowFunnel bit on the runtime-owned
+		// ServeConfig authority, not a listener registry.
 		{
 			name: "http-binding",
 			register: func(t *testing.T, gate nodeGate) bool {
@@ -403,34 +412,6 @@ func TestCommitGates_RaceWithTeardown(t *testing.T) {
 	}
 }
 
-// TestServeForwardLocked_RefusesStaleGate covers the Serve row of the commit-
-// gate matrix (the F2 re-exposure class): serveForwardLocked's gate check
-// precedes every LocalAPI call, so a stale gate must refuse before touching
-// the client — driven here with a client aimed at a nonexistent socket, which
-// fails loudly (a different error) if the gate is broken and the LocalAPI path
-// is reached — and must leave the publication registry empty.
-func TestServeForwardLocked_RefusesStaleGate(t *testing.T) {
-	withLiveServer(t, &tsnet.Server{})
-	gate := liveGate(t)
-	bumpEpoch()
-
-	lc := &local.Client{Socket: "/nonexistent/tailscaled.sock", UseSocketOnly: true}
-	out := serveForwardLocked(gate, lc, serveForwardPayload{
-		TailnetPort: 443,
-		LocalPort:   8080,
-		Path:        "/",
-	})
-	if !strings.Contains(out, "raced node teardown") {
-		t.Fatalf("stale gate must refuse at the commit gate, got %s", out)
-	}
-	servePublicationMu.Lock()
-	tracked := len(servePublications)
-	servePublicationMu.Unlock()
-	if tracked != 0 {
-		t.Fatalf("refused forward must not track a publication, %d present", tracked)
-	}
-}
-
 // TestDebugNodeState smoke-checks the census used by leak diagnostics.
 func TestDebugNodeState(t *testing.T) {
 	snap := debugNodeState()
@@ -447,11 +428,14 @@ func TestDebugNodeStateJSONContract(t *testing.T) {
 		t.Fatalf("DebugNodeState is not valid JSON: %v", err)
 	}
 	for _, key := range []string{
-		"epoch", "servePublications", "funnelForwarders",
+		"epoch", "servePublications",
 		"httpBindings", "tcpListeners", "udpBridges", "transportCached",
 	} {
 		if _, ok := decoded[key]; !ok {
 			t.Errorf("DebugNodeState missing key %q", key)
 		}
+	}
+	if _, ok := decoded["funnelForwarders"]; ok {
+		t.Error("DebugNodeState must not expose the deleted Funnel registry")
 	}
 }

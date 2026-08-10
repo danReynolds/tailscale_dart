@@ -131,6 +131,40 @@ func TestPingPathDirect(t *testing.T) {
 	}
 }
 
+func TestDiagPingRejectsSupersededRuntimeBeforeReplacementLocalAPI(t *testing.T) {
+	superseded := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
+	replacement := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
+	runtimes.mu.Lock()
+	previous := runtimes.current
+	if runtimes.candidate != nil || runtimes.draining != nil {
+		runtimes.mu.Unlock()
+		t.Fatal("test cannot publish a replacement during a lifecycle transition")
+	}
+	runtimes.current = replacement
+	runtimes.mu.Unlock()
+	t.Cleanup(func() {
+		runtimes.mu.Lock()
+		runtimes.current = previous
+		runtimes.mu.Unlock()
+		superseded.cancel()
+		replacement.cancel()
+	})
+
+	for _, token := range []uint64{0, superseded.token} {
+		out := DiagPing(token, "100.64.0.1", 0, "disco")
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+			t.Fatalf("DiagPing token %d returned invalid JSON %q: %v", token, out, err)
+		}
+		if parsed["code"] != "staleRuntime" {
+			t.Fatalf("DiagPing token %d result = %v, want staleRuntime", token, parsed)
+		}
+		if !strings.Contains(fmt.Sprint(parsed["error"]), "captured runtime") {
+			t.Fatalf("DiagPing token %d reached replacement LocalAPI: %v", token, parsed)
+		}
+	}
+}
+
 // fakeHTTPErr stands in for apitype.HTTPErr so we can exercise the
 // errors.As path in classifyLocalAPIError without pulling the real
 // upstream type (which moves between releases).
@@ -475,20 +509,6 @@ func TestApplyServeClearRemovesLastHandlerAndFunnel(t *testing.T) {
 	}
 }
 
-func TestServePublicationRegistryTracksProcessOwnedMappings(t *testing.T) {
-	resetServePublicationRegistryForTest(t)
-
-	key := servePublicationKey{host: "demo.tailnet.ts.net", port: 443, path: "/"}
-	trackServePublication(key)
-	keys := takeServePublications()
-	if len(keys) != 1 || keys[0] != key {
-		t.Fatalf("keys = %+v, want [%+v]", keys, key)
-	}
-	if keys := takeServePublications(); len(keys) != 0 {
-		t.Fatalf("registry was not drained: %+v", keys)
-	}
-}
-
 func TestRemoveServeWebHandlerPreservesOtherPaths(t *testing.T) {
 	sc := new(ipn.ServeConfig)
 	st := serveTestStatus()
@@ -571,25 +591,15 @@ func serveTestStatus() *ipnstate.Status {
 	}
 }
 
-func resetServePublicationRegistryForTest(t *testing.T) {
-	t.Helper()
-	servePublicationMu.Lock()
-	servePublications = map[servePublicationKey]struct{}{}
-	servePublicationMu.Unlock()
-	t.Cleanup(func() {
-		servePublicationMu.Lock()
-		servePublications = map[servePublicationKey]struct{}{}
-		servePublicationMu.Unlock()
-	})
-}
-
 // Compile-time sanity check that the error class string constants we
 // emit match the Dart-side parser in lib/src/worker/entrypoint.dart.
 // If someone renames one, this test fails loudly.
 func TestClassifyLocalAPIError_KnownCodesAreStable(t *testing.T) {
 	wantedCodes := []string{
 		"staleRuntime", "notFound", "forbidden", "conflict",
-		"preconditionFailed", "featureDisabled",
+		"preconditionFailed", "featureDisabled", "serveConfigConflict",
+		"dataPlaneNotReady", "publicationBootstrapFailure",
+		"publicationNotApplied", "publicationCommitIndeterminate",
 	}
 	for _, want := range wantedCodes {
 		// Synthesize an error that should classify as `want`.
@@ -607,6 +617,16 @@ func TestClassifyLocalAPIError_KnownCodesAreStable(t *testing.T) {
 			err = fakeHTTPErr{status: http.StatusPreconditionFailed, msg: "x"}
 		case "featureDisabled":
 			err = errors.New("feature is disabled")
+		case "serveConfigConflict":
+			err = ErrServeConfigConflict
+		case "dataPlaneNotReady":
+			err = ErrDataPlaneNotReady
+		case "publicationBootstrapFailure":
+			err = ErrPublicationBootstrapFailure
+		case "publicationNotApplied":
+			err = notAppliedError(errors.New("request canceled before dispatch"))
+		case "publicationCommitIndeterminate":
+			err = ErrPublicationCommitIndeterminate
 		}
 		code, _ := classifyLocalAPIError(err)
 		if code != want {
@@ -615,9 +635,52 @@ func TestClassifyLocalAPIError_KnownCodesAreStable(t *testing.T) {
 	}
 	// Also make sure we didn't drop a code.
 	for _, code := range wantedCodes {
-		if !strings.Contains("staleRuntime,notFound,forbidden,conflict,preconditionFailed,featureDisabled", code) {
+		if !strings.Contains("staleRuntime,notFound,forbidden,conflict,preconditionFailed,featureDisabled,serveConfigConflict,dataPlaneNotReady,publicationBootstrapFailure,publicationNotApplied,publicationCommitIndeterminate", code) {
 			t.Errorf("untracked code %q", code)
 		}
+	}
+}
+
+func TestFailPublicationDeliveryKeepsOriginalDartErrorAsSynchronousOwner(t *testing.T) {
+	runtime := newNodeRuntime(nodeEpoch.Load(), nextDirectRuntimeToken(), runtimeConfig{})
+	runtimes.mu.Lock()
+	previous := runtimes.current
+	if runtimes.candidate != nil || runtimes.draining != nil {
+		runtimes.mu.Unlock()
+		t.Fatal("test cannot publish a runtime during a lifecycle transition")
+	}
+	runtimes.current = runtime
+	runtimes.mu.Unlock()
+	t.Cleanup(func() {
+		runtimes.mu.Lock()
+		runtimes.current = previous
+		runtimes.mu.Unlock()
+		runtime.cancel()
+		runtime.finishPreparation()
+	})
+
+	calls := 0
+	err := failPublicationDelivery(
+		runtime.token,
+		func(gotRuntime *nodeRuntime, cause error, reportRuntimeError bool) error {
+			calls++
+			if gotRuntime != runtime {
+				t.Fatalf("quarantined runtime = %p, want %p", gotRuntime, runtime)
+			}
+			if !errors.Is(cause, ErrPublicationCommitIndeterminate) {
+				t.Fatalf("quarantine cause = %v, want ErrPublicationCommitIndeterminate", cause)
+			}
+			if reportRuntimeError {
+				t.Fatal("explicit compensation must not emit a duplicate async runtime error")
+			}
+			return cause
+		},
+	)
+	if err != nil {
+		t.Fatalf("failPublicationDelivery: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("quarantine calls = %d, want 1", calls)
 	}
 }
 

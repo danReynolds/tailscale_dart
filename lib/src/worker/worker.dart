@@ -12,8 +12,11 @@ import '../api/diag.dart';
 import '../api/connection.dart';
 import '../api/identity.dart';
 import '../api/prefs.dart';
+import '../api/serve.dart';
 import '../errors.dart';
 import '../ffi_bindings.dart' as native;
+import '../native_offload_gate.dart';
+import '../native_error_code.dart';
 import '../status.dart';
 
 part 'messages.dart';
@@ -22,6 +25,13 @@ part 'native_offload.dart';
 
 /// Native disposition for an abandoned caller-isolate Keybay operation.
 enum StateCustodyDisposition { none, compensateKey, preserveCoherentPair }
+
+@visibleForTesting
+int remainingNativeBudgetMillis(Duration budget, Duration elapsed) {
+  final remaining = budget - elapsed;
+  if (remaining <= Duration.zero) return 0;
+  return remaining.inMilliseconds.clamp(0, 0x7fffffffffffffff);
+}
 
 Future<String> _loadHostNetworkSnapshot() async {
   if (!io.Platform.isAndroid) {
@@ -82,6 +92,43 @@ bool _isUsableHostAddress(io.InternetAddress address) {
   return false;
 }
 
+/// Encodes either a coordinate clear or an exact publication-handle close.
+///
+/// Omitting both identity fields is the public `serve.clear`/`funnel.clear`
+/// contract. Supplying both makes the mutation conditional on that exact
+/// runtime generation and mapping token. A partial or zero identity is never
+/// sent because native must not guess whether a destructive clear was meant.
+@visibleForTesting
+String encodeServeClearPayload({
+  required int tailnetPort,
+  required String path,
+  required bool funnel,
+  int? generation,
+  int? mappingToken,
+}) {
+  if ((generation == null) != (mappingToken == null)) {
+    throw ArgumentError(
+      'generation and mappingToken must be supplied together.',
+    );
+  }
+  if (generation != null && generation <= 0) {
+    throw RangeError.value(generation, 'generation', 'must be positive');
+  }
+  if (mappingToken != null && mappingToken <= 0) {
+    throw RangeError.value(mappingToken, 'mappingToken', 'must be positive');
+  }
+  final payload = <String, Object>{
+    'tailnetPort': tailnetPort,
+    'path': path,
+    'funnel': funnel,
+  };
+  if (generation != null) {
+    payload['generation'] = generation;
+    payload['mappingToken'] = mappingToken!;
+  }
+  return jsonEncode(payload);
+}
+
 @visibleForTesting
 bool acceptsRuntimePush({
   required int token,
@@ -118,12 +165,56 @@ final class LifecycleQueue {
   }
 }
 
+/// Token-scoped handoff for fatal publication-bootstrap events.
+///
+/// A failure is retained only while an initiating `up()` has registered a
+/// waiter. Once that call settles, a later asynchronous failure is owned by the
+/// terminal event callback and must not leave an unbounded historical cache.
+@visibleForTesting
+final class PublicationBootstrapFailureRegistry {
+  final Map<int, Completer<TailscaleOperationException>> _waiters =
+      <int, Completer<TailscaleOperationException>>{};
+  final Map<int, TailscaleOperationException> _failures =
+      <int, TailscaleOperationException>{};
+
+  Future<TailscaleOperationException> waitFor(int token) {
+    final existing = _failures[token];
+    if (existing != null) {
+      return Future<TailscaleOperationException>.value(existing);
+    }
+    return _waiters
+        .putIfAbsent(token, Completer<TailscaleOperationException>.new)
+        .future;
+  }
+
+  TailscaleOperationException? failureFor(int token) => _failures[token];
+
+  Completer<TailscaleOperationException>? recordIfWaiting(
+    int token,
+    TailscaleOperationException failure,
+  ) {
+    final waiter = _waiters[token];
+    if (waiter == null) return null;
+    _failures[token] = failure;
+    return waiter;
+  }
+
+  void retire(int token) {
+    _waiters.remove(token);
+    _failures.remove(token);
+  }
+
+  @visibleForTesting
+  int get retainedFailureCount => _failures.length;
+}
+
 /// The main isolate worker used by [Tailscale] to perform native Tailscale operations.
 final class Worker {
   Worker({
     required this.publishState,
     required this.publishRuntimeError,
     required this.publishNodes,
+    required this.onRuntimeTerminated,
     required this.onExit,
     @visibleForTesting void Function(SendPort)? debugEntrypoint,
   }) : _entrypoint = debugEntrypoint ?? _workerEntrypoint {
@@ -133,6 +224,15 @@ final class Worker {
   final void Function(NodeState state) publishState;
   final void Function(TailscaleRuntimeError error) publishRuntimeError;
   final void Function(List<TailscaleNode> nodes) publishNodes;
+  final void Function(
+    Worker worker,
+    int runtimeToken,
+    TailscaleOperationException failure,
+    bool emitStopped,
+    bool cleanupFailed,
+    bool reportRuntimeError,
+  )
+  onRuntimeTerminated;
   final void Function(
     Worker worker,
     int? runtimeToken,
@@ -167,6 +267,8 @@ final class Worker {
   int? _runtimeToken;
   int? _preparingToken;
   int? _pushVisiblePreparingToken;
+  final PublicationBootstrapFailureRegistry _publicationBootstrapFailures =
+      PublicationBootstrapFailureRegistry();
 
   int? get runtimeToken => _runtimeToken;
   bool get isDisposed => _disposed;
@@ -214,6 +316,39 @@ final class Worker {
       case _WorkerRuntimeErrorEvent(:final runtimeToken, :final error):
         if (!_acceptsPush(runtimeToken)) return;
         publishRuntimeError(error);
+      case _WorkerRuntimeTerminatedEvent(
+        :final runtimeToken,
+        :final message,
+        :final code,
+        :final emitStopped,
+        :final cleanupFailed,
+        :final reportRuntimeError,
+      ):
+        if (!_acceptsPush(runtimeToken)) return;
+        final failure = TailscaleOperationException(
+          'native runtime',
+          message,
+          code: code,
+        );
+        detachRuntimeToken(runtimeToken);
+        final bootstrapWaiter =
+            code == TailscaleErrorCode.publicationBootstrapFailure
+            ? _publicationBootstrapFailures.recordIfWaiting(
+                runtimeToken,
+                failure,
+              )
+            : null;
+        onRuntimeTerminated(
+          this,
+          runtimeToken,
+          failure,
+          emitStopped,
+          cleanupFailed,
+          reportRuntimeError,
+        );
+        if (bootstrapWaiter != null && !bootstrapWaiter.isCompleted) {
+          bootstrapWaiter.complete(failure);
+        }
       case _WorkerStateEvent(:final runtimeToken, :final state):
         if (!_acceptsPush(runtimeToken)) return;
         publishState(state);
@@ -311,6 +446,14 @@ final class Worker {
     }
   }
 
+  Future<TailscaleOperationException> publicationBootstrapFailureFor(
+    int token,
+  ) => _publicationBootstrapFailures.waitFor(token);
+
+  void retirePublicationBootstrapFailure(int token) {
+    _publicationBootstrapFailures.retire(token);
+  }
+
   Future<TResponse> _request<TResponse extends _WorkerResponse>(
     _WorkerCommand request, {
     void Function()? afterSend,
@@ -357,9 +500,11 @@ final class Worker {
     required String authKey,
     required bool ephemeral,
     required String controlUrl,
+    required Duration bootstrapBudget,
   }) {
     _preparingToken = requestToken;
     _pushVisiblePreparingToken = requestToken;
+    final budgetElapsed = Stopwatch()..start();
     return _lifecycle.run(() async {
       try {
         final hostNetworkSnapshot = await _loadHostNetworkSnapshot();
@@ -377,8 +522,22 @@ final class Worker {
             ephemeral: ephemeral,
             controlUrl: controlUrl,
             hostNetworkSnapshot: hostNetworkSnapshot,
+            bootstrapBudgetMillis: remainingNativeBudgetMillis(
+              bootstrapBudget,
+              budgetElapsed.elapsed,
+            ),
           ),
         );
+        final bootstrapFailure = _publicationBootstrapFailures.failureFor(
+          response.runtimeToken,
+        );
+        if (bootstrapFailure != null) {
+          throw TailscaleUpException(
+            bootstrapFailure.message,
+            code: bootstrapFailure.code,
+            cause: bootstrapFailure,
+          );
+        }
         if (_preparingToken != requestToken) {
           throw const TailscaleUpException(
             'Native startup completed after its request was abandoned.',
@@ -402,6 +561,11 @@ final class Worker {
       }
     });
   }
+
+  /// Marks the initiating public up call settled before its Future returns.
+  /// A later first Running observation then receives a fresh 30-second
+  /// bootstrap budget instead of inheriting the completed call's deadline.
+  void markUpSettled(int token) => native.duneMarkUpSettled(token);
 
   Future<({int bindingId, TailscaleEndpoint tailnet})> httpBind({
     required int tailnetPort,
@@ -577,11 +741,35 @@ final class Worker {
     required String path,
     required bool funnel,
   }) async {
-    final payload = jsonEncode({
-      'tailnetPort': tailnetPort,
-      'path': path,
-      'funnel': funnel,
-    });
+    final payload = encodeServeClearPayload(
+      tailnetPort: tailnetPort,
+      path: path,
+      funnel: funnel,
+    );
+    await _request<_WorkerAckResponse>(
+      _WorkerServeClearCommand(payloadJson: payload, funnel: funnel),
+    );
+  }
+
+  /// Conditionally removes the mapping owned by one publication handle.
+  ///
+  /// Unlike [serveClear], native treats a stale generation or replaced mapping
+  /// token as an idempotent no-op. This is also the path used by publication
+  /// finalizers.
+  Future<void> serveClose({
+    required int tailnetPort,
+    required String path,
+    required bool funnel,
+    required int generation,
+    required int mappingToken,
+  }) async {
+    final payload = encodeServeClearPayload(
+      tailnetPort: tailnetPort,
+      path: path,
+      funnel: funnel,
+      generation: generation,
+      mappingToken: mappingToken,
+    );
     await _request<_WorkerAckResponse>(
       _WorkerServeClearCommand(payloadJson: payload, funnel: funnel),
     );

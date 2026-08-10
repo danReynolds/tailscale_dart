@@ -2,13 +2,16 @@
 
 ## Status
 
-**Accepted; implemented through R4d in current source — 2026-08-10.**
+**Accepted; R2-R5 code present in current source — 2026-08-10.**
 
-R2/R3 now provide `nodeRuntime`, generation-bound supervision, and fail-safe
+R2/R3 provide `nodeRuntime`, generation-bound supervision, and fail-safe
 teardown; R4a-R4d add Keybay custody, the encrypted/in-memory StateStores,
-state-lease/reset ownership, and explicit local forget. The R5 publication
-bootstrap and R7 migration of the remaining process-global transport/watcher
-registries are still target behavior. R6/R10 evidence gates also remain.
+state-lease/reset ownership, and explicit local forget. R5 adds the automatic
+publication bootstrap, shared readiness gate, runtime-owned ServeConfig
+authority, and exact handles. The crash/restart R5 receipt, R6/R10 evidence,
+and R7 migration of the remaining process-global transport/watcher registries
+still remain; the hosted Funnel-tailnet and replacement receipts passed on
+2026-08-10.
 
 ## Context
 
@@ -300,9 +303,16 @@ Server initialization even though their API looks like a harmless read.
 
 Returned Dart objects that can act as the node are capabilities, not timeless
 facades. At minimum, the HTTP client and every `TailscalePublishedService`
-capture their runtime generation plus a per-object closed bit. An HTTP client
+capture an exact runtime capability plus a per-object closed bit. An HTTP client
 retained across down/up fails with a stable stale-capability error; it never
 falls through process-global FFI and sends as the replacement identity.
+
+Caller-isolate helper work (`tcp.dial`, `diag.ping`, Serve, and Funnel) also
+captures the exact runtime token before it can wait on recovery or the shared
+offload cap. Native validates that token before accessing Server or LocalClient,
+so queued work cannot be rebound to a later identity. Worker-FIFO listener and
+binding commands remain governed by the generation commit gate until R7b moves
+their registries and handles onto the runtime.
 
 A publication handle's `close()` and finalizer submit the captured generation,
 publication token, host/port/path, and visibility mode. Native removal succeeds
@@ -318,7 +328,7 @@ issue an unqualified clear.
 `Server.Up` is a special lifecycle boundary, not a general status probe.
 
 Each runtime owns one `publicationManager` with one bootstrap result and one
-ServeConfig mutation queue. R5 lands those fields directly on the R2
+ServeConfig mutation queue. R5 has landed those fields directly on the R2
 `nodeRuntime`, together with unique mapping tokens captured by every returned
 publication handle. There is no compatibility publication global and no later
 ownership migration.
@@ -384,11 +394,12 @@ event is emitted. A later `status()` uses the idle classifier and reports its
 current stopped/no-state/storage truth rather than replaying the historical
 error; a new explicit `up()` creates a new generation.
 
-Current `ListenTLS` invokes `Up` internally, so it must consult the manager
-before entry: fail fast before Running, join an in-progress bootstrap, or consume
-its completed result. The later internal call is not allowed to become a
-separate package bootstrap authority. A future
-`ListenService` wrapper follows the same rule.
+The package does not call `tsnet.Server.ListenTLS`, because that convenience
+method invokes `Up` internally. `tls.bind` first joins the shared readiness gate,
+then combines `Server.CertDomains`, a raw `Server.Listen`, and the cached
+LocalClient certificate callback. This avoids a second package bootstrap
+authority; it does not qualify mobile certificate lookup. A future
+`ListenService` wrapper follows the same single-gate rule.
 
 The restart receipt does not call a publication API: leave a mapping active,
 crash, restart, and perform ordinary `up()` only. The stale mapping must be

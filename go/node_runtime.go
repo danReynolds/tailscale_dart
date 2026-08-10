@@ -53,8 +53,9 @@ type runtimeConfig struct {
 }
 
 // nodeRuntime owns everything whose lifetime is exactly one tsnet.Server
-// generation. Process-global registries remain as a compatibility bridge for
-// now, but their teardown is centralized in close.
+// generation. Its publication manager is the sole Serve/Funnel authority for
+// that generation; remaining process-global transport registries are migrated
+// separately and still have their teardown centralized in close.
 type nodeRuntime struct {
 	generation uint64
 	token      uint64
@@ -65,6 +66,7 @@ type nodeRuntime struct {
 
 	server      *tsnet.Server
 	localClient *local.Client
+	publication *publicationManager
 	store       ipn.StateStore
 	storeCloser io.Closer
 	stateLease  *stateLease
@@ -128,30 +130,39 @@ func (r *nodeRuntime) scratchDirectory() string {
 // registry cleanup and Server.Close happen without the controller lock held.
 // The Server is always closed before its caller-owned StateStore.
 func (r *nodeRuntime) close() error {
-	return r.closeOwnedResources(true)
+	return r.closeOwnedResources(true, false)
+}
+
+func (r *nodeRuntime) closeForPublicationBootstrapFailure() error {
+	return r.closeOwnedResources(true, true)
 }
 
 // closeUnstarted releases caller-owned resources after Server.Start returned
 // an error. Upstream owns unwinding its own partial start and must not receive
 // a competing Server.Close call.
 func (r *nodeRuntime) closeUnstarted() error {
-	return r.closeOwnedResources(false)
+	return r.closeOwnedResources(false, false)
 }
 
-func (r *nodeRuntime) closeOwnedResources(closeStartedServer bool) error {
+func (r *nodeRuntime) closeOwnedResources(closeStartedServer, preserveBootstrapFailure bool) error {
 	if r == nil {
 		return nil
 	}
 	r.closeOnce.Do(func() {
 		r.cancel()
+		StopWatch()
 
-		closeAllServePublications(r.localClient)
+		// Publication cleanup is best-effort and bounded. Do not let a stale
+		// ServeConfig cleanup failure strand Server/Store/lease ownership: the
+		// next generation's mandatory bootstrap is the final stale-config gate.
+		if r.publication != nil {
+			r.publication.shutdownBootstrap(preserveBootstrapFailure)
+			_ = r.publication.close()
+		}
 		closeAllTcpFdListeners()
 		closeAllHttpBindings()
-		closeAllFunnelForwarders()
 		closeAllUdpBindings()
 		resetTailnetHTTPTransport()
-		StopWatch()
 
 		if closeStartedServer && r.server != nil {
 			closeServer := r.closeServer

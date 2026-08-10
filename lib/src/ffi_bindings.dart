@@ -21,6 +21,7 @@ import 'package:ffi/ffi.dart';
     ffi.Pointer<Utf8>,
     ffi.Int32,
     ffi.Pointer<Utf8>,
+    ffi.Int64,
   )
 >(symbol: 'DuneStart')
 external ffi.Pointer<Utf8> duneStart(
@@ -30,7 +31,12 @@ external ffi.Pointer<Utf8> duneStart(
   ffi.Pointer<Utf8> controlURL,
   int ephemeral,
   ffi.Pointer<Utf8> hostNetworkSnapshot,
+  int bootstrapBudgetMillis,
 );
+
+/// Marks the exact runtime's initiating public up call as settled.
+@ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'DuneMarkUpSettled')
+external void duneMarkUpSettled(int runtimeToken);
 
 /// Freezes the process-wide state-root, Keybay namespace, and log level.
 /// Returns `{"stateDir": "<canonical-native-path>"}` on success.
@@ -138,6 +144,7 @@ external ffi.Pointer<Utf8> duneFinishCustody(
 ///   {"error": "..."} on failure.
 @ffi.Native<
   ffi.Pointer<Utf8> Function(
+    ffi.Uint64,
     ffi.Pointer<Utf8>,
     ffi.Pointer<Utf8>,
     ffi.Pointer<Utf8>,
@@ -147,6 +154,7 @@ external ffi.Pointer<Utf8> duneFinishCustody(
   )
 >(symbol: 'DuneHttpStart')
 external ffi.Pointer<Utf8> duneHttpStart(
+  int runtimeToken,
   ffi.Pointer<Utf8> method,
   ffi.Pointer<Utf8> url,
   ffi.Pointer<Utf8> headersJson,
@@ -183,10 +191,17 @@ external void duneHttpCloseBinding(int bindingId);
 ///   {"error": "..."} on failure.
 ///
 /// POSIX-only backend primitive. Unsupported platforms fail explicitly.
+/// [runtimeToken] must identify the runtime captured before helper admission.
 @ffi.Native<
-  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Int64)
+  ffi.Pointer<Utf8> Function(
+    ffi.Uint64,
+    ffi.Pointer<Utf8>,
+    ffi.Int32,
+    ffi.Int64,
+  )
 >(symbol: 'DuneTcpDialFd')
 external ffi.Pointer<Utf8> duneTcpDialFd(
+  int runtimeToken,
   ffi.Pointer<Utf8> host,
   int port,
   int timeoutMillis,
@@ -320,6 +335,7 @@ external ffi.Pointer<Utf8> duneTlsDomains();
 
 /// Tailscale-level ping to a tailnet node.
 ///
+/// [runtimeToken] must identify the runtime captured before helper admission.
 /// `timeoutMillis <= 0` means no timeout. `pingType` is one of
 /// "disco" (default), "tsmp", "icmp".
 ///
@@ -329,9 +345,15 @@ external ffi.Pointer<Utf8> duneTlsDomains();
 ///     on success.
 ///   {"error": "..."} on failure.
 @ffi.Native<
-  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Pointer<Utf8>)
+  ffi.Pointer<Utf8> Function(
+    ffi.Uint64,
+    ffi.Pointer<Utf8>,
+    ffi.Int32,
+    ffi.Pointer<Utf8>,
+  )
 >(symbol: 'DuneDiagPing')
 external ffi.Pointer<Utf8> duneDiagPing(
+  int runtimeToken,
   ffi.Pointer<Utf8> ip,
   int timeoutMillis,
   ffi.Pointer<Utf8> pingType,
@@ -419,10 +441,29 @@ external ffi.Pointer<Utf8> duneExitNodeSuggest();
 external ffi.Pointer<Utf8> duneExitNodeUseAuto();
 
 /// Publishes a local HTTP service through Tailscale Serve/Funnel.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Pointer<Utf8>)>(
   symbol: 'DuneServeForward',
 )
-external ffi.Pointer<Utf8> duneServeForward(ffi.Pointer<Utf8> payloadJson);
+external ffi.Pointer<Utf8> duneServeForward(
+  int runtimeToken,
+  ffi.Pointer<Utf8> payloadJson,
+);
+
+/// Confirms that Dart received and validated one exact publication handle.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Uint64, ffi.Uint64)>(
+  symbol: 'DuneAcknowledgePublication',
+)
+external ffi.Pointer<Utf8> duneAcknowledgePublication(
+  int runtimeToken,
+  int generation,
+  int mappingToken,
+);
+
+/// Fails closed when Dart cannot prove publication-handle delivery.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64)>(
+  symbol: 'DuneFailPublicationDelivery',
+)
+external ffi.Pointer<Utf8> duneFailPublicationDelivery(int runtimeToken);
 
 /// Removes a Tailscale Serve/Funnel publication.
 @ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>)>(

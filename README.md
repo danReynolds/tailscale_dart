@@ -34,10 +34,11 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 | [`doc/`](https://github.com/danReynolds/tailscale_dart/tree/main/doc) | Status-labeled index of API docs, ADRs, RFCs, and current-architecture notes |
 | [`test/README.md`](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
 
-> **Architecture work in progress.** The secure-state cutover and its lifecycle
-> foundations are implemented in the current source, but the rearchitecture
-> documents also describe later work and release evidence that has not landed.
-> Current-state documents remain labeled separately.
+> **Architecture work in progress.** The secure-state cutover, fail-safe
+> lifecycle, and runtime-owned Serve/Funnel convergence are implemented in the
+> current source. The hosted Funnel-tailnet and replacement receipts passed on
+> 2026-08-10; crash/restart, mobile/platform, sidecar-inventory, and later
+> ownership/release receipts are still pending.
 
 ## What you can build
 
@@ -175,9 +176,9 @@ Inbound HTTP | `http.bind` | Supported | Package-native request/response types b
 Raw TCP | `tcp.dial`, `tcp.bind` | Supported | Explicit read/write halves and half-close.
 Raw UDP | `udp.bind` | Supported | Message-preserving datagrams with remote endpoint metadata.
 TLS listener | `tls.bind` | Desktop/server only | Requires MagicDNS and HTTPS. Upstream's default certificate endpoint is disabled on iOS/Android, so mobile termination is unsupported pending an alternate path and real-device receipt.
-TLS discovery | `tls.domains` | Supported read-only API | Reads advertised certificate domains from status; this does not provision a certificate or imply that `tls.bind` works on mobile.
-Serve | `serve.forward`, `serve.clear` | Supported with caveat | Tailnet publication for an existing loopback HTTP server. Desktop/server HTTPS has a live receipt; mobile HTTPS Serve remains unqualified pending its own real-device receipt.
-Funnel | `funnel.forward`, `funnel.clear` | Desktop/server only | Public HTTPS publication through Tailscale Funnel policy; mobile is unsupported pending certificate-path work.
+TLS discovery | `tls.domains` | Supported read-only API | Reads the runtime's advertised certificate domains directly; this does not provision a certificate or imply that `tls.bind` works on mobile.
+Serve | `serve.forward`, `serve.clear` | Desktop/server qualified | Tailnet publication through the runtime-owned ServeConfig manager. The R5 replacement/exact-handle hosted receipt passed 2026-08-10; crash/restart and mobile HTTPS qualification remain pending.
+Funnel | `funnel.forward`, `funnel.clear` | Desktop/server qualified | The public-visibility mode of the same ServeConfig mapping used by Serve. Public ingress, tailnet reach, and the R5 swap receipt have passed hosted Tailscale; all mobile receipts remain pending.
 Tailscale Services | N/A | Planned | Upstream `tsnet.Server.ListenService` is available in the current pin; no Dart wrapper yet.
 Routing controls | `prefs`, `exitNode` | Supported | Subnet routes, Shields Up, tags, hostname, auto-update, and exit nodes.
 Diagnostics | `diag` | Supported | Ping, metrics, DERP map, and update checks.
@@ -267,9 +268,9 @@ Future<void> main() async {
 Use `serve.forward` when your app already owns a local HTTP server and you want
 to publish that existing loopback port.
 
-The HTTPS example below is currently a desktop/server path. Mobile HTTPS Serve
-still needs its own real-device support receipt; it does not make
-`tls.bind` or Funnel supported on iOS/Android.
+The HTTPS example below is currently a desktop/server-qualified path. Mobile
+HTTPS Serve and ServeConfig Funnel still need their own real-device and sidecar
+receipts; `tls.bind` remains a separate certificate-path qualification.
 
 ```dart
 final publication = await Tailscale.instance.serve.forward(
@@ -281,16 +282,22 @@ print('tailnet URL: ${publication.url}');
 ```
 
 `serve.forward` traffic follows Tailscale Serve semantics, including Tailscale
-identity headers for tailnet clients. `funnel.forward` follows the same local
-server shape for public Funnel publication, but Funnel traffic is public and does
-not include Tailscale identity headers.
+identity headers for tailnet clients. `funnel.forward` changes the same
+port/path publication to public Funnel visibility; it is not an independent
+listener. The latest call at that coordinate owns the handler, and exact
+publication handles cannot clear a replacement. Funnel traffic is public and
+does not include Tailscale identity headers.
+
+Funnel visibility is upstream host:port policy, not path policy. Enabling it on
+port 443 can expose every ServeConfig path on that port. Use a dedicated public
+port or authenticate all handlers that share it.
 
 ## Platform support
 
 Platform | Status | Notes
 --- | --- | ---
-iOS | Core supported | Userspace tsnet, no VPN entitlement. Core lifecycle and private data-plane smoke validated; `tls.bind` and Funnel are not currently supported on mobile.
-Android | Core supported | Userspace tsnet, no root. Persistent nodes require Android 12 / API 31+; older versions can run explicitly ephemeral nodes. Core smoke validated; #90 must still produce the current x86_64 no-SIGSYS receipt, and `tls.bind`/Funnel are not currently supported on mobile.
+iOS | Core supported | Userspace tsnet, no VPN entitlement. Core lifecycle and private data-plane smoke validated; `tls.bind`, HTTPS Serve, and ServeConfig Funnel remain unqualified pending real-device receipts.
+Android | Core supported | Userspace tsnet, no root. Persistent nodes require Android 12 / API 31+; older versions can run explicitly ephemeral nodes. Core smoke is validated; `tls.bind`, HTTPS Serve, and ServeConfig Funnel remain unqualified pending real-device receipts.
 macOS | Supported | Native asset and kqueue reactor path validated locally.
 Linux | Supported with storage qualification | Native asset and epoll reactor path validated in Headscale E2E. Persistent nodes require a desktop session with `secret-tool` and an available, unlocked Secret Service; headless Linux supports ephemeral nodes only.
 Windows | Unsupported | Excluded from the package platform list until a Windows-native backend is designed.
@@ -324,6 +331,13 @@ dropped. Native `down`/`logout` receipts remain token-addressable until the
 caller receives them, so worker death cannot erase a completed result. A
 failed native cleanup is typed as `runtimeCleanupFailed` and blocks replacement
 for the rest of the process rather than guessing that teardown succeeded.
+
+Each runtime also owns one automatic, bounded first-`Up` bootstrap and one
+serialized ServeConfig publication manager. Public `running` and data-plane
+readiness are withheld until upstream's per-Server reset succeeds. A bootstrap
+failure quarantines that exact generation; Serve/Funnel mutations use bounded
+ETag retries and an indeterminate commit likewise closes the generation rather
+than returning without a trustworthy handle.
 
 Owned transports (`http.bind`, `tcp.bind`, `udp.bind`, `tls.bind`) use private fd-backed capabilities. That keeps listener ownership inside the package and avoids pretending that a localhost proxy is secure. Forwarding APIs (`serve.forward`, `funnel.forward`) intentionally use loopback because their purpose is to publish an existing local HTTP server the application already owns.
 

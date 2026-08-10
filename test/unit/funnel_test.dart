@@ -3,11 +3,21 @@ library;
 
 import 'package:test/test.dart';
 import 'package:tailscale/src/api/funnel.dart';
+import 'package:tailscale/src/errors.dart';
 
 void main() {
   group('Funnel.forward', () {
     test('delegates as HTTPS Funnel and closes through clear', () async {
-      final cleared = <({int tailnetPort, String path, bool funnel})>[];
+      final closed =
+          <
+            ({
+              int tailnetPort,
+              String path,
+              bool funnel,
+              int generation,
+              int mappingToken,
+            })
+          >[];
       final funnel = createFunnel(
         forwardFn:
             ({
@@ -32,14 +42,26 @@ void main() {
                 path: path,
                 https: https,
                 funnel: funnel,
+                generation: 5,
+                mappingToken: 99,
               );
             },
         clearFn:
-            ({required tailnetPort, required path, required funnel}) async {
-              cleared.add((
+            ({required tailnetPort, required path, required funnel}) async {},
+        closeFn:
+            ({
+              required tailnetPort,
+              required path,
+              required funnel,
+              required generation,
+              required mappingToken,
+            }) async {
+              closed.add((
                 tailnetPort: tailnetPort,
                 path: path,
                 funnel: funnel,
+                generation: generation,
+                mappingToken: mappingToken,
               ));
             },
       );
@@ -59,7 +81,15 @@ void main() {
 
       await publication.close();
 
-      expect(cleared, [(tailnetPort: 8443, path: '/api', funnel: true)]);
+      expect(closed, [
+        (
+          tailnetPort: 8443,
+          path: '/api',
+          funnel: true,
+          generation: 5,
+          mappingToken: 99,
+        ),
+      ]);
     });
 
     test('rejects invalid options before calling native code', () async {
@@ -81,6 +111,16 @@ void main() {
             ({required tailnetPort, required path, required funnel}) async {
               called = true;
             },
+        closeFn:
+            ({
+              required tailnetPort,
+              required path,
+              required funnel,
+              required generation,
+              required mappingToken,
+            }) async {
+              called = true;
+            },
       );
 
       expect(
@@ -100,6 +140,51 @@ void main() {
         throwsA(isA<ArgumentError>()),
       );
       expect(called, isFalse);
+    });
+
+    test('rejects a successful result without exact handle identity', () async {
+      final funnel = createFunnel(
+        forwardFn:
+            ({
+              required tailnetPort,
+              required localPort,
+              required localAddress,
+              required path,
+              required https,
+              required funnel,
+            }) async => (
+              url: Uri.parse('https://demo.tailnet.ts.net/'),
+              port: tailnetPort,
+              localAddress: localAddress,
+              localPort: localPort,
+              path: path,
+              https: https,
+              funnel: funnel,
+              generation: -1,
+              mappingToken: -1,
+            ),
+        clearFn:
+            ({required tailnetPort, required path, required funnel}) async {},
+        closeFn:
+            ({
+              required tailnetPort,
+              required path,
+              required funnel,
+              required generation,
+              required mappingToken,
+            }) async {},
+      );
+
+      await expectLater(
+        funnel.forward(localPort: 3000),
+        throwsA(
+          isA<TailscaleFunnelException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.publicationCommitIndeterminate,
+          ),
+        ),
+      );
     });
   });
 }

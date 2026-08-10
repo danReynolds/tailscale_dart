@@ -4,11 +4,19 @@ package tailscale
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"time"
 )
 
-func TcpDialFd(host string, port int, timeout time.Duration) (*TcpFdConn, error) {
+func TcpDialFd(runtimeToken uint64, host string, port int, timeout time.Duration) (*TcpFdConn, error) {
+	if _, ok := acquireNodeGateForRuntimeToken(runtimeToken); !ok {
+		return nil, fmt.Errorf(
+			"%w: TcpDialFd captured runtime %d is no longer current",
+			ErrRuntimeStale,
+			runtimeToken,
+		)
+	}
 	return nil, errors.New("TcpDialFd is not supported on Windows")
 }
 

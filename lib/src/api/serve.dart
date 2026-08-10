@@ -5,25 +5,35 @@ import 'package:meta/meta.dart';
 import '../errors.dart';
 import 'serve_validation.dart';
 
+typedef ServeForwardResult = ({
+  Uri url,
+  int port,
+  String localAddress,
+  int localPort,
+  String path,
+  bool https,
+  bool funnel,
+  int generation,
+  int mappingToken,
+});
+
 typedef ServeForwardFn =
-    Future<
-      ({
-        Uri url,
-        int port,
-        String localAddress,
-        int localPort,
-        String path,
-        bool https,
-        bool funnel,
-      })
-    >
-    Function({
+    Future<ServeForwardResult> Function({
       required int tailnetPort,
       required int localPort,
       required String localAddress,
       required String path,
       required bool https,
       required bool funnel,
+    });
+
+typedef ServeCloseFn =
+    Future<void> Function({
+      required int tailnetPort,
+      required String path,
+      required bool funnel,
+      required int generation,
+      required int mappingToken,
     });
 
 typedef ServeClearFn =
@@ -53,7 +63,13 @@ final class TailscalePublishedService {
     required this.https,
     required this.funnel,
     required Future<void> Function() closeFn,
-  }) : _closeFn = closeFn;
+  }) : _closeFn = closeFn {
+    _publishedServiceFinalizer.attach(
+      this,
+      _PublishedServiceFinalizerToken(closeFn),
+      detach: this,
+    );
+  }
 
   /// URL where clients can reach the publication.
   ///
@@ -88,10 +104,32 @@ final class TailscalePublishedService {
 
   /// Removes this publication from the embedded node.
   ///
-  /// Idempotent for a given handle. If another caller has replaced the same
-  /// path/port before this is called, the current mapping at that path is
-  /// removed.
-  Future<void> close() => _closeFuture ??= _closeFn();
+  /// Idempotent for a given handle. This closes only the exact mapping created
+  /// for this handle. Replaced mappings and mappings from a newer runtime are
+  /// left untouched.
+  Future<void> close() {
+    final existing = _closeFuture;
+    if (existing != null) return existing;
+    late final Future<void> attempt;
+    attempt = Future<void>.sync(_closeFn).then<void>(
+      (_) {
+        if (identical(_closeFuture, attempt)) {
+          _publishedServiceFinalizer.detach(this);
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        // Native retains exact ownership on a confirmed-not-applied failure.
+        // Keep the GC fallback attached and let a later explicit close retry.
+        // The identity check also closes the synchronous-throw assignment race.
+        if (identical(_closeFuture, attempt)) {
+          _closeFuture = null;
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      },
+    );
+    _closeFuture = attempt;
+    return attempt;
+  }
 
   @override
   String toString() =>
@@ -118,6 +156,10 @@ final class TailscalePublishedService {
 /// Tailscale forwards identity headers such as `Tailscale-User-Login`,
 /// `Tailscale-User-Name`, and `Tailscale-User-Profile-Pic` to the loopback
 /// backend. Public Funnel requests do not include those headers.
+///
+/// Funnel visibility is host:port-scoped upstream. Do not place a supposedly
+/// private Serve path on a port that another mapping exposes through Funnel;
+/// use a separate port or authenticate every handler on the shared port.
 ///
 /// Mobile HTTPS publication is not currently a qualified support surface. Do
 /// not infer iOS/Android support from desktop behavior; it remains gated on
@@ -153,15 +195,21 @@ abstract class Serve {
 Serve createServe({
   required ServeForwardFn forwardFn,
   required ServeClearFn clearFn,
-}) => _Serve(forwardFn: forwardFn, clearFn: clearFn);
+  required ServeCloseFn closeFn,
+}) => _Serve(forwardFn: forwardFn, clearFn: clearFn, closeFn: closeFn);
 
 final class _Serve implements Serve {
-  _Serve({required ServeForwardFn forwardFn, required ServeClearFn clearFn})
-    : _forward = forwardFn,
-      _clear = clearFn;
+  _Serve({
+    required ServeForwardFn forwardFn,
+    required ServeClearFn clearFn,
+    required ServeCloseFn closeFn,
+  }) : _forward = forwardFn,
+       _clear = clearFn,
+       _close = closeFn;
 
   final ServeForwardFn _forward;
   final ServeClearFn _clear;
+  final ServeCloseFn _close;
 
   @override
   Future<TailscalePublishedService> forward({
@@ -188,10 +236,7 @@ final class _Serve implements Serve {
         https: https,
         funnel: false,
       );
-      return _publicationFrom(
-        published,
-        closeFn: () => clear(tailnetPort: published.port, path: published.path),
-      );
+      return _publicationFrom(published, closeFn: _close);
     } catch (e) {
       if (e is TailscaleException) rethrow;
       throw TailscaleServeException(
@@ -226,38 +271,59 @@ final class _Serve implements Serve {
 
 @internal
 TailscalePublishedService createPublishedServiceForFunnel({
-  required ({
-    Uri url,
-    int port,
-    String localAddress,
-    int localPort,
-    String path,
-    bool https,
-    bool funnel,
-  })
-  published,
-  required Future<void> Function() closeFn,
+  required ServeForwardResult published,
+  required ServeCloseFn closeFn,
 }) => _publicationFrom(published, closeFn: closeFn);
 
 TailscalePublishedService _publicationFrom(
-  ({
-    Uri url,
-    int port,
-    String localAddress,
-    int localPort,
-    String path,
-    bool https,
-    bool funnel,
-  })
-  published, {
-  required Future<void> Function() closeFn,
-}) => TailscalePublishedService._(
-  url: published.url,
-  port: published.port,
-  localAddress: published.localAddress,
-  localPort: published.localPort,
-  path: published.path,
-  https: published.https,
-  funnel: published.funnel,
-  closeFn: closeFn,
-);
+  ServeForwardResult published, {
+  required ServeCloseFn closeFn,
+}) {
+  if (published.generation <= 0 || published.mappingToken <= 0) {
+    const message =
+        'Native runtime returned a publication without an exact handle.';
+    if (published.funnel) {
+      throw const TailscaleFunnelException(
+        message,
+        code: TailscaleErrorCode.publicationCommitIndeterminate,
+      );
+    }
+    throw const TailscaleServeException(
+      message,
+      code: TailscaleErrorCode.publicationCommitIndeterminate,
+    );
+  }
+
+  Future<void> close() => closeFn(
+    tailnetPort: published.port,
+    path: published.path,
+    funnel: published.funnel,
+    generation: published.generation,
+    mappingToken: published.mappingToken,
+  );
+  return TailscalePublishedService._(
+    url: published.url,
+    port: published.port,
+    localAddress: published.localAddress,
+    localPort: published.localPort,
+    path: published.path,
+    https: published.https,
+    funnel: published.funnel,
+    closeFn: close,
+  );
+}
+
+final class _PublishedServiceFinalizerToken {
+  const _PublishedServiceFinalizerToken(this.close);
+
+  final Future<void> Function() close;
+}
+
+final _publishedServiceFinalizer = Finalizer<_PublishedServiceFinalizerToken>((
+  token,
+) {
+  // Finalizers are best-effort and cannot surface failures to a caller. Wrap
+  // both synchronous throws and asynchronous errors so an unreachable handle
+  // can never produce an unhandled isolate error.
+  Future<void>.sync(token.close).ignore();
+});

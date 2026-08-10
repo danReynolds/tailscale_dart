@@ -2,20 +2,23 @@
 
 ## Status
 
-**Accepted; implementation in progress — R4d code present 2026-08-10.**
+**Accepted; implementation in progress — R5 code present 2026-08-10.**
 
 This is the source of truth for the target architecture and implementation
 order. It incorporates the August 2026 architecture alignment audit, review of
 the current repository and open pull requests, Keybay's current platform
 contract, and Tailscale v1.102.2 source behavior.
 
-The current source now contains the `nodeRuntime`/supervisor foundations and
-R4d's atomic secure-state cutover: persistent nodes use the Keybay-backed
-encrypted StateStore, ephemeral nodes use an in-memory Store, local forget is
-explicit, and the SQLite runtime/dependency are gone. This does not mark the
-plan or a release complete. The outstanding Android/platform receipts, R5
-publication convergence, R6 storage/sidecar evidence, later ownership work,
-and R10 integrated gate remain authoritative requirements below.
+The current source now contains the `nodeRuntime`/supervisor foundations,
+R4d's atomic secure-state cutover, and R5's runtime-owned publication manager,
+first-`Up` readiness gate, and exact publication handles. Persistent nodes use
+the Keybay-backed encrypted StateStore, ephemeral nodes use an in-memory Store,
+local forget is explicit, and the SQLite runtime/dependency are gone. This does
+not mark the plan or a release complete. Hosted Funnel-tailnet and replacement
+receipts passed on 2026-08-10; crash/restart evidence, Android/mobile and
+platform receipts, R6
+storage/sidecar evidence, later ownership work, and the R10 integrated gate
+remain authoritative requirements below.
 
 The two detailed decisions are:
 
@@ -288,12 +291,12 @@ require backup exclusion while we pursue an upstream-supported encrypted
 cert-store hook.
 
 On iOS and Android, upstream compiles the LocalAPI certificate endpoint as a
-404 stub, so the package's current direct `ListenTLS` and `ListenFunnel` paths
-cannot complete their default certificate flow. `tls.bind` remains unsupported
-until an alternate certificate path has real-device receipts. R5 instead moves
-Funnel to shared `ServeConfig`/`AllowFunnel`; that target avoids the same
-LocalAPI call but remains **unqualified** until real-device handshakes and the
-sidecar inventory pass. The private HTTP/TCP/UDP path remains the mobile core.
+404 stub, so `tls.bind` remains unsupported until an alternate certificate path
+has real-device receipts. R5 removed the package's direct `ListenFunnel` path
+and moved Funnel to shared `ServeConfig`/`AllowFunnel`; that implementation
+avoids the package-side certificate call but remains **unqualified** until
+real-device handshakes and the sidecar inventory pass. The private HTTP/TCP/UDP
+path remains the mobile core.
 
 Do not spoof Kubernetes environment detection to route certificates through
 StateStore.
@@ -309,7 +312,7 @@ the decisions made during review supersede these parts:
 | Evaluate an identity-preserving storage migration. | No migration. The package is pre-launch; recognized SQLite or plaintext FileStore artifacts fail with an explicit legacy-state error until the caller resets. |
 | Treat storage largely as a simplification question. | Storage is a first-class mobile security boundary with Keybay custody, binary FFI, a cross-system state lease, crash states, and a full sidecar inventory. |
 | Keep teardown strengthening near the registry refactor. | Add an explicit supervisor/native fail-safe contract for worker death, timeout, partial start, and abandoned non-cancellable work. |
-| Assume existing TLS/Funnel platform claims carry forward. | Current direct `ListenTLS`/`ListenFunnel` are unsupported on iOS/Android. `tls.bind` needs another certificate path; R5's ServeConfig Funnel path is unqualified until real-device and sidecar receipts pass. |
+| Assume existing TLS/Funnel platform claims carry forward. | `tls.bind` still needs another mobile certificate path. R5 removed direct `ListenFunnel`, but its ServeConfig Funnel path remains unqualified until real-device and sidecar receipts pass. |
 | Treat the custom Start-error defer as ordinary cleanup. | Never call `Server.Close` when `Server.Start` returned an error; upstream already unwinds partial initialization and forbids Close before successful Start. |
 | Treat Funnel's Up as a Funnel-local concern. | Every runtime starts one automatic per-Server `Up` bootstrap before Running/readiness; TLS/Serve/Funnel paths join its stored result so upstream's reset cannot erase an earlier mapping. |
 | Leave auth-key replacement behavior implicit. | Match upstream: auth keys enroll fresh state; they do not silently destroy an existing identity. Logout and offline local forget are separate operations. |
@@ -321,17 +324,17 @@ stays as the justified Dart/mobile data-plane adaptation.
 
 ## Live work disposition
 
-Snapshot: 2026-08-09.
+Snapshot: 2026-08-10.
 
 | Artifact | Decision | Required exit |
 | --- | --- | --- |
-| PR [#90](https://github.com/danReynolds/tailscale_dart/pull/90) | Keep; it supersedes #85 and #88 and lands first. | Use Tailscale v1.102.2 and Go 1.26.5 or newer; repair the Android smoke shell; obtain a genuine x86_64 boot/no-SIGSYS receipt; merge. |
-| PR [#89](https://github.com/danReynolds/tailscale_dart/pull/89) | Keep its Serve/Funnel convergence behavior and tests; #90 does not replace it. Do not merge its temporary process-global ownership design. | Rebase after R2 onto `nodeRuntime`; merge as R5 after the R4d secure-state cutover, with one runtime-owned ServeConfig authority and automatic bootstrap. Treat mobile ServeConfig Funnel as unqualified until R6 receipts. |
-| PR [#86](https://github.com/danReynolds/tailscale_dart/pull/86) | Superseded by encrypted-state work. Do not merge a SQLite upgrade immediately before deleting SQLite. | Close once R0 is merged and the replacement R4 issue/stack is linked; do not wait for cutover. |
-| Issue [#81](https://github.com/danReynolds/tailscale_dart/issues/81) | Addressed by #90. | Close via a merged #90 with the Android runtime receipt. |
-| Issue [#87](https://github.com/danReynolds/tailscale_dart/issues/87) | Addressed by repaired #89. | Close only after the publication lifecycle and live gates pass. |
+| PR [#90](https://github.com/danReynolds/tailscale_dart/pull/90) | Merged 2026-08-10; it superseded #85 and #88. | Complete: Tailscale v1.102.2 / Go 1.26.5, repaired Android smoke shell, and genuine x86_64 boot/no-SIGSYS receipt landed in `4d98c22`. |
+| PR [#89](https://github.com/danReynolds/tailscale_dart/pull/89) | Its useful convergence behavior and hosted tests have been adapted into the R5 replacement; do not merge #89's temporary process-global ownership design. | Merge the reviewed R5 replacement after its automated gates, then close #89 with the replacement link. The crash/restart and mobile/platform receipts remain separate evidence gates. |
+| PR [#86](https://github.com/danReynolds/tailscale_dart/pull/86) | Closed unmerged 2026-08-10; superseded by the encrypted-state cutover. | Complete: SQLite was removed rather than upgraded. |
+| Issue [#81](https://github.com/danReynolds/tailscale_dart/issues/81) | Closed 2026-08-10 by merged #90. | Complete: the Android runtime receipt is recorded in #90. |
+| Issue [#87](https://github.com/danReynolds/tailscale_dart/issues/87) | The R5 replacement implements the in-process lifecycle fix; #89 itself remains superseded. | Keep open until the true persisted-state process-crash/restart receipt passes, then close it with the merged R5 replacement link and receipt. |
 | Dirty SQLite contract worktree | Preserve only as test evidence. Do not merge its SQLite implementation. | Generalize nil-delete, exact-empty, reopen, and concurrency cases into the R4b StateStore suite; use non-opening legacy-file recognition in R2/R4d, then retire the worktree. |
-| Dirty Serve/Funnel worktree | Preserve its semantic deletion and tests; its ownership model is not final. | Rebase its useful work onto `nodeRuntime` in R5 without a compatibility publication global. |
+| Dirty Serve/Funnel worktree | Its useful semantic deletion and live-test intent are incorporated into R5; its ownership model is superseded. | Retire only after the R5 replacement is merged and linked. |
 
 No issue or PR should claim a supersession until the replacement is linked and
 its acceptance criteria are recorded.
@@ -341,10 +344,10 @@ its acceptance criteria are recorded.
 Each row is intentionally issue-sized. The dependency column is a merge-order
 constraint, not an instruction to combine the work into one large PR.
 
-Implementation snapshot: R2/R3 lifecycle foundations and R4a-R4d secure-state
-code are present in the current source. The table continues to state each
-workstream's full acceptance result; code presence does not satisfy uncollected
-platform or release receipts.
+Implementation snapshot: R2/R3 lifecycle foundations, R4a-R4d secure state, and
+R5 publication-convergence code are present in the current source. The table
+continues to state each workstream's full acceptance result; code presence does
+not satisfy uncollected hosted, platform, or release receipts.
 
 | ID | Workstream | Depends on | Required result |
 | --- | --- | --- | --- |
@@ -528,6 +531,15 @@ Store land as reviewable dependent changes.
 
 ### R5 — runtime-owned publication convergence
 
+**Implementation status:** the current source has the runtime-owned manager,
+automatic bounded first-`Up` bootstrap, shared data-plane readiness gate,
+three-attempt typed ETag policy, indeterminate-commit quarantine, and exact
+generation/mapping-token handles with focused Go and Dart tests. Opt-in hosted
+tests for Funnel tailnet reachability and Serve -> Funnel -> Serve replacement
+passed serially on 2026-08-10 and also compile/skip without credentials.
+Crash/restart stale-config evidence, mobile handshakes, and sidecar inventory
+remain pending receipts; the requirements below stay authoritative.
+
 - Rebase #89 after R2 and preserve its public `serve.forward` /
   `funnel.forward` convergence and useful live tests. The bootstrap result,
   ServeConfig mutation queue, and mapping tokens belong directly to the exact
@@ -569,6 +581,10 @@ Store land as reviewable dependent changes.
 - Give every returned publication a unique mapping token. Closing/finalizing a
   replaced same-generation handle or an old-generation handle is an idempotent
   stale no-op and cannot clear its successor.
+- Keep a confirmed publication in native pending-delivery custody until Dart
+  validates and acknowledges the exact generation/mapping-token handle. Result
+  loss must actively quarantine that runtime, with a bounded native timer as
+  fallback when the helper or caller isolate cannot run compensation.
 - Add the crash-restart bootstrap receipt: leave a publication active, simulate
   process death, restart and perform only ordinary `up()`, and prove the old
   configuration is cleared before Running/readiness becomes observable. Close
@@ -608,9 +624,10 @@ families demonstrate the same useful abstraction.
 
 Identity-bound Dart capabilities participate in the same gate. R5 already makes
 every `TailscalePublishedService` token/epoch-conditional and runtime-owned.
-R7a adds generation/closed capture to returned HTTP clients. An old HTTP client
-fails stale after restart instead of dialing through process-global FFI as the
-new node. Test both publication replacement and full down/up/new-resource
+R5 also gives each returned HTTP client a runtime token and closed bit, so an
+old client fails stale after restart instead of dialing as the new node. R7a
+moves the underlying connection pool from its owner-keyed process cache onto
+the runtime. Test both publication replacement and full down/up/new-resource
 capability cases.
 
 R7c keeps one watcher only for state the Dart API promises reactively: node
@@ -699,8 +716,9 @@ After R1 lands:
   after R2. R4c integrates only after R3; R4d is one atomic cutover.
 - Do not publish a package release between R2 and R4d. This replaces the planned
   SQLite repair/probe bridge with a review stack that lands final code only.
-- Rebase #89 after R2 so development can proceed against `nodeRuntime`, but
-  merge R5 after R4d and implement publication ownership there exactly once.
+- R5's replacement is implemented after R4d directly on `nodeRuntime`. Do not
+  merge #89's temporary ownership design; close it after the replacement is
+  merged and linked.
 - R7 implementation may begin after R4d and migrates one resource family at a
   time, but no release containing that stack bypasses the R6 platform/inventory
   gate.
@@ -720,7 +738,7 @@ Every workstream owns focused tests, and R10 reruns the integrated matrix.
 | Hosted Tailscale | Serve/Funnel ordering and clearing, desktop TLS handshake, control-plane logout failure/success, no stale publication. |
 | Android | Cross-build plus real x86_64 and physical/representative device start/reconnect/stop; core private data plane. |
 | iOS | Real-device start/reconnect/stop and core private data plane. |
-| Mobile publication | Current direct `ListenTLS`/`ListenFunnel` unsupported. `tls.bind` needs an alternate cert path. Target ServeConfig Funnel remains unqualified until real iOS/Android handshakes and sidecar inventory pass. |
+| Mobile publication | `tls.bind` needs an alternate certificate path. R5 ServeConfig Funnel and HTTPS Serve remain unqualified until real iOS/Android handshakes and sidecar inventory pass. |
 | Persistence security | Wrong/missing key, tamper/truncation, before/after-rename response loss, two-process lease, fail-closed permissions, platform-owned backup-exclusion receipt, plaintext secret inventory. |
 | Performance | Startup/reconnect, StateStore write, LocalAPI/WhoIs p50/p95/p99, allocations/CPU and 1/8/32-acceptor throughput/netmap churn, memory/handle counts across repeated cycles. |
 

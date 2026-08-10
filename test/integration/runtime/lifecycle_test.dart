@@ -632,7 +632,6 @@ void main() {
       expect((await Tailscale.instance.status()).state, NodeState.stopped);
       final census = await Tailscale.instance.diag.nodeState();
       expect(census.servePublications, 0);
-      expect(census.funnelForwarders, 0);
       expect(census.httpBindings, 0);
       expect(census.tcpListeners, 0);
       expect(census.udpBridges, 0);
@@ -782,7 +781,6 @@ void main() {
 
         final census = await Tailscale.instance.diag.nodeState();
         expect(census.servePublications, 0);
-        expect(census.funnelForwarders, 0);
         expect(census.httpBindings, 0);
         expect(census.tcpListeners, 0);
         expect(census.udpBridges, 0);

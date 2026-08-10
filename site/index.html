@@ -77,7 +77,7 @@
             </div>
             <div>
               <dt>Platforms</dt>
-              <dd>Core networking: macOS, iOS, Android, Linux. Mobile TLS/Funnel is not yet supported.</dd>
+              <dd>Core networking: macOS, iOS, Android, Linux. Mobile TLS/HTTPS Serve/Funnel remains unqualified.</dd>
             </div>
           </dl>
         </div>
@@ -115,9 +115,10 @@ print(res.statusCode);</code></pre>
             This is intentionally explicit. Implemented means there is a typed
             Dart API and coverage in unit, integration, Headscale, or live
             Tailscale tests depending on what the feature requires.
-            Default tsnet TLS and Funnel certificate fetching is disabled
-            upstream on iOS and Android, so those HTTPS surfaces are currently
-            desktop/server-only.
+            TLS certificate lookup is disabled upstream on iOS and Android.
+            R5 Funnel now uses shared ServeConfig rather than ListenFunnel, but
+            mobile HTTPS Serve/Funnel still awaits real-device and sidecar
+            receipts.
           </p>
         </div>
         <p class="table-caption">
@@ -169,7 +170,7 @@ print(res.statusCode);</code></pre>
                 <td>Serve and Funnel</td>
                 <td><code>serve.forward</code>, <code>funnel.forward</code></td>
                 <td><span class="status done">Implemented</span></td>
-                <td>Forward an existing loopback HTTP server. Funnel is desktop/server-only; mobile HTTPS Serve still needs its own real-device receipt.</td>
+                <td>One runtime-owned ServeConfig authority forwards an existing loopback server; Funnel is its public visibility mode. The hosted R5 tailnet/swap receipt passed 2026-08-10; mobile remains unqualified.</td>
               </tr>
               <tr>
                 <td>Tailscale Services</td>
@@ -357,7 +358,7 @@ print(res.statusCode);</code></pre>
             </article>
             <article>
               <h3>Lifecycle fails safe</h3>
-              <p>Startup timeout or worker death quarantines only the matching native generation, joins its publishers, and rejects stale events before another worker binds.</p>
+              <p>Startup timeout, worker death, first-Up failure, or an indeterminate publication commit quarantines only the matching native generation and rejects stale events before another worker binds.</p>
             </article>
             <article>
               <h3>Persistent storage fails closed</h3>
@@ -368,8 +369,8 @@ print(res.statusCode);</code></pre>
               <p><code>http.bind</code>, <code>tcp.bind</code>, <code>udp.bind</code>, and <code>tls.bind</code> move data through private fd capabilities and the shared reactor.</p>
             </article>
             <article>
-              <h3>Forwarding is intentionally loopback</h3>
-              <p><code>serve.forward</code> and <code>funnel.forward</code> are for existing local HTTP servers. Shelf handlers can also run directly on <code>http.bind</code> with the tested adapter example.</p>
+              <h3>Forwarding shares upstream authority</h3>
+              <p><code>serve.forward</code> and <code>funnel.forward</code> mutate one runtime-owned ServeConfig for existing loopback HTTP servers. Exact handles cannot clear replacements; Shelf handlers can run directly on <code>http.bind</code>.</p>
             </article>
           </div>
         </div>

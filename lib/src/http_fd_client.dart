@@ -11,6 +11,8 @@ import 'errors.dart';
 import 'fd_transport.dart';
 import 'ffi_bindings.dart' as native;
 import 'http_fd_protocol.dart';
+import 'native_offload_gate.dart';
+import 'native_error_code.dart';
 
 const int _responseHeadPrefixBytes = 4;
 
@@ -19,18 +21,79 @@ const int _responseHeadPrefixBytes = 4;
 /// Request and response bodies are streamed over private POSIX fd capabilities
 /// rather than a local TCP proxy.
 final class TailscaleHttpClient extends http.BaseClient {
+  TailscaleHttpClient({required this.runtimeToken});
+
+  /// Exact native runtime capability captured when this client was created.
+  final int runtimeToken;
+  bool _closed = false;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (_closed) {
+      throw http.ClientException(
+        'Tailscale HTTP client is closed.',
+        request.url,
+      );
+    }
     if (Platform.isWindows) {
       throw const TailscaleHttpException('Windows is not supported.');
     }
-    final start = _startNativeRequest(request);
+    final nativeRequest = _NativeHttpRequest.fromRequest(request);
+    // The native readiness gate can join the one bounded first-Up bootstrap.
+    // Keep that synchronous FFI wait off the caller's event-loop isolate.
+    final start = await runCappedNativeOffload(
+      () => _startNativeRequest(runtimeToken, nativeRequest),
+    );
+    if (_closed) {
+      closePosixFdForCleanup(start.requestBodyFd);
+      closePosixFdForCleanup(start.responseBodyFd);
+      throw http.ClientException(
+        'Tailscale HTTP client is closed.',
+        request.url,
+      );
+    }
     return _sendOverFds(
       requestBodyFd: start.requestBodyFd,
       responseBodyFd: start.responseBodyFd,
       request: request,
     );
   }
+
+  @override
+  void close() {
+    _closed = true;
+  }
+}
+
+final class _NativeHttpRequest {
+  const _NativeHttpRequest({
+    required this.method,
+    required this.url,
+    required this.headersJson,
+    required this.contentLength,
+    required this.followRedirects,
+    required this.maxRedirects,
+  });
+
+  factory _NativeHttpRequest.fromRequest(http.BaseRequest request) =>
+      _NativeHttpRequest(
+        method: request.method,
+        url: request.url.toString(),
+        headersJson: jsonEncode({
+          for (final entry in request.headers.entries)
+            entry.key: <String>[entry.value],
+        }),
+        contentLength: request.contentLength ?? -1,
+        followRedirects: request.followRedirects,
+        maxRedirects: request.maxRedirects,
+      );
+
+  final String method;
+  final String url;
+  final String headersJson;
+  final int contentLength;
+  final bool followRedirects;
+  final int maxRedirects;
 }
 
 /// Drives [request] over the two native fds and returns the streamed response.
@@ -108,49 +171,80 @@ Future<http.StreamedResponse> sendOverFdsForTesting({
 );
 
 ({int requestBodyFd, int responseBodyFd}) _startNativeRequest(
-  http.BaseRequest request,
+  int runtimeToken,
+  _NativeHttpRequest request,
 ) {
   final methodPtr = request.method.toNativeUtf8();
-  final urlPtr = request.url.toString().toNativeUtf8();
-  final headersPtr = jsonEncode({
-    for (final entry in request.headers.entries)
-      entry.key: <String>[entry.value],
-  }).toNativeUtf8();
+  final urlPtr = request.url.toNativeUtf8();
+  final headersPtr = request.headersJson.toNativeUtf8();
 
   try {
     final resultPtr = native.duneHttpStart(
+      runtimeToken,
       methodPtr,
       urlPtr,
       headersPtr,
-      request.contentLength ?? -1,
+      request.contentLength,
       request.followRedirects ? 1 : 0,
       request.maxRedirects,
     );
-    final json = resultPtr.toDartString();
-    native.duneFree(resultPtr);
+    late final String json;
+    try {
+      json = resultPtr.toDartString();
+    } finally {
+      native.duneFree(resultPtr);
+    }
 
     final parsed = jsonDecode(json) as Map<String, dynamic>;
     final error = parsed['error'] as String?;
     if (error != null) {
-      throw TailscaleHttpException(error);
-    }
-
-    final requestBodyFd = parsed['requestBodyFd'] as int?;
-    final responseBodyFd = parsed['responseBodyFd'] as int?;
-    if (requestBodyFd == null ||
-        requestBodyFd < -1 ||
-        responseBodyFd == null ||
-        responseBodyFd < 0) {
-      throw const TailscaleHttpException(
-        'Native runtime did not return usable HTTP fds.',
+      throw TailscaleHttpException(
+        error,
+        code: parseNativeErrorCode(parsed['code'] as String?),
+        statusCode: parsed['statusCode'] as int?,
       );
     }
-    return (requestBodyFd: requestBodyFd, responseBodyFd: responseBodyFd);
+
+    return validateNativeHttpFdsForTesting(
+      requestBodyFd: parsed['requestBodyFd'],
+      responseBodyFd: parsed['responseBodyFd'],
+    );
   } finally {
     calloc.free(methodPtr);
     calloc.free(urlPtr);
     calloc.free(headersPtr);
   }
+}
+
+/// Validates and assumes ownership of the native HTTP fd pair.
+///
+/// Native is expected to return either `-1` for an absent request body or a
+/// non-negative request fd, plus a non-negative response fd. If that contract
+/// is violated after native has already created one usable descriptor, close
+/// every descriptor Dart can identify before surfacing the protocol error.
+@visibleForTesting
+({int requestBodyFd, int responseBodyFd}) validateNativeHttpFdsForTesting({
+  required Object? requestBodyFd,
+  required Object? responseBodyFd,
+  void Function(int) closeFd = closePosixFdForCleanup,
+}) {
+  if (requestBodyFd is int &&
+      requestBodyFd >= -1 &&
+      responseBodyFd is int &&
+      responseBodyFd >= 0) {
+    return (requestBodyFd: requestBodyFd, responseBodyFd: responseBodyFd);
+  }
+
+  final ownedFds = <int>{
+    if (requestBodyFd is int && requestBodyFd >= 0) requestBodyFd,
+    if (responseBodyFd is int && responseBodyFd >= 0) responseBodyFd,
+  };
+  for (final fd in ownedFds) {
+    closeFd(fd);
+  }
+  throw const TailscaleHttpException(
+    'Native runtime did not return usable HTTP fds.',
+  );
 }
 
 Future<void> _writeRequestBody(Stream<List<int>> body, int fd) async {

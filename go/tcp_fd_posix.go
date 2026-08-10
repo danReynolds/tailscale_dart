@@ -3,6 +3,8 @@
 package tailscale
 
 import (
+	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -39,12 +41,20 @@ var (
 	tcpFdListenerMu       sync.Mutex
 )
 
-// TcpDialFd opens an outbound TCP connection to a tailnet peer and returns a
-// POSIX fd connected to that stream.
+// TcpDialFd opens an outbound TCP connection for the exact captured runtime
+// token and returns a POSIX fd connected to that tailnet stream.
 //
 // The returned fd is owned by the caller. Go keeps the other side of a
 // socketpair and pipes it to the tsnet connection.
-func TcpDialFd(host string, port int, timeout time.Duration) (*TcpFdConn, error) {
+func TcpDialFd(runtimeToken uint64, host string, port int, timeout time.Duration) (*TcpFdConn, error) {
+	gate, ok := acquireNodeGateForRuntimeToken(runtimeToken)
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: TcpDialFd captured runtime %d is no longer current",
+			ErrRuntimeStale,
+			runtimeToken,
+		)
+	}
 	if host == "" {
 		return nil, errors.New("host is required")
 	}
@@ -52,17 +62,15 @@ func TcpDialFd(host string, port int, timeout time.Duration) (*TcpFdConn, error)
 		return nil, fmt.Errorf("invalid port %d", port)
 	}
 
-	runtime := currentRuntime()
-	if runtime == nil {
-		return nil, fmt.Errorf("%w: TcpDialFd called before Start", ErrRuntimeStale)
+	// Bounded even with no caller timeout — see defaultNativeCallTimeout.
+	ctx, cancel := boundedCallCtxFrom(gate.runtime.ctx, timeout)
+	defer cancel()
+	if err := gate.awaitDataPlaneReady(ctx); err != nil {
+		return nil, fmt.Errorf("tailnet dial data plane: %w", err)
 	}
 
-	// Bounded even with no caller timeout — see defaultNativeCallTimeout.
-	ctx, cancel := boundedCallCtxFrom(runtime.ctx, timeout)
-	defer cancel()
-
-	tailConn, err := runtime.server.Dial(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
-	err = runtime.resultError(err)
+	tailConn, err := gate.s.Dial(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	err = gate.runtime.resultError(err)
 	if err != nil {
 		if tailConn != nil {
 			_ = tailConn.Close()
@@ -98,6 +106,9 @@ func TcpListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 	if !ok {
 		return nil, errors.New("TcpListenFd called before Start")
 	}
+	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+		return nil, fmt.Errorf("tcp listen data plane: %w", err)
+	}
 
 	addr := net.JoinHostPort(tailnetHost, strconv.Itoa(tailnetPort))
 	ln, err := gate.s.Listen("tcp", addr)
@@ -117,14 +128,50 @@ func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 	if !ok {
 		return nil, errors.New("TlsListenFd called before Start")
 	}
+	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+		return nil, fmt.Errorf("tls listen data plane: %w", err)
+	}
+	if gate.runtime.localClient == nil {
+		return nil, errors.New("tls listen local client is unavailable")
+	}
 
 	addr := net.JoinHostPort(tailnetHost, strconv.Itoa(tailnetPort))
-	ln, err := gate.s.ListenTLS("tcp", addr)
+	ln, err := listenTLSOnReadyServer(
+		gate.s,
+		gate.runtime.localClient.GetCertificate,
+		"tcp",
+		addr,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("tsnet listen tls %s: %w", addr, err)
 	}
 
 	return registerTcpFdListener(gate, ln, tailnetHost)
+}
+
+// readyTLSListenServer is the subset of tsnet.Server used after the runtime's
+// mandatory first-Up bootstrap has completed. Deliberately absent is
+// ListenTLS: that convenience method calls Server.Up internally and would
+// create a second lifecycle/publication-reset authority.
+type readyTLSListenServer interface {
+	CertDomains() []string
+	Listen(network, addr string) (net.Listener, error)
+}
+
+func listenTLSOnReadyServer(
+	s readyTLSListenServer,
+	getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error),
+	network string,
+	addr string,
+) (net.Listener, error) {
+	if len(s.CertDomains()) == 0 {
+		return nil, errors.New("tsnet: you must enable HTTPS in the admin panel to proceed. See https://tailscale.com/s/https")
+	}
+	ln, err := s.Listen(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	return tls.NewListener(ln, &tls.Config{GetCertificate: getCertificate}), nil
 }
 
 func registerTcpFdListener(gate nodeGate, ln net.Listener, fallbackAddress string) (*TcpFdListener, error) {

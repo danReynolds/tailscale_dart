@@ -32,32 +32,38 @@ simpler replacement. Current security requirements change that conclusion:
 Keybay already implements the platform-specific custody work in Dart. It can
 hold an opaque 32-byte data-encryption key in Apple Keychain or in its
 authenticated file whose root key is protected by Android Keystore, macOS
-Keychain, or Linux Secret Service. Keybay cannot be called from Go, and it
-should not become a mandatory core dependency on platforms where its current
-contract is unavailable.
+Keychain, or Linux Secret Service. Keybay cannot be called from Go, so core
+calls it on the Dart caller isolate and transfers only the raw key bytes across
+FFI. Keybay is the required production custody mechanism for persistent nodes.
 
 ## Decision summary
 
 For persistent nodes:
 
-1. The core Dart package depends on a narrow
-   `TailscaleStateKeyCustodian` interface.
-2. Keybay is the intended/reference implementation of that interface.
+1. The core Dart package depends directly on `package:keybay` for production
+   persistent-state custody.
+2. Core binds one caller-supplied stable host application identifier to one
+   dedicated Keybay namespace and DEK entry; production callers do not select
+   an alternate provider.
 3. A native exclusive state lease serializes key and file operations across
    isolates and processes.
 4. Dart obtains or creates one 32-byte random DEK while holding that lease.
 5. The key crosses FFI as raw bytes plus an explicit length.
 6. Go implements `ipn.StateStore` as an in-memory logical map persisted in one
    versioned, authenticated encrypted file.
-7. The store embeds `ipn.EncryptedStateStore`, exactly implements upstream
+7. After startup, Go retains one runtime-scoped in-memory DEK copy; ordinary
+   StateStore reads and writes never call Keybay. Runtime close wipes that copy
+   best-effort, and a later runtime reads the DEK from Keybay again.
+8. The store embeds `ipn.EncryptedStateStore`, exactly implements upstream
    concurrency, missing-key, and nil-delete behavior, and adds TPM-style clone
    discipline so callers cannot mutate its cache by alias.
-8. Every missing-key, corrupt, legacy, conflicting, residual, incomplete-reset,
-   or unavailable-custodian condition fails closed.
-9. `down()` preserves the state and key. Successful `logout()` or explicit
-   local forget first records durable reset intent, then destroys the exact key
-   and package-owned subtree in a retry-safe order.
-10. Legacy SQLite/FileStore state is not migrated pre-launch.
+9. Every missing-key, corrupt, legacy, conflicting, residual, incomplete-reset,
+   or unavailable-Keybay condition fails closed.
+10. `down()` and `logout()` preserve the storage container and DEK. Logout lets
+   upstream remove the current profile from the logical StateStore only after
+   confirmed control-plane success. Only explicit local forget records durable
+   reset intent and destroys the exact key and package-owned subtree.
+11. Legacy SQLite/FileStore state is not migrated pre-launch.
 
 Ephemeral nodes use an in-memory StateStore and do not create a DEK or
 persistent StateStore. Because tsnet still requires a writable `Server.Dir` for
@@ -71,8 +77,8 @@ owner-only scratch, so that location must also be excluded from backup.
 
 This cutover belongs to R4d. Its persistent-root occupancy check is strictly
 filesystem-only: ephemeral startup never invokes `read`, `write`, or `delete` on
-the custodian. It rejects a reset marker, recognized persistent artifacts, or a
-non-empty package-owned state subtree. A custodian-only orphan is intentionally
+Keybay. It rejects a reset marker, recognized persistent artifacts, or a
+non-empty package-owned state subtree. A Keybay-only orphan is intentionally
 invisible to ephemeral mode, remains untouched, and is reported by the next
 persistent secure probe.
 
@@ -108,54 +114,39 @@ publication rollback. Solving replay requires a separately protected monotonic
 counter/digest plus a cross-system commit protocol; that is explicitly deferred
 from v1 rather than implied by authentication encryption.
 
-## Dart key-custody interface
+## Dart Keybay custody boundary
 
-The target core interface is intentionally bound to one logical Tailscale state
-store:
+Production persistence uses Keybay's bytes API directly. Core lazily creates a
+`SecretStorage` on the caller/UI isolate, using one caller-supplied stable host
+application identifier and the dedicated namespace below. It never sends the
+Keybay object to the control worker. The worker first acquires the native state
+lease, the caller performs the Keybay operation, and only the resulting bytes
+are transferred to the worker for native startup.
 
-```dart
-abstract interface class TailscaleStateKeyCustodian {
-  /// Returns the existing DEK without creating one.
-  Future<Uint8List?> read();
-
-  /// Persists this store's newly generated 32-byte DEK.
-  Future<void> write(Uint8List key);
-
-  /// Idempotently deletes only this store's DEK.
-  Future<void> delete();
-}
-```
+Keybay is lifecycle-scoped, not a StateStore backend. Fresh provisioning reads
+and then writes the DEK once; a normal later runtime reads it once; explicit
+local forget deletes it once. Ordinary logout performs no Keybay mutation.
+While a runtime is active, Go uses its in-memory DEK for every encrypted
+StateStore mutation and makes no Keybay round trips. An explicit idle
+secure-state probe may perform a bounded read because it must authenticate the
+envelope before classifying its contents.
 
 Contract:
 
-- `read()` never creates or repairs state and returns a fresh caller-owned,
-  mutable byte buffer with no provider alias.
+- `read()` never creates or repairs Tailscale state and its result is copied
+  into a fresh core-owned mutable buffer.
 - `write()` is called only for confirmed fresh state while the external state
-  lease is held. It is not a rotation API. The provider copies the input before
-  its Future completes and does not retain an alias, so the core may zero its
-  buffer after `await`. Completion with an error does **not** prove that the
-  provider made no durable change; `delete()` is therefore idempotent and is the
-  compensating action after any unsuccessful fresh-key write attempt.
-- the core generates the DEK with `Random.secure()` and validates exactly 32
-  bytes before and after custody.
-- `delete()` removes one logical entry, never a whole secret store.
-- every custodian error propagates. There is no plaintext, constant-key, or
-  generated-key fallback.
-- one custodian binding must map to exactly one stable host application and one
+  lease is held. It is not a rotation API. Completion with an error does
+  **not** prove that Keybay made no durable change; deleting the exact entry is
+  therefore the compensating action after any unsuccessful fresh-key write
+  attempt whose encrypted envelope did not commit.
+- core generates the DEK with `Random.secure()` and validates exactly 32 bytes
+  before and after Keybay custody.
+- reset calls `delete()` for the exact DEK entry and never calls `deleteAll()`.
+- every Keybay error propagates. There is no plaintext, constant-key, alternate
+  provider, or generated-key fallback.
+- one Keybay namespace maps to exactly one stable host application and one
   Tailscale state root.
-
-A compliant production custodian keeps the key outside the deletable Tailscale
-state root, persists it through normal app restarts, protects it at rest with an
-OS keystore/keychain/HSM or an authenticated container rooted there, exposes no
-plaintext fallback, deletes only this logical key, and never logs key bytes.
-The Dart interface cannot prove those properties; the platform adapter's threat
-model and receipts must.
-
-The custodian stays on the caller/UI isolate and is never sent to the control
-worker. This avoids Dart isolate sendability and platform-binding assumptions.
-The worker first acquires the native state lease, the caller performs the
-custodian operation, and the resulting bytes are transferred to the worker for
-the native start.
 
 The exact public initialization spelling is reviewed in the implementation PR,
 but its shape is:
@@ -163,17 +154,19 @@ but its shape is:
 ```dart
 Tailscale.init(
   stateDir: appSupportDirectory.path,
-  stateKeyCustodian: applicationTailscaleKeyCustodian,
+  appId: 'com.example.myapp',
 );
 ```
 
-Persistent enrollment without a custodian returns a typed secure-storage error.
-Tests may use an explicit fake custodian. Production code never gets an
-insecure built-in file-key implementation.
+Core derives the dedicated Keybay namespace from `appId`; callers do not pass a
+custodian object. Persistent startup returns a typed secure-storage error when
+Keybay is unavailable. A package-internal test constructor may use Keybay's
+`SecretStorage.withBackend` fake seam; production API does not expose an
+alternate custody provider.
 
-## Keybay adapter policy
+## Keybay namespace policy
 
-The reference adapter binds a dedicated Keybay namespace:
+Core binds a dedicated Keybay namespace:
 
 ```text
 Keybay appId: <stable-host-application-id>.tailscale
@@ -183,19 +176,18 @@ label:        Tailscale node-state encryption key
 
 The host supplies the stable application identifier. Do not derive it from an
 absolute `stateDir`, process name, hostname, or package-global
-`tailscale-dart` value. The adapter validates Keybay's identifier rules and
+`tailscale-dart` value. Core validates Keybay's identifier rules and
 length limit before state preparation.
 
 Use a dedicated Keybay `appId` rather than mixing this DEK with unrelated app
 secrets. Use Keybay's byte API, not its string convenience API. Never use
-`deleteAll()` for logout or recovery.
+`deleteAll()` for local forget or recovery; ordinary logout never deletes the
+DEK entry.
 
-The core package does not import `package:keybay` directly. Workstream R4a adds
-a first-party companion package at `packages/tailscale_keybay/` with
-`KeybayTailscaleStateKeyCustodian`, its own pubspec, and contract/platform tests.
-That package depends on both `tailscale` and `keybay`; core `tailscale` depends
-only on the interface. This is the maintained reference integration, not an
-unowned copy-paste example.
+The core package imports `package:keybay` directly and R4a adds it to the core
+pubspec at a reviewed version. There is no `tailscale_keybay` companion package
+and no optional production custodian surface. The integration and its
+contract/platform tests live with core.
 
 ## Keybay platform boundary
 
@@ -206,14 +198,15 @@ Verified against Keybay 0.1.0:
 | iOS | Data Protection Keychain, device-only/non-syncing item policy. | Intended persistent-node adapter; real-device restart and uninstall/orphan behavior tests required. |
 | Entitled macOS | Data Protection Keychain. | Intended adapter. |
 | Unentitled macOS/CLI | Keybay encrypted file with its root key in login Keychain. | Intended adapter; locked/unreachable Keychain fails closed. |
-| Android 12 / API 31+ | Keybay encrypted file; root key wrapped by Android Keystore, with measured StrongBox fallback. | Intended adapter; API <31 requires another custodian or persistent startup is unsupported. |
+| Android 12 / API 31+ | Keybay encrypted file; root key wrapped by Android Keystore, with measured StrongBox fallback. | Required persistent mechanism; API <31 does not support persistent nodes. |
 | Linux desktop | Keybay encrypted file; root key in Secret Service. | Intended adapter only with available, unlocked Secret Service and `secret-tool`. |
-| Headless Linux | No supported Keybay availability contract. | Supply another compliant custodian; never fall back to plaintext. |
+| Headless Linux | No supported Keybay availability contract. | Persistent nodes are unsupported; ephemeral nodes remain available. Never fall back to plaintext. |
 | Windows | Unsupported by Keybay and currently by tailscale_dart. | Out of scope. |
 
-Keybay is pre-1.0 and exact-pins its cryptography dependency. The seam prevents
-that from freezing the core package's dependency graph or future platform
-choices.
+Keybay is pre-1.0 and exact-pins its cryptography dependency. Direct integration
+accepts that dependency and platform contract deliberately in exchange for one
+secure production path. Any future change of custody mechanism is an explicit
+architecture and migration decision, not an application plug-in choice.
 
 ## Persistent-state lease
 
@@ -320,7 +313,7 @@ same root/lease rules. A reset uses the generation-bound transaction described
 below.
 
 Two callers configured with the same Keybay entry but different state roots are
-a host configuration error. The reference adapter documents and tests the
+a host configuration error. The core Keybay binding documents and tests the
 one-to-one binding.
 
 ## On-disk layout
@@ -615,7 +608,7 @@ returning a `noState` value.
 | Unrecognized residual subtree, no marker | `unexpectedStateResidue` without custody read | Throws `unexpectedStateResidue`; no remote call or mutation. | Creates the durable marker, then idempotently deletes the exact DEK and owned subtree. |
 | State subtree and marker absent, DEK absent | `noState` | Completes; no Server, remote call, custodian mutation, or subtree deletion. | Completes as an idempotent no-op. |
 | Authenticated exactly-empty envelope plus DEK | `noState` | Completes; no remote call or deletion, and preserves the pair. Makes no claim that a remote device record was never created or was revoked. | Warns that a remote record may remain, then deletes the DEK and owned subtree. |
-| Authenticated non-empty envelope plus DEK | stopped with persisted state | Constructs/reuses the minimum runtime, performs remote logout, and on confirmed success runs reset. Failure/timeout closes the mutated generation, preserves evidence, and throws `logoutIndeterminate`. | Warns that a remote record may remain, then deletes the DEK and owned subtree without a remote call. |
+| Authenticated non-empty envelope plus DEK | stopped with persisted state | Constructs/reuses the minimum runtime and performs upstream logout. Confirmed success preserves the DEK and upstream-mutated encrypted store, then reports `noState`; failure/timeout closes the mutated generation, preserves the same storage pair as recovery evidence, and throws `logoutIndeterminate`. | Warns that a remote record may remain, then deletes the DEK and owned subtree without a remote call. |
 | Orphan DEK, no envelope | `orphanedDek` | Throws `orphanedDek`; no remote call or automatic deletion. | Idempotently deletes the exact DEK, then removes the exact owned subtree if present. |
 | Canonical encrypted file, DEK absent | `missingDek` | Throws `missingDek`; no remote call or automatic deletion. | Performs idempotent DEK deletion/absence confirmation, then removes the owned subtree. |
 | Malformed/unsupported envelope or authenticated-open failure | the exact format/authentication error | Throws the same typed error; no remote call or automatic deletion. | Deletes the exact DEK first, then removes the owned subtree. A malformed outer envelope is not opened merely to reset it. |
@@ -662,7 +655,7 @@ non-mutating secure probe:
 - no package-owned subtree/marker plus no custodied key means `noState`;
 - no recognized state file plus a custodied key is the orphan-key error from
   the startup matrix, not `noState`;
-- an encrypted file requires the configured custodian and successful
+- an encrypted file requires the configured Keybay binding and successful
   authentication before classifying it as exactly empty or non-empty;
 - an authenticated empty map means `noState`;
 - an authenticated non-empty map means persisted state exists, not that the
@@ -681,27 +674,25 @@ the lease. It preserves the encrypted file and Keybay DEK for reconnect.
 
 After upstream remote logout succeeds:
 
-1. detach and drain the runtime in reset mode, Server and Store first, while the
-   controller remains draining;
-2. transfer the still-held generation-bound lease to `resetTransaction` and
-   durably create the reset-intent marker;
-3. delete the exact Keybay DEK from the caller isolate;
-4. after key deletion succeeds, remove exactly `<stateBaseDir>/tailscale/`;
-5. after durable subtree removal, remove the marker and retain the external lock
-   file;
-6. publish `noState` only after the complete protocol succeeds.
+1. upstream has already removed the current profile through the ordinary
+   `StateStore.WriteState(..., nil)` contract and persisted any logged-out
+   structural state it intentionally retains;
+2. detach and close the runtime, then wipe its in-memory DEK copy and release
+   the state lease;
+3. preserve the Keybay DEK, authenticated envelope, and package-owned subtree;
+4. publish `noState` from the confirmed upstream result.
 
-Before awaiting non-cancellable custodian deletion, mark the exact reset token
-`resetCustodyActive`. Timeout or worker exit keeps the controller draining and
-the lease quarantined. A late delete success proceeds to step 4; a late error
-preserves the subtree and produces typed incomplete/manual recovery. No new
-generation is admitted until the Future and its required filesystem action
-settle.
+Logout never creates a reset marker and never calls Keybay `delete`. The DEK is
+an application-installation storage key, not a Tailscale login-session key.
+Reusing it for a later enrollment is cryptographically sound because every
+envelope write uses a fresh nonce. It also matches upstream's behavior: logout
+deletes the current profile but retains the StateStore backend so a restarted
+client remains authoritatively logged out.
 
-A crash anywhere after the reset marker commits leaves `localResetIncomplete`,
-regardless of which ciphertext, log, certificate, or directory entry was
-already removed. The next startup fails closed; repeating explicit local forget
-finishes the transaction.
+If the worker exits after native completion but before delivering the result,
+R3's retained lifecycle receipt returns the same confirmed `noState`
+disposition. If runtime close fails, lifecycle admission remains poisoned; that
+is a resource-cleanup failure, not a key/file reset transaction.
 
 ### Failed remote logout
 
@@ -743,8 +734,8 @@ uses ACME, upstream handling can persist:
 
 The accurate release claim is:
 
-> The Tailscale StateStore is authenticated and encrypted with a key held by the
-> configured platform custodian. Other upstream runtime files are inventoried
+> The Tailscale StateStore is authenticated and encrypted with a key held by
+> Keybay. Other upstream runtime files are inventoried
 > separately and may rely on owner-only permissions and backup exclusion.
 
 For any supported TLS/Serve/Funnel path in the first secure-state release:
@@ -808,7 +799,7 @@ verified the relevant platform policy.
 The Dart surface should expose stable, non-secret error codes/types for at
 least:
 
-- secure custodian unavailable/locked/busy;
+- Keybay unavailable/locked/busy;
 - invalid DEK length;
 - orphaned DEK;
 - missing DEK for existing ciphertext;
@@ -875,7 +866,7 @@ do not expose the DEK, StateStore values, or auth key.
 
 ### Custody and lease
 
-- Keybay adapter uses the exact dedicated appId/entry/label contract;
+- the core Keybay binding uses the exact dedicated appId/entry/label contract;
 - missing, locked, busy, corrupt, invalidated, and non-32-byte read responses map
   to the correct failure with no StateStore mutation; only permitted owner-only
   base/lock coordination infrastructure may have been created;
@@ -907,7 +898,7 @@ do not expose the DEK, StateStore values, or auth key.
 - every row in the idle-operation matrix asserts `Future<void>` completion or
   exact error, remote-call count, key/file mutations, later status, and remote
   record warning;
-- fault-inject reset before/after marker sync, DEK deletion, removal of the
+- fault-inject explicit local forget before/after marker sync, DEK deletion, removal of the
   envelope, every sidecar/log removal boundary, subtree sync, marker removal,
   and final sync. Before durable marker commit nothing is deleted; afterward
   every restart reports `localResetIncomplete` until explicit local forget
@@ -917,8 +908,9 @@ do not expose the DEK, StateStore values, or auth key.
   write;
 - crash after key write/before envelope is reported as orphan, not fresh;
 - successful enrollment then process restart preserves the stable node ID;
-- `down` preserves state/key; remote logout failure preserves them; successful
-  logout and local forget follow durable-intent-then-key-first deletion;
+- `down`, successful logout, and remote logout failure preserve the StateStore
+  container and DEK; only explicit local forget follows
+  durable-intent-then-key-first deletion;
 - inject remote-logout timeout after possible remote success, then close/reopen
   and reconcile without promising the retained profile is unchanged or
   automatically retryable;
@@ -982,7 +974,9 @@ documented startup/write budget.
 Because the package is pre-launch, rollout is a clean cut after the runtime and
 fail-safe foundations:
 
-1. **R4a:** add the custodian interface, fake, and Keybay reference companion.
+1. **R4a:** add Keybay directly to core, require the stable host application
+   identifier, bind the dedicated DEK entry, and add package-internal fake
+   backend tests.
 2. **R4b:** land the encrypted Store unwired with the reusable Go contract/fault
    matrix.
 3. **R4c:** add native admission/lease and extend R3's supervisor-owned tokens
@@ -1013,8 +1007,10 @@ state or that falls back to plaintext when custody fails.
 - **Encrypt SQLite.** Retains a database and native dependency for a tiny map,
   requires a separate encryption solution, and creates WAL/key-management
   complexity.
-- **Mandatory direct Keybay dependency.** Imposes Keybay's platform and package
-  constraints on all consumers and cannot serve custom/headless custodians.
+- **Optional custodian interface and Keybay companion.** Preserves custom and
+  headless provider flexibility, but creates multiple production security paths
+  and makes the supported mobile setup look optional. Persistent support now
+  deliberately follows Keybay's verified platform contract instead.
 - **Pass a Keybay secret into Go as text.** Creates avoidable encoded copies and
   logging/error hazards.
 - **Keep the DEK beside ciphertext.** Provides obfuscation, not protection from

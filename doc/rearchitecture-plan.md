@@ -53,9 +53,9 @@ it does not mean copying the Go API shape into Dart.
 - Make every teardown cause use one safe, idempotent runtime-close path.
 - Match upstream enrollment, logout, StateStore, Serve, and Funnel semantics.
 - Encrypt the complete logical Tailscale StateStore with a key held outside the
-  state directory, using Keybay as the intended Dart-side custodian.
-- Avoid forcing Keybay's platform and dependency constraints on every core
-  package consumer by depending on a narrow custodian interface.
+  state directory, using Keybay as the required production Dart-side custodian.
+- Integrate Keybay directly in the core package so persistent-state security has
+  one maintained, documented path rather than an optional provider ecosystem.
 - Keep the POSIX fd capability bridge and Go-owned protocol parsing where they
   are the simplest high-performance adaptation.
 - Remove global registries, caches, locks, and persistence dependencies as
@@ -85,7 +85,7 @@ it does not mean copying the Go API shape into Dart.
 ```text
 Application / Flutter UI isolate
   |
-  | owns TailscaleStateKeyCustodian (Keybay adapter is the reference)
+  | owns the core Keybay SecretStorage binding for one dedicated DEK
   | supervises the control worker and observes worker exit
   v
 Dart control worker isolate
@@ -135,8 +135,8 @@ than comments:
    failure converges on the same detach-then-close machinery.
 8. A metadata-only format probe may run under the state lease before custody.
    Persistent StateStore content is never created, decrypted/opened, or replaced
-   without both that lease and a valid 32-byte key from the configured
-   custodian.
+   without both that lease and a valid 32-byte key from the core Keybay
+   binding.
 9. Missing keys, corrupt ciphertext, conflicting formats, and custody failures
    fail closed; none silently starts an empty plaintext identity.
 10. `WriteState(id, nil)` deletes the value and future reads return
@@ -188,26 +188,38 @@ the broader status model.
 Do not adopt plaintext FileStore and do not wrap it with per-value encryption.
 Implement the small StateStore contract directly as one authenticated,
 whole-map encrypted file. Model its cryptographic construction and contract
-behavior after Tailscale's TPM store, while Keybay or another compliant
-custodian holds the data-encryption key outside the state directory.
+behavior after Tailscale's TPM store, while Keybay holds the data-encryption
+key outside the state directory.
 
 This is not a database workload. State persistence is not on the data plane;
 SQLite, WAL files, and the native SQLite dependency add more code and a larger
 security surface without a demonstrated benefit.
 
-### Keep Keybay on the Dart side behind a seam
+### Use Keybay directly for production custody
 
-The core package defines a `TailscaleStateKeyCustodian` interface. The intended
-adapter binds one stable host-application namespace and one dedicated Keybay
-entry. The custodian object remains on the caller isolate; only the key bytes
-are transferred to the control worker and then to Go.
+The core package depends directly on `package:keybay` and binds one stable
+host-application namespace to one dedicated Keybay entry. Production callers
+do not select or implement an alternate custodian. Keybay remains on the caller
+isolate; only the key bytes are transferred to the control worker and then to
+Go, so this still does not attempt to link a Dart library into Go.
 
-This avoids linking a Dart library into Go and avoids imposing Keybay's Android
-API 31+, desktop Secret Service, pre-1.0, and exact dependency constraints on
-consumers that need a different secure custodian.
+The caller supplies one stable host application identifier. Core derives the
+dedicated `<host-application-id>.tailscale` Keybay namespace and freezes it as
+part of `init` identity. A narrow package-internal seam may inject a fake
+Keybay backend for deterministic tests; it is not a production extension
+point.
 
-Persistent nodes fail closed when no compliant custodian is available.
-Ephemeral nodes may use an in-memory StateStore and need no persistent key.
+Keybay is touched only at storage lifecycle boundaries: initial DEK creation,
+one read for a later persistent runtime or explicit idle authenticated probe,
+and explicit local-forget deletion. Ordinary logout does not mutate Keybay. The
+active `nodeRuntime` retains its DEK in memory and ordinary StateStore reads and
+writes never call Keybay.
+
+Persistent nodes fail closed when Keybay is unavailable. This deliberately
+limits persistent support to Keybay's verified platform contract: iOS,
+supported macOS modes, Android API 31+, and Linux desktop with an available
+Secret Service. Ephemeral nodes use an in-memory StateStore, never invoke
+Keybay, and remain available where the core runtime otherwise works.
 
 ### Make identity replacement explicit
 
@@ -218,10 +230,12 @@ pass a caller-supplied key to upstream and let `LocalBackend` decide whether the
 persisted profile makes it irrelevant. A repeated `up()` on an already active
 runtime cannot change immutable enrollment inputs and simply preserves the
 current identity. Normal `logout()` follows the upstream remote-logout contract
-and performs no package-controlled local deletion when control-plane logout
-fails. That outcome is indeterminate because the remote operation may still
-have succeeded; retained data is recovery evidence, not a promise that it is
-unchanged or retryable.
+and never deletes the lower-level StateStore container or DEK. On confirmed
+success, upstream removes the current logical profile while the encrypted
+container and application-installation DEK remain available for the next
+enrollment. On failure, the outcome is indeterminate because the remote
+operation may still have succeeded; retained data is recovery evidence, not a
+promise that it is unchanged or retryable.
 
 Provide a separately named destructive local-forget/reset operation for the
 offline-recovery case. Its documentation must say that the remote node may
@@ -329,7 +343,7 @@ constraint, not an instruction to combine the work into one large PR.
 | R1 | Upstream and Android baseline | R0 | Merge repaired #90 on v1.102.2 / Go 1.26.5+ with all normal CI and a real Android x86_64 boot receipt. |
 | R2 | `nodeRuntime` and enrollment safety | R1 | Introduce controller/current runtime, cached LocalClient, Store/closer slots, generation, context, and one close path; remove the private `_machinekey`/creating-`HasState` preflight and every auth-key-triggered wipe/revoke. |
 | R3 | Supervisor and lifecycle fail-safe | R2 | Worker exit, `up()` timeout, partial start, abandoned calls, and indeterminate remote logout converge safely; no late active runtime and no failed-logout deletion. |
-| R4a | Custodian seam and Keybay companion | R2 | Add the core contract, fake, first-party `packages/tailscale_keybay/`, and custodian identity to `init` without changing selected persistence. |
+| R4a | Direct Keybay integration | R2 | Add the core Keybay dependency, stable host-app namespace in `init`, dedicated DEK entry, and package-internal fake-backend tests without changing selected persistence. |
 | R4b | Unwired encrypted Store | R2 | Implement the strict whole-map Go StateStore and reusable contract/fuzz/race/fault suite; do not patch SQLite. |
 | R4c | Lease, custody phases, and binary DEK bridge | R3, R4a | Extend R3's tokens with process-local plus OS admission, possibly-committed write compensation, custody quarantine, and raw DEK FFI. |
 | R4d | Atomic secure-state cutover | R4b, R4c | Switch probe/start/status/logout/forget/ephemeral together, enforce the no-migration matrix, then delete SQLite, `DuneHasState`, and the dependency in the same cutover. |
@@ -374,9 +388,9 @@ constraint, not an instruction to combine the work into one large PR.
 - Freeze configuration identity. `init` creates/verifies the app-owned base
   coordination directory, resolves its canonical native path/inode identity
   (so lexical, symlink, and case aliases cannot create two owners), and compares
-  that identity plus the exact `logLevel`; R4a adds Dart object identity of the
-  custodian, not value equality. Repeated `init` is a no-op only for that exact
-  tuple.
+  that identity plus the exact `logLevel`; R4a adds the exact validated host
+  application identifier and derived Keybay namespace. Repeated `init` is a
+  no-op only for that exact tuple.
 - Freeze the active-`up` tuple as `(hostname, canonicalControlURL, ephemeral)`.
   Hostname is the exact validated string: empty is the upstream-default
   sentinel, leading/trailing whitespace is rejected, and case is not folded.
@@ -445,8 +459,9 @@ constraint, not an instruction to combine the work into one large PR.
 - Make `logout()` remote-first. On timeout/failure perform no package-controlled
   deletion, detach/close the potentially mutated runtime, report
   `logoutIndeterminate`, and reconcile with a fresh runtime because the remote
-  operation may already have succeeded. Final successful cleanup and the public
-  `forgetLocalIdentity()` matrix land once, with R4d's reset transaction.
+  operation may already have succeeded. On confirmed success, preserve the
+  lower-level Store and DEK after upstream removes the profile. The destructive
+  `forgetLocalIdentity()` matrix lands separately with R4d's reset transaction.
 - Until R7c moves watcher ownership, tag every Go-to-Dart status/error/peer push
   with the runtime generation and drop stale pushes. Do not bind a replacement
   worker port until the old watcher and quarantine are joined.
@@ -464,8 +479,9 @@ second failure path.
 
 Implement as a dependent review stack but one release gate:
 
-1. **R4a:** public custodian interface, fake, maintained Keybay companion, and
-   custodian-instance extension to `init` configuration identity.
+1. **R4a:** direct core Keybay integration, required stable host application
+   identifier, dedicated DEK entry, and package-internal fake-backend tests;
+   extend `init` configuration identity with the derived Keybay namespace.
 2. **R4b:** strict encrypted Go Store, initially unwired, with a reusable
    StateStore contract suite generalized from the SQLite worktree plus
    malformed-input, race, fault, and replay tests. No SQLite implementation
@@ -490,9 +506,9 @@ key/file states. They may be separate review commits in one dependent stack,
 but the public release gate is one vertical slice.
 
 Ephemeral occupancy in R4d is intentionally filesystem-only. Ephemeral startup
-never reads, writes, or deletes the custodian; it rejects recognized persistent
+never reads, writes, or deletes Keybay; it rejects recognized persistent
 artifacts/non-empty package state under the configured root and otherwise uses
-fresh scratch. A custodian-only orphan cannot be observed without violating
+fresh scratch. A Keybay-only orphan cannot be observed without violating
 that rule, so ephemeral mode leaves it untouched and a later persistent probe
 reports it explicitly.
 
@@ -556,7 +572,7 @@ Store land as reviewable dependent changes.
 ### R6 — platform and secret-inventory receipts
 
 - Prove fresh enrollment and restart with the real Keybay backend on each
-  supported target, not only with the fake custodian.
+  supported target, not only with the package-internal fake backend.
 - Run crash/response-loss fault cases across custody write, encrypted-envelope
   rename, reset-marker commit, key deletion, and subtree cleanup.
 - Verify fail-closed permissions, Apple/Android host-owned backup exclusion,
@@ -669,7 +685,7 @@ After R1 lands:
   integration, so neither needs a temporary process-global owner.
 - R3 establishes rescue/timeout behavior before R4c introduces a state lease
   that can otherwise survive a worker failure.
-- R4a Keybay adapter work and R4b encrypted-Store tests may proceed in parallel
+- R4a direct Keybay work and R4b encrypted-Store tests may proceed in parallel
   after R2. R4c integrates only after R3; R4d is one atomic cutover.
 - Do not publish a package release between R2 and R4d. This replaces the planned
   SQLite repair/probe bridge with a review stack that lands final code only.

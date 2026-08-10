@@ -105,8 +105,8 @@ Subsequent launches can call `up()` without an auth key. The node identity is pe
 > support directory (`getApplicationSupportDirectory()`) over the documents
 > directory and apply the platform backup-exclusion rules. The accepted
 > [encrypted-state design](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md) replaces SQLite with
-> an authenticated encrypted StateStore whose key is held by Keybay or another
-> compliant platform custodian.
+> an authenticated encrypted StateStore whose key is held by Keybay, integrated
+> directly into the core package as the required persistent-state mechanism.
 
 For short-lived CI jobs, preview environments, and disposable test nodes, pass
 `ephemeral: true` to register a node that Tailscale removes after it goes

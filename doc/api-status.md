@@ -88,7 +88,7 @@ returning a transitional state such as `starting`.
 | `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine; `ephemeral: true` registers short-lived CI/test nodes. Same-config active calls are idempotent and an auth key never replaces the active identity. Concurrent startup returns `lifecycleBusy`; active tuple mismatch returns `configurationMismatch`. Resolves on the first stable state only. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
 | `down()` | ✅ | Stop engine, keep persisted credentials. | `await tsnet.down();` |
 | `logout()` | ✅ | Stop + wipe persisted credentials. | `await tsnet.logout();` |
-| `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. | `final s = await tsnet.status();` |
+| `status()` → `TailscaleStatus` | ✅ | Snapshot: state, IPs, health, MagicDNS suffix. While idle, `stopped` means recognized local state artifacts exist; it does not prove valid enrollment or reconnectability. | `final s = await tsnet.status();` |
 | `nodes()` → `List<TailscaleNode>` | ✅ | Current node inventory. | `final nodes = await tsnet.nodes();` |
 | `nodeByIp(ip)` → `TailscaleNode?` | ✅ | Lookup a known node by Tailscale IP from the current inventory. | `final node = await tsnet.nodeByIp('100.64.0.5');` |
 | `onStateChange` → `Stream<NodeState>` | ✅ | Duplicate-filtered state transitions. Repeated `needsLogin` remains observable so callers can refresh `status().authUrl`. | `tsnet.onStateChange.listen(print);` |

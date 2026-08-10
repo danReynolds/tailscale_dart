@@ -282,6 +282,82 @@ func ensurePrivateDirectory(path string) error {
 	return nil
 }
 
+// ensurePrivateOwnedDirectory creates or secures one package-owned directory
+// without following a symbolic link at that path. The configured state root
+// may itself be supplied through a symlink alias and is canonicalized by
+// Configure; descendants such as tailscale/ and tailscale/logs are package
+// storage boundaries and must remain real directories.
+func ensurePrivateOwnedDirectory(path string) error {
+	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+
+	before, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if before.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("path is a symbolic link")
+	}
+	if !before.IsDir() {
+		return fmt.Errorf("path is not a directory")
+	}
+
+	// Chmod the verified directory handle, not the path. Revalidate its path
+	// identity before and after mutation so a swapped symlink or directory is
+	// rejected without chmodding an external target.
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	opened, err := dir.Stat()
+	if err != nil {
+		return err
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(opened, current) {
+		return fmt.Errorf("directory identity changed while securing it")
+	}
+	if err := dir.Chmod(0o700); err != nil {
+		return err
+	}
+	final, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if final.Mode()&os.ModeSymlink != 0 || !final.IsDir() || !os.SameFile(opened, final) {
+		return fmt.Errorf("directory identity changed while securing it")
+	}
+	if got := final.Mode().Perm(); got != 0o700 {
+		return fmt.Errorf("permissions are %04o, want 0700", got)
+	}
+	return nil
+}
+
+// removeOwnedDirectory refuses ambiguous package-owned paths. RemoveAll does
+// not follow a terminal symlink, which protects its target but could otherwise
+// make logout report success while credentials remain in that target.
+func removeOwnedDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("path is a symbolic link")
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("path is not a directory")
+	}
+	return os.RemoveAll(path)
+}
+
 func setRawDiscoCompatibility() error {
 	if err := os.Setenv("TS_ENABLE_RAW_DISCO", "false"); err != nil {
 		return fmt.Errorf("configure TS_ENABLE_RAW_DISCO compatibility: %w", err)

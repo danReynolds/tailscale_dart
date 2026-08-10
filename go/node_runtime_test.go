@@ -78,6 +78,33 @@ func TestConfiguredStateDirRejectsReplacedRoot(t *testing.T) {
 	}
 }
 
+func TestLogoutRejectsSymlinkedOwnedStateWithoutRemovingTarget(t *testing.T) {
+	stateDir := configureFreshStateRootForTest(t)
+	target := t.TempDir()
+	marker := filepath.Join(target, "state.db")
+	if err := os.WriteFile(marker, []byte("external credentials"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, stateDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if err := Logout(); err == nil {
+		t.Fatal("Logout reported success for a symlinked package-owned state directory")
+	}
+	info, err := os.Lstat(stateDir)
+	if err != nil {
+		t.Fatalf("state symlink was removed: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("package-owned state path is no longer the original symlink")
+	}
+	got, err := os.ReadFile(marker)
+	if err != nil || string(got) != "external credentials" {
+		t.Fatalf("external credential target = %q, %v; want untouched", got, err)
+	}
+}
+
 func TestRuntimeController_ReservationAndConfigIdentity(t *testing.T) {
 	var controller runtimeController
 	config := runtimeConfig{

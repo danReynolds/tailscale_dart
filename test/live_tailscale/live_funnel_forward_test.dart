@@ -25,6 +25,7 @@ import 'package:test/test.dart';
 
 import '../e2e/support/native_asset_workaround.dart';
 import '../e2e/support/state_waiters.dart';
+import '../integration/support/process_state_root.dart';
 import 'support/tailscale_api.dart';
 
 void main() {
@@ -68,7 +69,7 @@ void main() {
     }
     try {
       final dir = stateDir;
-      if (dir != null) Directory(dir).deleteSync(recursive: true);
+      if (dir != null) clearProcessIntegrationState(Directory(dir));
     } catch (_) {}
     api?.close();
   });
@@ -79,9 +80,9 @@ void main() {
       await warmUpNativeAssetForPeerSubprocesses();
 
       api = LiveTailscaleApi(apiKey: apiKey, tailnetId: tailnetId);
-      stateDir = Directory.systemTemp
-          .createTempSync('tailscale_live_funnel_')
-          .path;
+      final processStateRoot = processIntegrationStateRoot();
+      clearProcessIntegrationState(processStateRoot);
+      stateDir = processStateRoot.path;
       final authKey = await api!.createAuthKey();
 
       Tailscale.init(stateDir: stateDir!);

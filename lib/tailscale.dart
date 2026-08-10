@@ -149,7 +149,8 @@ class Tailscale implements TailscaleClient {
 
   pkg_http.Client? _http;
   List<TailscaleNode>? _latestNodes;
-  bool _nativeStartInFlight = false;
+  final LifecycleQueue _publicLifecycle = LifecycleQueue();
+  bool _publicUpInFlight = false;
 
   late final _worker = Worker(
     publishState: _stateController.add,
@@ -514,13 +515,39 @@ class Tailscale implements TailscaleClient {
     }
     final validatedHostname = validateRuntimeHostname(hostname);
     final canonicalControlUrl = canonicalizeControlUrl(controlUrl);
-    if (_nativeStartInFlight) {
+    if (_publicUpInFlight) {
       throw const TailscaleUpException(
         'Another node start is already in progress.',
         code: TailscaleErrorCode.lifecycleBusy,
       );
     }
 
+    // Reserve the complete public lifecycle operation synchronously. Native
+    // start serialization alone is insufficient: up() still has to observe a
+    // stable state and construct Dart-side capabilities after start returns.
+    _publicUpInFlight = true;
+    try {
+      return await _publicLifecycle.run(
+        () => _runUpLifecycle(
+          hostname: validatedHostname,
+          authKey: authKey ?? '',
+          ephemeral: ephemeral,
+          controlUrl: canonicalControlUrl,
+          timeout: timeout,
+        ),
+      );
+    } finally {
+      _publicUpInFlight = false;
+    }
+  }
+
+  Future<TailscaleStatus> _runUpLifecycle({
+    required String hostname,
+    required String authKey,
+    required bool ephemeral,
+    required String controlUrl,
+    required Duration timeout,
+  }) async {
     // Only count stable states that arrive AFTER start() returns. A prior
     // runtime's lingering emission must not satisfy a new construction.
     final stable = Completer<void>();
@@ -538,22 +565,11 @@ class Tailscale implements TailscaleClient {
     // budget or hang if the native call wedges.
     final elapsed = Stopwatch()..start();
     try {
-      _nativeStartInFlight = true;
       final startFuture = _worker.start(
-        hostname: validatedHostname,
-        authKey: authKey ?? '',
+        hostname: hostname,
+        authKey: authKey,
         ephemeral: ephemeral,
-        controlUrl: canonicalControlUrl,
-      );
-      unawaited(
-        startFuture.then<void>(
-          (_) {
-            _nativeStartInFlight = false;
-          },
-          onError: (Object _, StackTrace _) {
-            _nativeStartInFlight = false;
-          },
-        ),
+        controlUrl: controlUrl,
       );
 
       bool alreadyActive;
@@ -609,8 +625,9 @@ class Tailscale implements TailscaleClient {
   /// inventory is separate; call [nodes] when you need it.
   ///
   /// Safe to call before [up] — returns [NodeState.stopped] when
-  /// persisted credentials exist (ready to reconnect) and
-  /// [NodeState.noState] when they don't.
+  /// recognized local state artifacts exist and [NodeState.noState] when they
+  /// don't. This is a conservative occupancy signal, not proof that the local
+  /// state is enrolled, valid, or sufficient to reconnect without an auth key.
   @override
   Future<TailscaleStatus> status() async {
     _requireInitialized();
@@ -706,25 +723,27 @@ class Tailscale implements TailscaleClient {
   @override
   Future<void> down() async {
     _requireInitialized();
-    _reset();
-    try {
-      await _worker.down();
-    } finally {
-      // A preceding queued up() may have completed after the eager reset and
-      // constructed Dart-side capabilities before this down reached native.
+    await _publicLifecycle.run(() async {
       _reset();
-    }
+      try {
+        await _worker.down();
+      } finally {
+        _reset();
+      }
+    });
   }
 
   /// Logs out and clears persisted credentials.
   @override
   Future<void> logout() async {
     _requireInitialized();
-    _reset();
-    try {
-      await _worker.logout();
-    } finally {
+    await _publicLifecycle.run(() async {
       _reset();
-    }
+      try {
+        await _worker.logout();
+      } finally {
+        _reset();
+      }
+    });
   }
 }

@@ -331,6 +331,101 @@ func TestRuntimeConstruction_TightensExistingLogDirectory(t *testing.T) {
 	}
 }
 
+func TestRuntimeConstruction_RejectsSymlinkedOwnedDirectoriesWithoutTouchingTargets(t *testing.T) {
+	for _, component := range []string{"tailscale", "logs"} {
+		t.Run(component, func(t *testing.T) {
+			stateDir := configureFreshStateRootForTest(t)
+			if component == "logs" {
+				if err := os.Mkdir(stateDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			target := t.TempDir()
+			if err := os.Chmod(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(target, "keep")
+			if err := os.WriteFile(marker, []byte("external"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			link := stateDir
+			if component == "logs" {
+				link = filepath.Join(stateDir, "logs")
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+
+			storeOpened := false
+			deps := runtimeStartDependencies{
+				openStore: func(string) (ipn.StateStore, io.Closer, error) {
+					storeOpened = true
+					return nil, nil, errors.New("store must not open")
+				},
+				configureHostNetwork: func(string) error { return nil },
+			}
+			if _, err := startRuntimeWithDependencies("node", "", "", stateDir, false, "", deps); err == nil {
+				t.Fatal("start accepted a symlinked package-owned directory")
+			}
+			if storeOpened {
+				t.Fatal("store opened through a symlinked package-owned directory")
+			}
+			got, err := os.ReadFile(marker)
+			if err != nil || string(got) != "external" {
+				t.Fatalf("external target marker = %q, %v; want untouched", got, err)
+			}
+			info, err := os.Stat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != 0o755 {
+				t.Fatalf("external target permissions = %04o, want untouched 0755", got)
+			}
+			if _, err := os.Stat(filepath.Join(target, "logs")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("external target gained package logs directory: %v", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeConstruction_RejectsWrongTypeOwnedDirectoriesBeforeStoreOpen(t *testing.T) {
+	for _, component := range []string{"tailscale", "logs"} {
+		t.Run(component, func(t *testing.T) {
+			stateDir := configureFreshStateRootForTest(t)
+			path := stateDir
+			if component == "logs" {
+				if err := os.Mkdir(stateDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				path = filepath.Join(stateDir, "logs")
+			}
+			if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			storeOpened := false
+			deps := runtimeStartDependencies{
+				openStore: func(string) (ipn.StateStore, io.Closer, error) {
+					storeOpened = true
+					return nil, nil, errors.New("store must not open")
+				},
+				configureHostNetwork: func(string) error { return nil },
+			}
+			if _, err := startRuntimeWithDependencies("node", "", "", stateDir, false, "", deps); err == nil {
+				t.Fatal("start accepted a non-directory package-owned path")
+			}
+			if storeOpened {
+				t.Fatal("store opened through a non-directory package-owned path")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != "not a directory" {
+				t.Fatalf("wrong-type path = %q, %v; want untouched", got, err)
+			}
+		})
+	}
+}
+
 func TestRuntimeClose_DoesNotHoldControllerLockWhileDraining(t *testing.T) {
 	configureFreshStateRootForTest(t)
 	enteredClose := make(chan struct{})

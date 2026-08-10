@@ -92,7 +92,7 @@ func Logout() error {
 	if wasRunning {
 		publishState("Stopped")
 	}
-	removeErr := os.RemoveAll(stateDir)
+	removeErr := removeOwnedDirectory(stateDir)
 	if removeErr != nil {
 		closeErr = errors.Join(closeErr, fmt.Errorf("failed to remove state dir: %w", removeErr))
 	}
@@ -206,11 +206,11 @@ func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string
 		return false, err
 	}
 
-	if err := ensurePrivateDirectory(stateDir); err != nil {
+	if err := ensurePrivateOwnedDirectory(stateDir); err != nil {
 		return false, fmt.Errorf("prepare state dir: %w", err)
 	}
 	logDir := filepath.Join(stateDir, "logs")
-	if err := ensurePrivateDirectory(logDir); err != nil {
+	if err := ensurePrivateOwnedDirectory(logDir); err != nil {
 		return false, fmt.Errorf("prepare log dir: %w", err)
 	}
 

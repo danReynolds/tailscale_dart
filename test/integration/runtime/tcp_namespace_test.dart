@@ -31,7 +31,13 @@ void main() {
     test('throws TailscaleTcpException', () async {
       await expectLater(
         Tailscale.instance.tcp.dial('100.64.0.5', 22),
-        throwsA(isA<TailscaleTcpException>()),
+        throwsA(
+          isA<TailscaleTcpException>().having(
+            (error) => error.code,
+            'code',
+            TailscaleErrorCode.staleRuntime,
+          ),
+        ),
       );
     });
   });

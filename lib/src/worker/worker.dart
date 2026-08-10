@@ -81,8 +81,7 @@ bool _isUsableHostAddress(io.InternetAddress address) {
 
 /// Reserves lifecycle call order synchronously, before an operation reaches
 /// its first asynchronous preparation step.
-@visibleForTesting
-final class WorkerLifecycleQueue {
+final class LifecycleQueue {
   Future<void> _tail = Future<void>.value();
 
   Future<T> run<T>(Future<T> Function() operation) {
@@ -124,7 +123,7 @@ final class Worker {
   // sufficient for matching RPC responses without request IDs.
   final Queue<Completer<_WorkerResponse>> _pendingRequests =
       Queue<Completer<_WorkerResponse>>();
-  final WorkerLifecycleQueue _lifecycle = WorkerLifecycleQueue();
+  final LifecycleQueue _lifecycle = LifecycleQueue();
 
   final _sendPortCompleter = Completer<SendPort>();
   final _receivePort = ReceivePort();

@@ -133,9 +133,7 @@ func DuneTcpDialFd(host *C.char, port C.int, timeoutMillis C.longlong) *C.char {
 
 	conn, err := tailscale.TcpDialFd(h, int(port), timeout)
 	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+		return C.CString(tailscale.ErrorJSON(err))
 	}
 	result, _ := json.Marshal(map[string]any{
 		"fd":            conn.FD,

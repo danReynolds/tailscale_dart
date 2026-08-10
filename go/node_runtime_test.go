@@ -563,6 +563,9 @@ func TestConfigure_IsIdempotentForNativeAliasesAndRejectsMismatch(t *testing.T) 
 	if _, err := Configure(invalidRoot, "", 1); err == nil {
 		t.Fatal("Configure accepted an empty Keybay namespace")
 	}
+	if _, err := Configure(invalidRoot, "   ", 1); err == nil {
+		t.Fatal("Configure accepted a whitespace-only Keybay namespace")
+	}
 	if _, err := os.Lstat(invalidRoot); !os.IsNotExist(err) {
 		t.Fatalf("invalid namespace created its proposed root: %v", err)
 	}

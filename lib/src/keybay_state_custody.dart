@@ -11,7 +11,7 @@ const String stateStoreDekLabel = 'Tailscale node-state encryption key';
 
 const String _keybayNamespaceSuffix = '.tailscale';
 const int _keybayAppIdLimit = 120;
-const int _hostAppIdLimit = _keybayAppIdLimit - 10;
+const int _hostAppIdLimit = _keybayAppIdLimit - _keybayNamespaceSuffix.length;
 
 typedef KeybayStorageFactory = SecretStorage Function({required String appId});
 
@@ -48,8 +48,8 @@ final class KeybayStateCustodyBinding {
 
 /// Validates [hostAppId] and derives Tailscale's dedicated Keybay namespace.
 ///
-/// Keybay permits at most 120 characters. The reserved `.tailscale` suffix is
-/// ten characters, leaving a 110-character host-identifier budget.
+/// Keybay permits at most 120 characters. The host-identifier budget reserves
+/// enough room for the package's `.tailscale` suffix.
 @internal
 String deriveKeybayAppId(String hostAppId) {
   var hasAlphanumeric = false;

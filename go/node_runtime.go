@@ -223,7 +223,7 @@ func Configure(stateRoot, keybayNamespace string, logLevel int32) (string, error
 	if strings.TrimSpace(stateRoot) == "" {
 		return "", fmt.Errorf("state directory is empty")
 	}
-	if keybayNamespace == "" {
+	if strings.TrimSpace(keybayNamespace) == "" {
 		return "", fmt.Errorf("Keybay namespace is empty")
 	}
 	if logLevel < 0 || logLevel > 2 {

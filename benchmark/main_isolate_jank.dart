@@ -67,7 +67,10 @@ Future<void> main() async {
   try {
     results.add(
       _benchSyncOnce('Tailscale.init()', () {
-        Tailscale.init(stateDir: stateDir);
+        Tailscale.init(
+          stateDir: stateDir,
+          appId: 'dev.tailscale.dart.benchmark.mainIsolate',
+        );
       }),
     );
 

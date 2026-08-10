@@ -103,6 +103,7 @@ final class DemoCore {
 
   Future<TailscaleStatus> up({
     required String stateDir,
+    required String appId,
     required String hostname,
     String? authKey,
     bool ephemeral = false,
@@ -111,7 +112,7 @@ final class DemoCore {
   }) async {
     await stopServices();
     _hostname = hostname;
-    Tailscale.init(stateDir: stateDir, logLevel: logLevel);
+    Tailscale.init(stateDir: stateDir, appId: appId, logLevel: logLevel);
     return _tsnet.up(
       hostname: hostname,
       authKey: authKey == null || authKey.isEmpty ? null : authKey,
@@ -146,6 +147,7 @@ final class DemoCore {
 
   Future<TailscaleStatus> upAsAdmin({
     required String stateDir,
+    required String appId,
     required String hostname,
     required String apiKey,
     required String tailnetId,
@@ -160,6 +162,7 @@ final class DemoCore {
     );
     return up(
       stateDir: stateDir,
+      appId: appId,
       hostname: hostname,
       authKey: generated.key,
       ephemeral: ephemeral,

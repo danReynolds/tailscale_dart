@@ -91,7 +91,7 @@ void main() {
       final authKey = await api!.createAuthKey();
       final clientAuthKey = await api!.createAuthKey();
 
-      Tailscale.init(stateDir: stateDir!);
+      Tailscale.init(stateDir: stateDir!, appId: processIntegrationAppId);
       tsnet = Tailscale.instance;
       await recordUntil(
         tsnet!,
@@ -121,6 +121,7 @@ void main() {
             .path;
         final response = await _runClientFetch(
           stateDir: clientStateDir!,
+          appId: 'dev.tailscale.dart.live.tls.client',
           hostname: clientHostname,
           authKey: clientAuthKey,
           controlUrl: controlUrl,
@@ -150,6 +151,7 @@ void main() {
 
 Future<({int statusCode, String body})> _runClientFetch({
   required String stateDir,
+  required String appId,
   required String hostname,
   required String authKey,
   required String? controlUrl,
@@ -166,6 +168,7 @@ Future<({int statusCode, String body})> _runClientFetch({
     environment: {
       ...Platform.environment,
       'STATE_DIR': stateDir,
+      'APP_ID': appId,
       'HOSTNAME': hostname,
       'AUTH_KEY': authKey,
       'URL': url.toString(),

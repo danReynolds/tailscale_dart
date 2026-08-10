@@ -214,7 +214,7 @@ Keybay serializes mutations inside its own backend, but `read` followed by
 `write` is not an atomic get-or-create operation. It also cannot coordinate its
 commit with the Go ciphertext commit. A separate lease is therefore mandatory.
 
-Given `Tailscale.init(stateDir: <stateBaseDir>)`, use:
+Given `Tailscale.init(stateDir: <stateBaseDir>, appId: <hostAppId>)`, use:
 
 ```text
 <stateBaseDir>/.tailscale-state.lock

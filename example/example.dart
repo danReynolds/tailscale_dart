@@ -4,6 +4,7 @@ void main() async {
   // 1. Configure once at app startup (before any other Tailscale calls).
   Tailscale.init(
     stateDir: '/path/to/persistent/state',
+    appId: 'com.example.myapp',
     logLevel: TailscaleLogLevel.info,
   );
 

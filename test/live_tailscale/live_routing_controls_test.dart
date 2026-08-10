@@ -167,7 +167,7 @@ Future<void> _setUpLiveTailnet({
   final clientAuthKey = await api.createAuthKey();
   final exitAuthKey = await api.createAuthKey();
 
-  Tailscale.init(stateDir: clientStateDir);
+  Tailscale.init(stateDir: clientStateDir, appId: processIntegrationAppId);
   final tsnet = Tailscale.instance;
   onTailscale(tsnet);
   await recordUntil(
@@ -184,6 +184,7 @@ Future<void> _setUpLiveTailnet({
 
   final exitPeer = await PeerProcess.spawn(
     stateDir: exitStateDir,
+    appId: 'dev.tailscale.dart.live.routing.exit',
     controlUrl: controlUri()?.toString(),
     authKey: exitAuthKey,
     ephemeral: true,

@@ -232,6 +232,7 @@ class _DemoHomePageState extends State<DemoHomePage> {
     }
     final status = await _demo.up(
       stateDir: stateDir,
+      appId: 'dev.tailscale.dart.demo.flutter',
       hostname: _hostname.text.trim(),
       authKey: authKey,
       controlUrl: controlUrl,
@@ -268,6 +269,7 @@ class _DemoHomePageState extends State<DemoHomePage> {
     setState(() => _services = null);
     final status = await _demo.upAsAdmin(
       stateDir: stateDir,
+      appId: 'dev.tailscale.dart.demo.flutter',
       hostname: _hostname.text.trim(),
       apiKey: _adminApiKey.text.trim(),
       tailnetId: _tailnetId.text.trim(),

@@ -98,7 +98,7 @@ void main() {
       final clientAuthKey = await api!.createAuthKey();
       final cleanupClientAuthKey = await api!.createAuthKey();
 
-      Tailscale.init(stateDir: stateDir!);
+      Tailscale.init(stateDir: stateDir!, appId: processIntegrationAppId);
       tsnet = Tailscale.instance;
       await recordUntil(
         tsnet!,
@@ -136,6 +136,7 @@ void main() {
             .path;
         final response = await _runClientFetch(
           stateDir: clientStateDir!,
+          appId: 'dev.tailscale.dart.live.serve.client',
           hostname: clientHostname,
           authKey: clientAuthKey,
           controlUrl: controlUrl,
@@ -163,6 +164,7 @@ void main() {
         final cleanupUrl = Uri.https(domains.first, '/cleanup');
         final cleanupResponse = await _runClientFetch(
           stateDir: clientStateDir!,
+          appId: 'dev.tailscale.dart.live.serve.client',
           hostname: clientHostname,
           authKey: clientAuthKey,
           controlUrl: controlUrl,
@@ -197,6 +199,7 @@ void main() {
             .path;
         final cleanupAfterRestart = await _runClientFetchOutcome(
           stateDir: cleanupClientStateDir!,
+          appId: 'dev.tailscale.dart.live.serve.cleanupClient',
           hostname: cleanupClientHostname,
           authKey: cleanupClientAuthKey,
           controlUrl: controlUrl,
@@ -234,6 +237,7 @@ Future<void> _serveLoopback(HttpServer server) async {
 
 Future<({int statusCode, String body})> _runClientFetch({
   required String stateDir,
+  required String appId,
   required String hostname,
   required String authKey,
   required String? controlUrl,
@@ -241,6 +245,7 @@ Future<({int statusCode, String body})> _runClientFetch({
 }) async {
   final outcome = await _runClientFetchOutcome(
     stateDir: stateDir,
+    appId: appId,
     hostname: hostname,
     authKey: authKey,
     controlUrl: controlUrl,
@@ -255,6 +260,7 @@ Future<({int statusCode, String body})> _runClientFetch({
 
 Future<({int? statusCode, String body, String? error})> _runClientFetchOutcome({
   required String stateDir,
+  required String appId,
   required String hostname,
   required String authKey,
   required String? controlUrl,
@@ -271,6 +277,7 @@ Future<({int? statusCode, String body, String? error})> _runClientFetchOutcome({
     environment: {
       ...Platform.environment,
       'STATE_DIR': stateDir,
+      'APP_ID': appId,
       'HOSTNAME': hostname,
       'AUTH_KEY': authKey,
       'URL': url.toString(),

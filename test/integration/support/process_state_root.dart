@@ -2,6 +2,9 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+/// Stable host identity shared by integration-test isolates in one process.
+const String processIntegrationAppId = 'dev.tailscale.dart.test.integration';
+
 /// One native configuration identity for every test isolate in this process.
 ///
 /// `package:test` isolates share the loaded Go library, so independently

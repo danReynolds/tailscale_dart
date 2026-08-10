@@ -39,8 +39,12 @@ func DuneStart(requestToken C.ulonglong, hostname *C.char, authKey *C.char, cont
 }
 
 //export DuneConfigure
-func DuneConfigure(stateRoot *C.char, logLevel C.int) *C.char {
-	resolved, err := tailscale.Configure(C.GoString(stateRoot), int32(logLevel))
+func DuneConfigure(stateRoot *C.char, keybayNamespace *C.char, logLevel C.int) *C.char {
+	resolved, err := tailscale.Configure(
+		C.GoString(stateRoot),
+		C.GoString(keybayNamespace),
+		int32(logLevel),
+	)
 	if err != nil {
 		return lifecycleError(err)
 	}

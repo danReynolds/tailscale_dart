@@ -13,6 +13,7 @@ final class PeerProcess {
 
   static Future<PeerProcess> spawn({
     required String stateDir,
+    required String appId,
     required String hostname,
     String? controlUrl,
     String? authKey,
@@ -26,6 +27,7 @@ final class PeerProcess {
       environment: {
         ...Platform.environment,
         'STATE_DIR': stateDir,
+        'APP_ID': appId,
         'HOSTNAME': hostname,
         'CONTROL_URL': ?controlUrl,
         'AUTH_KEY': ?authKey,

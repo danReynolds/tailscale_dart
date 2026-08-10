@@ -32,7 +32,10 @@ Future<void> main() async {
   }
 
   final stateDir = Directory.systemTemp.createTempSync('tailscale_hol_').path;
-  Tailscale.init(stateDir: stateDir);
+  Tailscale.init(
+    stateDir: stateDir,
+    appId: 'dev.tailscale.dart.benchmark.headOfLine',
+  );
   final tsnet = Tailscale.instance;
 
   try {
@@ -66,14 +69,15 @@ Future<void> main() async {
       'blocks the worker isolate…',
     );
     final dial = tsnet.tcp
-        .dial('100.100.100.100', 80, timeout: const Duration(seconds: blockSeconds))
-        .then<String>(
-          (c) {
-            unawaited(c.close());
-            return 'connected(!?)';
-          },
-          onError: (Object e) => 'failed as expected',
-        );
+        .dial(
+          '100.100.100.100',
+          80,
+          timeout: const Duration(seconds: blockSeconds),
+        )
+        .then<String>((c) {
+          unawaited(c.close());
+          return 'connected(!?)';
+        }, onError: (Object e) => 'failed as expected');
 
     // Let the worker enter the blocking native call.
     await Future<void>.delayed(const Duration(milliseconds: 250));

@@ -203,23 +203,28 @@ type runtimeController struct {
 	cleanupFailure        *runtimeCleanupFailure
 	lastConfig            *runtimeConfig
 
-	configured    bool
-	stateRoot     string
-	stateRootInfo os.FileInfo
-	logLevel      int32
+	configured      bool
+	stateRoot       string
+	stateRootInfo   os.FileInfo
+	keybayNamespace string
+	logLevel        int32
 }
 
 var runtimes runtimeController
 
 // Configure freezes process-wide initialization identity. os.SameFile supplies
 // native path/inode identity, so lexical and symlink aliases cannot create two
-// owners for the same state root.
-func Configure(stateRoot string, logLevel int32) (string, error) {
+// owners for the same state root. keybayNamespace is compared exactly so Dart
+// isolates cannot bind one native root to different secure-storage containers.
+func Configure(stateRoot, keybayNamespace string, logLevel int32) (string, error) {
 	runtimes.configureMu.Lock()
 	defer runtimes.configureMu.Unlock()
 
 	if strings.TrimSpace(stateRoot) == "" {
 		return "", fmt.Errorf("state directory is empty")
+	}
+	if strings.TrimSpace(keybayNamespace) == "" {
+		return "", fmt.Errorf("Keybay namespace is empty")
 	}
 	if logLevel < 0 || logLevel > 2 {
 		return "", fmt.Errorf("invalid log level %d", logLevel)
@@ -235,11 +240,12 @@ func Configure(stateRoot string, logLevel int32) (string, error) {
 	alreadyConfigured := runtimes.configured
 	configuredRoot := runtimes.stateRoot
 	configuredRootInfo := runtimes.stateRootInfo
+	configuredKeybayNamespace := runtimes.keybayNamespace
 	configuredLogLevel := runtimes.logLevel
 	runtimes.mu.Unlock()
 	if alreadyConfigured {
-		if configuredLogLevel != logLevel {
-			return "", fmt.Errorf("%w: Tailscale.init already owns a different state root or log level", ErrConfigurationMismatch)
+		if configuredLogLevel != logLevel || configuredKeybayNamespace != keybayNamespace {
+			return "", fmt.Errorf("%w: Tailscale.init already owns a different state root, Keybay namespace, or log level", ErrConfigurationMismatch)
 		}
 		resolved, err := filepath.EvalSymlinks(abs)
 		if err != nil {
@@ -254,7 +260,7 @@ func Configure(stateRoot string, logLevel int32) (string, error) {
 			return "", fmt.Errorf("%w: configured state root does not match: %v", ErrConfigurationMismatch, err)
 		}
 		if configuredRootInfo == nil || !os.SameFile(configuredRootInfo, info) {
-			return "", fmt.Errorf("%w: Tailscale.init already owns a different state root or log level", ErrConfigurationMismatch)
+			return "", fmt.Errorf("%w: Tailscale.init already owns a different state root, Keybay namespace, or log level", ErrConfigurationMismatch)
 		}
 		if err := ensurePrivateDirectory(resolved); err != nil {
 			return "", fmt.Errorf("secure state directory: %w", err)
@@ -295,6 +301,7 @@ func Configure(stateRoot string, logLevel int32) (string, error) {
 	runtimes.configured = true
 	runtimes.stateRoot = resolved
 	runtimes.stateRootInfo = info
+	runtimes.keybayNamespace = keybayNamespace
 	runtimes.logLevel = logLevel
 	atomic.StoreInt32(&LogLevel, logLevel)
 	return resolved, nil

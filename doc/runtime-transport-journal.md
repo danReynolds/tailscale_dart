@@ -35,9 +35,14 @@ still needs a decision.
 - Focused Go and Dart contract tests cover bootstrap, readiness gates, bounded
   conflicts, indeterminate commits, and exact handles.
 - The hosted Funnel-tailnet and Serve -> Funnel -> Serve tests passed serially
-  on 2026-08-10 and compile/skip without credentials. Crash/restart stale-config
-  proof, real-device mobile handshakes, and sidecar inventory remain pending
-  receipts.
+  on 2026-08-10 and compile/skip without credentials.
+- The macOS production-Keybay receipt also passed on 2026-08-10: a persistent
+  Serve publisher was SIGKILLed, the same DEK-backed node reopened without auth,
+  and an already-running peer proved the restarted node reachable with TSMP and
+  completed repeated fresh raw-TCP probes through the restart window with zero
+  stale responses and zero sentinel-backend hits.
+  Real-device mobile handshakes and the remaining platform, permission, backup,
+  custody-fault, and sidecar receipts are still pending.
 
 ## 2026-05-01: TLS listener moves onto the fd transport
 

@@ -2,9 +2,10 @@
 
 The R4d secure-state cutover, lifecycle foundations, and R5 runtime-owned
 publication convergence are implemented in the current source. Hosted R5
-tailnet/swap receipts passed on 2026-08-10; crash/restart, mobile/platform Keybay
-and publication receipts, backup-exclusion and sidecar inventory, and the
-remaining rearchitecture gates are still required before release.
+tailnet/swap receipts and the macOS production-Keybay process-crash/restart
+receipt passed on 2026-08-10; remaining mobile/platform Keybay and publication
+receipts, backup-exclusion and sidecar inventory, and the remaining
+rearchitecture gates are still required before release.
 
 **Secure-state foundation:**
 
@@ -90,7 +91,13 @@ remaining rearchitecture gates are still required before release.
 - Added opt-in hosted-Tailscale tests for Funnel's tailnet reachability and
   Serve -> Funnel -> Serve replacement/exact-handle behavior. Both passed
   serially against hosted Tailscale on 2026-08-10; they also compile and skip
-  without credentials. The crash/restart stale-config receipt remains pending.
+  without credentials.
+- Added a macOS production-Keybay receipt that enrolls a persistent publisher,
+  leaves Serve active, kills the process with SIGKILL, reopens the same DEK-
+  backed node without an auth key, and continuously probes startup. It passed
+  against hosted Tailscale on 2026-08-10 with the same IP/stable node ID, no
+  stale backend hit before or after package Running, and verified DEK/state-
+  subtree cleanup.
 
 ## 0.8.1
 

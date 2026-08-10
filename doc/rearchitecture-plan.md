@@ -2,7 +2,8 @@
 
 ## Status
 
-**Accepted; implementation in progress — R5 code present 2026-08-10.**
+**Accepted; implementation in progress — R5 merged and R6 evidence underway
+2026-08-10.**
 
 This is the source of truth for the target architecture and implementation
 order. It incorporates the August 2026 architecture alignment audit, review of
@@ -15,10 +16,10 @@ first-`Up` readiness gate, and exact publication handles. Persistent nodes use
 the Keybay-backed encrypted StateStore, ephemeral nodes use an in-memory Store,
 local forget is explicit, and the SQLite runtime/dependency are gone. This does
 not mark the plan or a release complete. Hosted Funnel-tailnet and replacement
-receipts passed on 2026-08-10; crash/restart evidence, Android/mobile and
-platform receipts, R6
-storage/sidecar evidence, later ownership work, and the R10 integrated gate
-remain authoritative requirements below.
+receipts plus the macOS production-Keybay persisted process-crash/restart
+receipt passed on 2026-08-10. Android/mobile and remaining platform receipts,
+R6 permission/backup/sidecar evidence, later ownership work, and the R10
+integrated gate remain authoritative requirements below.
 
 The two detailed decisions are:
 
@@ -329,10 +330,10 @@ Snapshot: 2026-08-10.
 | Artifact | Decision | Required exit |
 | --- | --- | --- |
 | PR [#90](https://github.com/danReynolds/tailscale_dart/pull/90) | Merged 2026-08-10; it superseded #85 and #88. | Complete: Tailscale v1.102.2 / Go 1.26.5, repaired Android smoke shell, and genuine x86_64 boot/no-SIGSYS receipt landed in `4d98c22`. |
-| PR [#89](https://github.com/danReynolds/tailscale_dart/pull/89) | Its useful convergence behavior and hosted tests have been adapted into the R5 replacement; do not merge #89's temporary process-global ownership design. | Merge the reviewed R5 replacement after its automated gates, then close #89 with the replacement link. The crash/restart and mobile/platform receipts remain separate evidence gates. |
+| PR [#89](https://github.com/danReynolds/tailscale_dart/pull/89) | Closed unmerged 2026-08-10; its useful convergence behavior and hosted tests were adapted into merged R5 replacement #99, without its temporary process-global ownership design. | Complete. The separate macOS crash/restart receipt passed; mobile/platform receipts remain evidence gates. |
 | PR [#86](https://github.com/danReynolds/tailscale_dart/pull/86) | Closed unmerged 2026-08-10; superseded by the encrypted-state cutover. | Complete: SQLite was removed rather than upgraded. |
 | Issue [#81](https://github.com/danReynolds/tailscale_dart/issues/81) | Closed 2026-08-10 by merged #90. | Complete: the Android runtime receipt is recorded in #90. |
-| Issue [#87](https://github.com/danReynolds/tailscale_dart/issues/87) | The R5 replacement implements the in-process lifecycle fix; #89 itself remains superseded. | Keep open until the true persisted-state process-crash/restart receipt passes, then close it with the merged R5 replacement link and receipt. |
+| Issue [#87](https://github.com/danReynolds/tailscale_dart/issues/87) | Reopened after #99 because the in-process fix had landed but the persisted process-crash/restart receipt had not. That macOS production-Keybay receipt passed on 2026-08-10. | Close only after the receipt PR is reviewed and merged, linking both #99 and the exact hosted evidence. |
 | Dirty SQLite contract worktree | Preserve only as test evidence. Do not merge its SQLite implementation. | Generalize nil-delete, exact-empty, reopen, and concurrency cases into the R4b StateStore suite; use non-opening legacy-file recognition in R2/R4d, then retire the worktree. |
 | Dirty Serve/Funnel worktree | Its useful semantic deletion and live-test intent are incorporated into R5; its ownership model is superseded. | Retire only after the R5 replacement is merged and linked. |
 
@@ -344,8 +345,9 @@ its acceptance criteria are recorded.
 Each row is intentionally issue-sized. The dependency column is a merge-order
 constraint, not an instruction to combine the work into one large PR.
 
-Implementation snapshot: R2/R3 lifecycle foundations, R4a-R4d secure state, and
-R5 publication-convergence code are present in the current source. The table
+Implementation snapshot: R2/R3 lifecycle foundations, R4a-R4d secure state,
+R5 publication convergence, and the first macOS R6 crash/restart receipt are
+present in the current source. The table
 continues to state each workstream's full acceptance result; code presence does
 not satisfy uncollected hosted, platform, or release receipts.
 
@@ -537,8 +539,9 @@ three-attempt typed ETag policy, indeterminate-commit quarantine, and exact
 generation/mapping-token handles with focused Go and Dart tests. Opt-in hosted
 tests for Funnel tailnet reachability and Serve -> Funnel -> Serve replacement
 passed serially on 2026-08-10 and also compile/skip without credentials.
-Crash/restart stale-config evidence, mobile handshakes, and sidecar inventory
-remain pending receipts; the requirements below stay authoritative.
+The macOS production-Keybay persisted process-crash/restart stale-config
+receipt also passed on 2026-08-10. Mobile handshakes and the remaining R6
+platform/permission/backup/sidecar receipts stay authoritative.
 
 - Rebase #89 after R2 and preserve its public `serve.forward` /
   `funnel.forward` convergence and useful live tests. The bootstrap result,
@@ -585,11 +588,12 @@ remain pending receipts; the requirements below stay authoritative.
   validates and acknowledges the exact generation/mapping-token handle. Result
   loss must actively quarantine that runtime, with a bounded native timer as
   fallback when the helper or caller isolate cannot run compensation.
-- Add the crash-restart bootstrap receipt: leave a publication active, simulate
-  process death, restart and perform only ordinary `up()`, and prove the old
-  configuration is cleared before Running/readiness becomes observable. Close
-  an old-generation handle after recreating the same mapping and prove it
-  cannot clear the new mapping.
+- The macOS production-Keybay crash-restart bootstrap receipt now leaves a
+  publication active, SIGKILLs its process, reopens the same encrypted identity
+  with ordinary `up()` and no auth key, and uses an already-running peer plus an
+  exact old-port sentinel to prove the old configuration is cleared before and
+  after Running/readiness. The separate R5 replacement receipt proves an old-
+  generation handle cannot clear a recreated mapping.
 - Update #89's body to remove stale snapshot/restore and Funnel-local `Up`
   language. Gate mobile ServeConfig Funnel separately; a desktop live test is
   not a mobile support receipt, and `tls.bind` remains a separate unsupported
@@ -597,8 +601,12 @@ remain pending receipts; the requirements below stay authoritative.
 
 ### R6 — platform and secret-inventory receipts
 
+- Completed on macOS CLI with production Keybay: fresh persistent enrollment,
+  DEK presence without disclosure, SIGKILL, same stable node/IP reopen without
+  auth, continuous stale-publication probing across first-`Up`, and explicit
+  DEK/package-subtree reset all passed against hosted Tailscale on 2026-08-10.
 - Prove fresh enrollment and restart with the real Keybay backend on each
-  supported target, not only with the package-internal fake backend.
+  remaining supported target, not only with the package-internal fake backend.
 - Run crash/response-loss fault cases across custody write, encrypted-envelope
   rename, reset-marker commit, key deletion, and subtree cleanup.
 - Verify fail-closed permissions, Apple/Android host-owned backup exclusion,

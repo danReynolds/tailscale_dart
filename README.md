@@ -36,9 +36,10 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 
 > **Architecture work in progress.** The secure-state cutover, fail-safe
 > lifecycle, and runtime-owned Serve/Funnel convergence are implemented in the
-> current source. The hosted Funnel-tailnet and replacement receipts passed on
-> 2026-08-10; crash/restart, mobile/platform, sidecar-inventory, and later
-> ownership/release receipts are still pending.
+> current source. The hosted Funnel-tailnet, replacement, and macOS production-
+> Keybay process-crash/restart receipts passed on 2026-08-10; remaining mobile/
+> platform, permission, backup-exclusion, sidecar-inventory, and later ownership/
+> release receipts are still pending.
 
 ## What you can build
 
@@ -177,7 +178,7 @@ Raw TCP | `tcp.dial`, `tcp.bind` | Supported | Explicit read/write halves and ha
 Raw UDP | `udp.bind` | Supported | Message-preserving datagrams with remote endpoint metadata.
 TLS listener | `tls.bind` | Desktop/server only | Requires MagicDNS and HTTPS. Upstream's default certificate endpoint is disabled on iOS/Android, so mobile termination is unsupported pending an alternate path and real-device receipt.
 TLS discovery | `tls.domains` | Supported read-only API | Reads the runtime's advertised certificate domains directly; this does not provision a certificate or imply that `tls.bind` works on mobile.
-Serve | `serve.forward`, `serve.clear` | Desktop/server qualified | Tailnet publication through the runtime-owned ServeConfig manager. The R5 replacement/exact-handle hosted receipt passed 2026-08-10; crash/restart and mobile HTTPS qualification remain pending.
+Serve | `serve.forward`, `serve.clear` | Desktop/server qualified | Tailnet publication through the runtime-owned ServeConfig manager. The R5 replacement/exact-handle and macOS persisted process-crash/restart receipts passed 2026-08-10; mobile HTTPS qualification remains pending.
 Funnel | `funnel.forward`, `funnel.clear` | Desktop/server qualified | The public-visibility mode of the same ServeConfig mapping used by Serve. Public ingress, tailnet reach, and the R5 swap receipt have passed hosted Tailscale; all mobile receipts remain pending.
 Tailscale Services | N/A | Planned | Upstream `tsnet.Server.ListenService` is available in the current pin; no Dart wrapper yet.
 Routing controls | `prefs`, `exitNode` | Supported | Subnet routes, Shields Up, tags, hostname, auto-update, and exit nodes.

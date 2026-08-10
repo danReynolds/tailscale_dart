@@ -8,10 +8,10 @@ R2/R3 provide `nodeRuntime`, generation-bound supervision, and fail-safe
 teardown; R4a-R4d add Keybay custody, the encrypted/in-memory StateStores,
 state-lease/reset ownership, and explicit local forget. R5 adds the automatic
 publication bootstrap, shared readiness gate, runtime-owned ServeConfig
-authority, and exact handles. The crash/restart R5 receipt, R6/R10 evidence,
-and R7 migration of the remaining process-global transport/watcher registries
-still remain; the hosted Funnel-tailnet and replacement receipts passed on
-2026-08-10.
+authority, and exact handles. The hosted Funnel-tailnet, replacement, and macOS
+production-Keybay process-crash/restart receipts passed on 2026-08-10. The
+remaining R6/R10 evidence and R7 migration of the remaining process-global
+transport/watcher registries still remain.
 
 ## Context
 

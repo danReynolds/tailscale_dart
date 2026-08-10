@@ -13,7 +13,13 @@ final class LiveTailscaleApi {
 
   void close() => _client.close();
 
-  Future<String> createAuthKey() async {
+  Future<String> createAuthKey({bool ephemeral = true}) async {
+    return (await createTrackedAuthKey(ephemeral: ephemeral)).key;
+  }
+
+  Future<LiveTailscaleAuthKey> createTrackedAuthKey({
+    bool ephemeral = true,
+  }) async {
     final decoded = await _requestJson(
       'POST',
       Uri.https('api.tailscale.com', '/api/v2/tailnet/$tailnetId/keys'),
@@ -22,7 +28,7 @@ final class LiveTailscaleApi {
           'devices': {
             'create': {
               'reusable': false,
-              'ephemeral': true,
+              'ephemeral': ephemeral,
               'preauthorized': true,
             },
           },
@@ -30,11 +36,20 @@ final class LiveTailscaleApi {
         'expirySeconds': 3600,
       },
     );
+    final id = decoded['id'];
     final key = decoded['key'];
-    if (key is! String || key.isEmpty) {
-      throw StateError('Tailscale API did not return an auth key.');
+    if (id is! String || id.isEmpty || key is! String || key.isEmpty) {
+      throw StateError('Tailscale API did not return an auth-key ID and key.');
     }
-    return key;
+    return LiveTailscaleAuthKey(id: id, key: key);
+  }
+
+  Future<void> deleteAuthKey(String keyId) async {
+    await _request(
+      'DELETE',
+      Uri.https('api.tailscale.com', '/api/v2/tailnet/$tailnetId/keys/$keyId'),
+      allowNotFound: true,
+    );
   }
 
   Future<LiveTailscaleDevice> waitForDevice({
@@ -102,6 +117,7 @@ final class LiveTailscaleApi {
     await _request(
       'DELETE',
       Uri.https('api.tailscale.com', '/api/v2/device/$deviceId'),
+      allowNotFound: true,
     );
   }
 
@@ -121,6 +137,7 @@ final class LiveTailscaleApi {
     String method,
     Uri uri, {
     Map<String, Object?>? body,
+    bool allowNotFound = false,
   }) async {
     final request = http.Request(method, uri)
       ..headers['Authorization'] = _authHeader
@@ -131,6 +148,7 @@ final class LiveTailscaleApi {
     }
     final streamed = await _client.send(request);
     final response = await http.Response.fromStream(streamed);
+    if (allowNotFound && response.statusCode == 404) return response;
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw StateError(
         'Tailscale API $method ${uri.path} failed with HTTP '
@@ -139,6 +157,13 @@ final class LiveTailscaleApi {
     }
     return response;
   }
+}
+
+final class LiveTailscaleAuthKey {
+  const LiveTailscaleAuthKey({required this.id, required this.key});
+
+  final String id;
+  final String key;
 }
 
 final class LiveTailscaleDevice {
@@ -166,7 +191,7 @@ final class LiveTailscaleDevice {
 
   bool matches({required String hostname, String? ipv4}) {
     if (id.isEmpty) return false;
-    if (ipv4 != null && addresses.contains(ipv4)) return true;
+    if (ipv4 != null && !addresses.contains(ipv4)) return false;
     final expected = hostname.toLowerCase();
     return this.hostname.toLowerCase() == expected ||
         name.toLowerCase() == expected ||

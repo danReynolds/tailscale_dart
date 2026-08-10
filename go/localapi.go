@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"tailscale.com/client/local"
@@ -51,6 +50,15 @@ func (a *runtimeLocalClient) resultError(err error) error {
 	return a.runtime.resultError(err)
 }
 
+func (a *runtimeLocalClient) awaitDataPlaneReady(ctx context.Context) error {
+	gate := nodeGate{
+		runtime: a.runtime,
+		s:       a.runtime.server,
+		epoch:   a.runtime.generation,
+	}
+	return gate.awaitDataPlaneReady(ctx)
+}
+
 // lcOr returns the LocalClient and runtime generation captured together, or an
 // error if the embedded engine has not been started. Callers derive their
 // contexts from this runtime and validate it before committing a result.
@@ -60,6 +68,23 @@ func lcOr(op string) (*runtimeLocalClient, error) {
 		return nil, fmt.Errorf("%w: %s called before Start", ErrRuntimeStale, op)
 	}
 	return &runtimeLocalClient{Client: runtime.localClient, runtime: runtime}, nil
+}
+
+// lcForRuntimeToken captures LocalAPI authority only when the caller presents
+// the exact current runtime capability. Capped helper-isolate work can wait in
+// Dart while a lifecycle replacement occurs; it must fail stale rather than
+// discover the replacement's LocalClient at native entry.
+func lcForRuntimeToken(op string, runtimeToken uint64) (*runtimeLocalClient, error) {
+	gate, ok := acquireNodeGateForRuntimeToken(runtimeToken)
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: %s captured runtime %d is no longer current",
+			ErrRuntimeStale,
+			op,
+			runtimeToken,
+		)
+	}
+	return &runtimeLocalClient{Client: gate.runtime.localClient, runtime: gate.runtime}, nil
 }
 
 // WhoIs resolves a tailnet IP to node identity. Returns a JSON object
@@ -78,6 +103,9 @@ func WhoIs(ip string) string {
 
 	ctx, cancel := lc.callContext(0)
 	defer cancel()
+	if err := lc.awaitDataPlaneReady(ctx); err != nil {
+		return localAPIError(err)
+	}
 	resp, err := lc.WhoIs(ctx, addr.String())
 	err = lc.resultError(err)
 	if err != nil {
@@ -252,6 +280,18 @@ func isTransientNoSuggestion(err error) bool {
 // available, zero otherwise. Used as a secondary signal for the
 // Dart side.
 func classifyLocalAPIError(err error) (code string, status int) {
+	if errors.Is(err, ErrDataPlaneNotReady) {
+		return "dataPlaneNotReady", 0
+	}
+	if errors.Is(err, ErrPublicationBootstrapFailure) {
+		return "publicationBootstrapFailure", 0
+	}
+	if errors.Is(err, ErrServeConfigConflict) {
+		return "serveConfigConflict", 0
+	}
+	if errors.Is(err, ErrPublicationCommitIndeterminate) {
+		return "publicationCommitIndeterminate", 0
+	}
 	if errors.Is(err, ErrRuntimeStale) {
 		return "staleRuntime", 0
 	}
@@ -289,6 +329,9 @@ func classifyLocalAPIError(err error) (code string, status int) {
 			strings.Contains(lower, "disabled by"):
 			code = "featureDisabled"
 		}
+	}
+	if code == "" && errors.Is(err, ErrPublicationNotApplied) {
+		code = "publicationNotApplied"
 	}
 	return
 }
@@ -333,13 +376,10 @@ func TlsDomains() string {
 	}
 	ctx, cancel := lc.callContext(0)
 	defer cancel()
-	status, err := lc.Status(ctx)
-	err = lc.resultError(err)
-	if err != nil {
+	if err := lc.awaitDataPlaneReady(ctx); err != nil {
 		return localAPIError(err)
 	}
-
-	domains := status.CertDomains
+	domains := lc.runtime.server.CertDomains()
 	if domains == nil {
 		domains = []string{}
 	}
@@ -478,9 +518,11 @@ type serveForwardPayload struct {
 }
 
 type serveClearPayload struct {
-	TailnetPort int    `json:"tailnetPort"`
-	Path        string `json:"path"`
-	Funnel      bool   `json:"funnel"`
+	TailnetPort  int     `json:"tailnetPort"`
+	Path         string  `json:"path"`
+	Funnel       bool    `json:"funnel"`
+	Generation   *uint64 `json:"generation,omitempty"`
+	MappingToken *uint64 `json:"mappingToken,omitempty"`
 }
 
 type servePublication struct {
@@ -491,32 +533,16 @@ type servePublication struct {
 	Path         string `json:"path"`
 	HTTPS        bool   `json:"https"`
 	Funnel       bool   `json:"funnel"`
+	Generation   uint64 `json:"generation"`
+	MappingToken uint64 `json:"mappingToken"`
+	host         string
 }
 
-var (
-	servePublicationMu sync.Mutex
-	servePublications  = map[servePublicationKey]struct{}{}
-
-	// serveConfigMu serializes the get-modify-set on tailscaled's shared
-	// ServeConfig. GetServeConfig/mutate/SetServeConfig is not atomic, so two
-	// concurrent ServeForward/ServeClear calls would each start from the same
-	// base config and the second SetServeConfig would clobber the first's mount
-	// — a lost update that diverges the in-memory publication registry from
-	// tailscaled. The Funnel path has its own funnelMu; this covers the Serve
-	// path.
-	serveConfigMu sync.Mutex
-)
-
-type servePublicationKey struct {
-	host string
-	port uint16
-	path string
-}
-
-// ServeForward publishes a local loopback HTTP service. Serve uses LocalAPI
-// ServeConfig; Funnel uses tsnet.ListenFunnel plus a package-owned reverse
-// proxy because public ingress activation follows the listener path upstream.
-func ServeForward(payloadJSON string) string {
+// ServeForward publishes a local loopback HTTP service for one exact runtime
+// capability captured before Dart queues the offload. Serve uses LocalAPI
+// ServeConfig; Funnel is the same handler with AllowFunnel enabled, matching
+// upstream's one-config Serve/Funnel authority.
+func ServeForward(runtimeToken uint64, payloadJSON string) string {
 	var payload serveForwardPayload
 	dec := json.NewDecoder(strings.NewReader(payloadJSON))
 	dec.DisallowUnknownFields()
@@ -531,75 +557,115 @@ func ServeForward(payloadJSON string) string {
 		return jsonError(fmt.Errorf("invalid serve forward JSON: %w", err))
 	}
 
-	if payload.Funnel {
-		publication, err := startFunnelForward(payload)
-		if err != nil {
-			return localAPIError(err)
+	runtime := currentRuntime()
+	if runtime == nil {
+		if runtimeToken != 0 {
+			return localAPIError(fmt.Errorf("%w: ServeForward runtime %d is no longer current", ErrRuntimeStale, runtimeToken))
 		}
-		b, err := json.Marshal(publication)
-		if err != nil {
-			return jsonError(err)
-		}
-		return string(b)
-	}
-	gate, ok := acquireNodeGate()
-	if !ok {
 		return jsonError(errors.New("ServeForward called before Start"))
 	}
-	return serveForwardLocked(gate, gate.runtime.localClient, payload)
-}
-
-// serveForwardLocked is the Serve path's commit section: the ServeConfig
-// get-modify-set plus publication tracking, serialized under serveConfigMu.
-// Extracted so the teardown-race harness can drive the epoch refusal directly
-// (the gate check precedes every LocalAPI use, so a stale gate never touches
-// [lc]).
-func serveForwardLocked(gate nodeGate, lc *local.Client, payload serveForwardPayload) string {
-	serveConfigMu.Lock()
-	defer serveConfigMu.Unlock()
-	if !gate.stillCurrent() {
-		// The node this forward was issued against is tearing (or torn) down;
-		// refuse to persist a mount that would survive the stop and re-activate
-		// on the next Start (tailscaled reloads the persisted ServeConfig),
-		// silently re-exposing a service. Checked under serveConfigMu — the
-		// same lock closeAllServePublications sweeps under — so a forward
-		// either commits before the sweep (and is swept) or observes the
-		// bumped epoch here and refuses. ServeForward runs on a helper
-		// isolate, concurrent with Stop on the worker, so this race is real.
-		return jsonError(errors.New("ServeForward raced node teardown"))
+	if runtimeToken == 0 || runtime.token != runtimeToken {
+		return localAPIError(fmt.Errorf(
+			"%w: ServeForward captured runtime %d, current runtime is %d",
+			ErrRuntimeStale,
+			runtimeToken,
+			runtime.token,
+		))
 	}
-	// Bounded LocalAPI round trips — see defaultNativeCallTimeout. Held under
-	// serveConfigMu, so a wedged tailscaled must not pin the lock forever.
-	ctx, cancel := boundedCallCtxFrom(gate.runtime.ctx, 0)
+	manager := runtime.publication
+	if manager == nil {
+		return localAPIError(notAppliedError(errors.New("ServeForward publication manager is unavailable")))
+	}
+	ctx, cancel := boundedCallCtxFrom(runtime.ctx, 0)
 	defer cancel()
-	st, err := lc.StatusWithoutPeers(ctx)
-	err = gate.runtime.resultError(err)
+	gate := nodeGate{runtime: runtime, s: runtime.server, epoch: runtime.generation}
+	if err := gate.awaitDataPlaneReady(ctx); err != nil {
+		return localAPIError(err)
+	}
+	publication, err := manager.forward(ctx, payload)
 	if err != nil {
+		if errors.Is(err, ErrPublicationCommitIndeterminate) {
+			err = quarantinePublicationCommitIndeterminate(runtime, err)
+		}
 		return localAPIError(err)
 	}
-	sc, err := lc.GetServeConfig(ctx)
-	err = gate.runtime.resultError(err)
-	if err != nil {
-		return localAPIError(err)
-	}
-	if sc == nil {
-		sc = new(ipn.ServeConfig)
-	}
-
-	publication, err := applyServeForward(sc, st, payload)
-	if err != nil {
-		return localAPIError(err)
-	}
-	if err := gate.runtime.resultError(lc.SetServeConfig(ctx, sc)); err != nil {
-		return localAPIError(err)
-	}
-	trackServePublication(publication.hostKey())
-
 	b, err := json.Marshal(publication)
 	if err != nil {
 		return jsonError(err)
 	}
 	return string(b)
+}
+
+// AcknowledgePublication transfers one exact committed mapping from native
+// delivery custody to its Dart handle. A mismatch can never be redirected to
+// a replacement runtime; an ambiguous live receipt quarantines this exact
+// generation before returning an error.
+func AcknowledgePublication(runtimeToken, generation, mappingToken uint64) error {
+	runtime := currentRuntime()
+	if runtime == nil || runtimeToken == 0 || runtime.token != runtimeToken || runtime.generation != generation {
+		return ErrRuntimeStale
+	}
+	if runtime.publication == nil {
+		return quarantinePublicationDeliveryFailure(
+			runtime,
+			fmt.Errorf("%w: publication manager is unavailable during acknowledgement", ErrPublicationCommitIndeterminate),
+		)
+	}
+	if err := runtime.publication.acknowledgePublication(generation, mappingToken); err != nil {
+		if errors.Is(err, ErrRuntimeStale) {
+			return err
+		}
+		return quarantinePublicationDeliveryFailure(runtime, err)
+	}
+	return nil
+}
+
+// FailPublicationDelivery is Dart's active compensation path when a native
+// success cannot be validated or delivered across the helper-isolate result
+// port. The unacknowledged timer is the fallback if the caller isolate itself
+// cannot execute this function.
+func FailPublicationDelivery(runtimeToken uint64) error {
+	return failPublicationDelivery(runtimeToken, quarantinePublicationFailure)
+}
+
+func failPublicationDelivery(
+	runtimeToken uint64,
+	quarantine func(*nodeRuntime, error, bool) error,
+) error {
+	if runtimeToken == 0 {
+		return nil
+	}
+	runtimes.mu.Lock()
+	runtime := runtimes.current
+	if runtime == nil || runtime.token != runtimeToken {
+		draining := runtimes.draining
+		if draining == nil || draining.runtime == nil || draining.runtime.token != runtimeToken {
+			runtimes.mu.Unlock()
+			// A successor can only become current after the prior drain finishes.
+			// Never redirect compensation into that successor.
+			return nil
+		}
+		done := draining.done
+		runtimes.mu.Unlock()
+		<-done
+		if draining.err != nil {
+			return cleanupFailureError(draining.err)
+		}
+		return nil
+	}
+	runtimes.mu.Unlock()
+	finalErr := quarantine(
+		runtime,
+		fmt.Errorf(
+			"%w: Dart could not prove publication handle delivery",
+			ErrPublicationCommitIndeterminate,
+		),
+		false,
+	)
+	if errors.Is(finalErr, ErrRuntimeCleanupFailed) {
+		return finalErr
+	}
+	return nil
 }
 
 // ServeClear removes one Serve/Funnel web path from this node. It is
@@ -619,121 +685,56 @@ func ServeClear(payloadJSON string) string {
 		return jsonError(fmt.Errorf("invalid serve clear JSON: %w", err))
 	}
 
-	lc, err := lcOr("ServeClear")
+	mode, generation, _, err := payload.clearMode()
 	if err != nil {
-		return localAPIError(err)
+		return localAPIError(notAppliedError(err))
 	}
-	if payload.Funnel {
-		if err := clearFunnelForward(payload); err != nil {
-			return localAPIError(err)
-		}
+	runtime := currentRuntime()
+	if mode == publicationClearExact && (runtime == nil || runtime.generation != generation) {
 		return `{"ok":true}`
 	}
-	serveConfigMu.Lock()
-	defer serveConfigMu.Unlock()
-	// Bounded LocalAPI round trips — see defaultNativeCallTimeout.
-	ctx, cancel := lc.callContext(0)
+	if runtime == nil {
+		return localAPIError(fmt.Errorf("%w: ServeClear called before Start", ErrRuntimeStale))
+	}
+	manager := runtime.publication
+	if manager == nil {
+		return localAPIError(notAppliedError(errors.New("ServeClear publication manager is unavailable")))
+	}
+	ctx, cancel := boundedCallCtxFrom(runtime.ctx, 0)
 	defer cancel()
-	sc, err := lc.GetServeConfig(ctx)
-	err = lc.resultError(err)
-	if err != nil {
+	gate := nodeGate{runtime: runtime, s: runtime.server, epoch: runtime.generation}
+	if err := gate.awaitDataPlaneReady(ctx); err != nil {
 		return localAPIError(err)
 	}
-	st, err := lc.StatusWithoutPeers(ctx)
-	err = lc.resultError(err)
-	if err != nil {
+	if err := manager.clear(ctx, payload); err != nil {
+		if errors.Is(err, ErrPublicationCommitIndeterminate) {
+			err = quarantinePublicationCommitIndeterminate(runtime, err)
+		}
 		return localAPIError(err)
 	}
-
-	if err := applyServeClear(sc, st, payload); err != nil {
-		return localAPIError(err)
-	}
-	if err := lc.resultError(lc.SetServeConfig(ctx, sc)); err != nil {
-		return localAPIError(err)
-	}
-	untrackServePublicationFromStatus(st, payload)
 	return `{"ok":true}`
 }
 
-func (p servePublication) hostKey() servePublicationKey {
-	u, err := url.Parse(p.URL)
-	if err != nil {
-		return servePublicationKey{}
+type publicationClearMode uint8
+
+const (
+	publicationClearCoordinate publicationClearMode = iota
+	publicationClearExact
+)
+
+func (p serveClearPayload) clearMode() (publicationClearMode, uint64, uint64, error) {
+	if p.Generation == nil && p.MappingToken == nil {
+		return publicationClearCoordinate, 0, 0, nil
 	}
-	host := u.Hostname()
-	return servePublicationKey{
-		host: host,
-		port: uint16(p.Port),
-		path: p.Path,
+	if p.Generation == nil || p.MappingToken == nil || *p.Generation == 0 || *p.MappingToken == 0 {
+		return 0, 0, 0, errors.New("serve handle close requires positive generation and mappingToken")
 	}
+	return publicationClearExact, *p.Generation, *p.MappingToken, nil
 }
 
-func trackServePublication(key servePublicationKey) {
-	if key.host == "" || key.port == 0 || key.path == "" {
-		return
-	}
-	servePublicationMu.Lock()
-	servePublications[key] = struct{}{}
-	servePublicationMu.Unlock()
-}
-
-func untrackServePublicationFromStatus(st *ipnstate.Status, payload serveClearPayload) {
-	dnsName, _, err := serveHostFromStatus(st)
-	if err != nil {
-		return
-	}
-	port, err := validateServePort("tailnetPort", payload.TailnetPort)
-	if err != nil {
-		return
-	}
-	mount, err := normalizeServePath(payload.Path)
-	if err != nil {
-		return
-	}
-	untrackServePublication(servePublicationKey{host: dnsName, port: port, path: mount})
-}
-
-func untrackServePublication(key servePublicationKey) {
-	servePublicationMu.Lock()
-	delete(servePublications, key)
-	servePublicationMu.Unlock()
-}
-
-func closeAllServePublications(lc *local.Client) {
-	serveConfigMu.Lock()
-	defer serveConfigMu.Unlock()
-	// Snapshot the keys under the same lock ServeForward's commit holds, so a
-	// concurrent forward either committed before us (its key is in the
-	// snapshot and gets removed) or observes the bumped node epoch (the runtime
-	// controller bumps it before calling here) and refuses.
-	keys := takeServePublications()
-	if lc == nil || len(keys) == 0 {
-		return
-	}
-	// Bounded: this runs during runtime drain. The controller lock is already
-	// released, but an unbounded LocalAPI round trip would still prevent the
-	// drain from completing and keep subsequent startup quarantined.
-	ctx, cancel := boundedCallCtx(0)
-	defer cancel()
-	sc, err := lc.GetServeConfig(ctx)
-	if err != nil || sc == nil {
-		return
-	}
-	for _, key := range keys {
-		removeServeWebHandler(sc, key.host, key.port, key.path)
-	}
-	_ = lc.SetServeConfig(ctx, sc)
-}
-
-func takeServePublications() []servePublicationKey {
-	servePublicationMu.Lock()
-	defer servePublicationMu.Unlock()
-	keys := make([]servePublicationKey, 0, len(servePublications))
-	for key := range servePublications {
-		keys = append(keys, key)
-	}
-	servePublications = map[servePublicationKey]struct{}{}
-	return keys
+func (p servePublication) key() publicationKey {
+	port, _ := validateServePort("tailnetPort", p.Port)
+	return publicationKey{port: port, path: p.Path}
 }
 
 func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveForwardPayload) (servePublication, error) {
@@ -764,11 +765,16 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 	if st.Self == nil {
 		return servePublication{}, errors.New("serve unavailable: local node status missing")
 	}
-	if payload.Funnel {
-		return servePublication{}, errors.New("funnel forwarding must use startFunnelForward")
+	if payload.Funnel && !payload.HTTPS {
+		return servePublication{}, errors.New("Funnel requires HTTPS")
 	}
 	if payload.HTTPS && !st.Self.HasCap(tailcfg.CapabilityHTTPS) {
 		return servePublication{}, errors.New("Serve not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
+	}
+	if payload.Funnel {
+		if err := ipn.CheckFunnelAccess(port, st.Self); err != nil {
+			return servePublication{}, err
+		}
 	}
 	if sc.IsTCPForwardingOnPort(port, "") {
 		return servePublication{}, fmt.Errorf("cannot serve web; already serving TCP on port %d", port)
@@ -787,6 +793,10 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 		payload.HTTPS,
 		magicDNSSuffix,
 	)
+	// Funnel and Serve share one upstream configuration authority. The latest
+	// package mutation owns the port-level visibility policy, matching
+	// `tailscale serve/funnel`'s setServe path.
+	sc.SetFunnel(dnsName, port, payload.Funnel)
 
 	return servePublication{
 		URL:          serveURL(payload.HTTPS, dnsName, port, mount),
@@ -795,11 +805,29 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 		LocalPort:    int(localPort),
 		Path:         mount,
 		HTTPS:        payload.HTTPS,
-		Funnel:       false,
+		Funnel:       payload.Funnel,
+		host:         dnsName,
 	}, nil
 }
 
 func applyServeClear(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveClearPayload) error {
+	dnsName, _, err := serveHostFromStatus(st)
+	if err != nil {
+		return err
+	}
+	return applyServeClearForHost(sc, dnsName, payload)
+}
+
+func applyServeClearForHost(sc *ipn.ServeConfig, dnsName string, payload serveClearPayload) error {
+	return applyServeClearForHostWithFunnelCleanup(sc, dnsName, payload, true)
+}
+
+func applyServeClearForHostWithFunnelCleanup(
+	sc *ipn.ServeConfig,
+	dnsName string,
+	payload serveClearPayload,
+	cleanupFunnelWhenEmpty bool,
+) error {
 	if sc == nil {
 		return nil
 	}
@@ -811,15 +839,17 @@ func applyServeClear(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveClea
 	if err != nil {
 		return err
 	}
-	dnsName, _, err := serveHostFromStatus(st)
-	if err != nil {
-		return err
-	}
 	if sc.IsTCPForwardingOnPort(port, "") {
 		return fmt.Errorf("cannot clear web serve; currently serving TCP on port %d", port)
 	}
 
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(port))))
+	if payload.Funnel {
+		// Funnel visibility is keyed by host:port, not path. Clearing a Funnel
+		// publication withdraws public ingress for the whole port while the
+		// selected handler cleanup below remains path-specific.
+		sc.SetFunnel(dnsName, port, false)
+	}
 	web := sc.Web[hp]
 	if web == nil {
 		return nil
@@ -828,7 +858,9 @@ func applyServeClear(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveClea
 	if len(web.Handlers) == 0 {
 		delete(sc.Web, hp)
 		delete(sc.TCP, port)
-		delete(sc.AllowFunnel, hp)
+		if cleanupFunnelWhenEmpty {
+			delete(sc.AllowFunnel, hp)
+		}
 	}
 	if len(sc.Web) == 0 {
 		sc.Web = nil
@@ -843,6 +875,16 @@ func applyServeClear(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveClea
 }
 
 func removeServeWebHandler(sc *ipn.ServeConfig, host string, port uint16, mount string) {
+	removeServeWebHandlerWithFunnelCleanup(sc, host, port, mount, true)
+}
+
+func removeServeWebHandlerWithFunnelCleanup(
+	sc *ipn.ServeConfig,
+	host string,
+	port uint16,
+	mount string,
+	cleanupFunnelWhenEmpty bool,
+) {
 	if sc == nil || host == "" || port == 0 || mount == "" {
 		return
 	}
@@ -855,7 +897,9 @@ func removeServeWebHandler(sc *ipn.ServeConfig, host string, port uint16, mount 
 	if len(web.Handlers) == 0 {
 		delete(sc.Web, hp)
 		delete(sc.TCP, port)
-		delete(sc.AllowFunnel, hp)
+		if cleanupFunnelWhenEmpty {
+			delete(sc.AllowFunnel, hp)
+		}
 	}
 	if len(sc.Web) == 0 {
 		sc.Web = nil
@@ -1061,11 +1105,17 @@ func parsePrefixes(cidrs []string) ([]netip.Prefix, error) {
 	return prefixes, nil
 }
 
-// DiagPing runs a Tailscale-level ping against the given tailnet IP
-// or MagicDNS name and returns JSON matching the Dart PingResult shape.
+// DiagPing runs a Tailscale-level ping for the exact captured runtime token
+// against the given tailnet IP or MagicDNS name and returns JSON matching the
+// Dart PingResult shape.
 // `timeoutMillis <= 0` means no timeout. `pingType` is one of
 // "disco" (default), "tsmp", or "icmp".
-func DiagPing(ip string, timeoutMillis int, pingType string) string {
+func DiagPing(runtimeToken uint64, ip string, timeoutMillis int, pingType string) string {
+	lc, err := lcForRuntimeToken("DiagPing", runtimeToken)
+	if err != nil {
+		return localAPIError(err)
+	}
+
 	var pt tailcfg.PingType
 	switch strings.ToLower(strings.TrimSpace(pingType)) {
 	case "", "disco":
@@ -1078,14 +1128,12 @@ func DiagPing(ip string, timeoutMillis int, pingType string) string {
 		return jsonError(fmt.Errorf("unknown ping type %q", pingType))
 	}
 
-	lc, err := lcOr("DiagPing")
-	if err != nil {
-		return localAPIError(err)
-	}
-
 	// Bounded even with no caller timeout — see defaultNativeCallTimeout.
 	ctx, cancel := lc.callContext(time.Duration(timeoutMillis) * time.Millisecond)
 	defer cancel()
+	if err := lc.awaitDataPlaneReady(ctx); err != nil {
+		return localAPIError(err)
+	}
 
 	addr, err := resolvePingAddr(ctx, lc.Client, ip)
 	err = lc.resultError(err)

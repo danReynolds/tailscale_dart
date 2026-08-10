@@ -165,6 +165,7 @@ final class _WorkerStartCommand extends _WorkerCommand {
     required this.ephemeral,
     required this.controlUrl,
     required this.hostNetworkSnapshot,
+    required this.bootstrapBudgetMillis,
   }) : super(_WorkerOperation.start);
 
   final int requestToken;
@@ -173,6 +174,7 @@ final class _WorkerStartCommand extends _WorkerCommand {
   final bool ephemeral;
   final String controlUrl;
   final String hostNetworkSnapshot;
+  final int bootstrapBudgetMillis;
 }
 
 final class _WorkerHttpBindCommand extends _WorkerCommand {
@@ -355,6 +357,29 @@ final class _WorkerRuntimeErrorEvent extends _WorkerEvent {
 
   final int runtimeToken;
   final TailscaleRuntimeError error;
+}
+
+/// One exact native runtime was already detached and drained by Go.
+///
+/// This is deliberately distinct from a worker exit: the control isolate is
+/// healthy and remains reusable, so R3 worker-recovery must not quarantine the
+/// already-closed generation a second time.
+final class _WorkerRuntimeTerminatedEvent extends _WorkerEvent {
+  const _WorkerRuntimeTerminatedEvent({
+    required this.runtimeToken,
+    required this.message,
+    required this.code,
+    required this.emitStopped,
+    required this.cleanupFailed,
+    required this.reportRuntimeError,
+  });
+
+  final int runtimeToken;
+  final String message;
+  final TailscaleErrorCode code;
+  final bool emitStopped;
+  final bool cleanupFailed;
+  final bool reportRuntimeError;
 }
 
 final class _WorkerPeersEvent extends _WorkerEvent {

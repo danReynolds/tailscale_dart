@@ -25,6 +25,21 @@ enum TailscaleErrorCode {
   /// The operation belongs to a node runtime that has already stopped.
   staleRuntime,
 
+  /// The node has not completed its Running/publication bootstrap gate.
+  dataPlaneNotReady,
+
+  /// The mandatory first-Up publication reset failed for this runtime.
+  publicationBootstrapFailure,
+
+  /// ServeConfig changed during all bounded mutation attempts.
+  serveConfigConflict,
+
+  /// The publication mutation conclusively did not reach ServeConfig.
+  publicationNotApplied,
+
+  /// A ServeConfig mutation may have applied before its result was lost.
+  publicationCommitIndeterminate,
+
   /// Native startup was quarantined before it could publish a runtime.
   startupAbandoned,
 
@@ -330,7 +345,21 @@ final class TailscaleDiagException extends TailscaleOperationException {
 }
 
 /// High-level category for asynchronous runtime errors pushed from Go.
-enum TailscaleRuntimeErrorCode { localClient, watcher, node, worker, unknown }
+enum TailscaleRuntimeErrorCode {
+  localClient,
+  watcher,
+  node,
+  worker,
+
+  /// The runtime's mandatory first-Up publication reset failed fatally.
+  publicationBootstrapFailure,
+
+  /// A committed publication could not be transferred to an exact Dart
+  /// handle, so native quarantined the runtime rather than leave live ingress.
+  publicationDeliveryFailure,
+
+  unknown,
+}
 
 TailscaleRuntimeErrorCode _parseRuntimeErrorCode(String? value) =>
     switch (value) {
@@ -338,6 +367,10 @@ TailscaleRuntimeErrorCode _parseRuntimeErrorCode(String? value) =>
       'watcher' => TailscaleRuntimeErrorCode.watcher,
       'node' => TailscaleRuntimeErrorCode.node,
       'worker' => TailscaleRuntimeErrorCode.worker,
+      'publicationBootstrapFailure' =>
+        TailscaleRuntimeErrorCode.publicationBootstrapFailure,
+      'publicationDeliveryFailure' =>
+        TailscaleRuntimeErrorCode.publicationDeliveryFailure,
       _ => TailscaleRuntimeErrorCode.unknown,
     };
 

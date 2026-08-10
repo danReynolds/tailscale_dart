@@ -164,7 +164,7 @@ void main() {
       final census = jsonDecode(result) as Map<String, dynamic>;
       expect(census['epoch'], isA<int>());
       expect(census['servePublications'], 0);
-      expect(census['funnelForwarders'], 0);
+      expect(census, isNot(contains('funnelForwarders')));
       expect(census['httpBindings'], 0);
       expect(census['tcpListeners'], 0);
       expect(census['udpBridges'], 0);
@@ -206,6 +206,7 @@ void main() {
         controlUrl,
         1,
         hostNetworkSnapshot,
+        30000,
       );
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
@@ -241,7 +242,15 @@ void main() {
       final method = 'GET'.toNativeUtf8();
       final url = 'http://100.64.0.1/'.toNativeUtf8();
       final headers = '{}'.toNativeUtf8();
-      final resultPtr = native.duneHttpStart(method, url, headers, 0, 1, 5);
+      final resultPtr = native.duneHttpStart(
+        999999,
+        method,
+        url,
+        headers,
+        0,
+        1,
+        5,
+      );
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
       calloc.free(method);
@@ -254,15 +263,32 @@ void main() {
   });
 
   group('duneTcpDialFd validation', () {
-    test('returns JSON error before server startup', () {
+    test('rejects an unowned runtime token before server startup', () {
       final host = 'peer'.toNativeUtf8();
-      final resultPtr = native.duneTcpDialFd(host, 80, 0);
+      final resultPtr = native.duneTcpDialFd(999999, host, 80, 0);
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
       calloc.free(host);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
-      expect(parsed['error'], contains('TcpDialFd called before Start'));
+      expect(parsed['error'], contains('TcpDialFd captured runtime 999999'));
+      expect(parsed['code'], 'staleRuntime');
+    });
+  });
+
+  group('duneDiagPing validation', () {
+    test('rejects an unowned runtime token before LocalAPI dispatch', () {
+      final ip = '100.64.0.1'.toNativeUtf8();
+      final pingType = 'disco'.toNativeUtf8();
+      final resultPtr = native.duneDiagPing(999999, ip, 0, pingType);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(ip);
+      calloc.free(pingType);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], contains('DiagPing captured runtime 999999'));
+      expect(parsed['code'], 'staleRuntime');
     });
   });
 
@@ -333,7 +359,7 @@ void main() {
         'https': true,
         'funnel': false,
       }).toNativeUtf8();
-      final resultPtr = native.duneServeForward(payload);
+      final resultPtr = native.duneServeForward(0, payload);
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
       calloc.free(payload);
@@ -351,14 +377,30 @@ void main() {
         'https': true,
         'funnel': true,
       }).toNativeUtf8();
-      final resultPtr = native.duneServeForward(payload);
+      final resultPtr = native.duneServeForward(0, payload);
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
       calloc.free(payload);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
-      expect(parsed['error'], contains('FunnelForward called before Start'));
+      expect(parsed['error'], contains('ServeForward called before Start'));
     });
+
+    test(
+      'publication acknowledgement symbols preserve exact-token semantics',
+      () {
+        final acknowledgePtr = native.duneAcknowledgePublication(91, 7, 3);
+        final acknowledgeJson = acknowledgePtr.toDartString();
+        native.duneFree(acknowledgePtr);
+        final acknowledge = jsonDecode(acknowledgeJson) as Map<String, dynamic>;
+        expect(acknowledge['code'], 'staleRuntime');
+
+        final compensatePtr = native.duneFailPublicationDelivery(91);
+        final compensateJson = compensatePtr.toDartString();
+        native.duneFree(compensatePtr);
+        expect(jsonDecode(compensateJson), {'ok': true});
+      },
+    );
 
     test('serve clear returns JSON error before server startup', () {
       final payload = jsonEncode({
@@ -373,6 +415,39 @@ void main() {
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
       expect(parsed['error'], contains('ServeClear called before Start'));
+    });
+
+    test('stale exact publication close is an idle no-op', () {
+      final payload = jsonEncode({
+        'tailnetPort': 443,
+        'path': '/',
+        'funnel': false,
+        'generation': 91,
+        'mappingToken': 7,
+      }).toNativeUtf8();
+      final resultPtr = native.duneServeClear(payload);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(payload);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed, containsPair('ok', true));
+    });
+
+    test('partial exact publication identity is rejected', () {
+      final payload = jsonEncode({
+        'tailnetPort': 443,
+        'path': '/',
+        'funnel': false,
+        'generation': 91,
+      }).toNativeUtf8();
+      final resultPtr = native.duneServeClear(payload);
+      final resultJson = resultPtr.toDartString();
+      native.duneFree(resultPtr);
+      calloc.free(payload);
+
+      final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
+      expect(parsed['error'], isNotNull);
     });
   });
 }

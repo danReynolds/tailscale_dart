@@ -21,13 +21,29 @@ import (
 )
 
 //export DuneStart
-func DuneStart(requestToken C.ulonglong, hostname *C.char, authKey *C.char, controlURL *C.char, ephemeral C.int, hostNetworkSnapshot *C.char) *C.char {
+func DuneStart(requestToken C.ulonglong, hostname *C.char, authKey *C.char, controlURL *C.char, ephemeral C.int, hostNetworkSnapshot *C.char, bootstrapBudgetMillis C.longlong) *C.char {
 	name := C.GoString(hostname)
 	key := C.GoString(authKey)
 	ctl := C.GoString(controlURL)
 	network := C.GoString(hostNetworkSnapshot)
+	budgetMillis := int64(bootstrapBudgetMillis)
+	if budgetMillis < 0 {
+		budgetMillis = 0
+	}
+	const maxDurationMillis = int64(^uint64(0)>>1) / int64(time.Millisecond)
+	if budgetMillis > maxDurationMillis {
+		budgetMillis = maxDurationMillis
+	}
 
-	alreadyActive, runtimeToken, err := tailscale.StartRuntimeWithToken(uint64(requestToken), name, key, ctl, ephemeral != 0, network)
+	alreadyActive, runtimeToken, err := tailscale.StartRuntimeWithBootstrapBudget(
+		uint64(requestToken),
+		name,
+		key,
+		ctl,
+		ephemeral != 0,
+		network,
+		time.Duration(budgetMillis)*time.Millisecond,
+	)
 	if err != nil {
 		return lifecycleError(err)
 	}
@@ -37,6 +53,11 @@ func DuneStart(requestToken C.ulonglong, hostname *C.char, authKey *C.char, cont
 		"runtimeToken":  runtimeToken,
 	})
 	return C.CString(string(b))
+}
+
+//export DuneMarkUpSettled
+func DuneMarkUpSettled(runtimeToken C.ulonglong) {
+	tailscale.MarkRuntimeUpSettled(uint64(runtimeToken))
 }
 
 //export DuneConfigure
@@ -166,8 +187,9 @@ func DuneFinishCustody(requestToken C.ulonglong, cleanupSucceeded C.int) *C.char
 }
 
 //export DuneHttpStart
-func DuneHttpStart(method *C.char, url *C.char, headersJSON *C.char, contentLength C.longlong, followRedirects C.int, maxRedirects C.int) *C.char {
+func DuneHttpStart(runtimeToken C.ulonglong, method *C.char, url *C.char, headersJSON *C.char, contentLength C.longlong, followRedirects C.int, maxRedirects C.int) *C.char {
 	req, err := tailscale.HttpStart(
+		uint64(runtimeToken),
 		C.GoString(method),
 		C.GoString(url),
 		C.GoString(headersJSON),
@@ -176,9 +198,7 @@ func DuneHttpStart(method *C.char, url *C.char, headersJSON *C.char, contentLeng
 		int(maxRedirects),
 	)
 	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+		return C.CString(tailscale.ErrorJSON(err))
 	}
 	result, _ := json.Marshal(map[string]any{
 		"requestBodyFd":  req.RequestBodyFD,
@@ -191,9 +211,7 @@ func DuneHttpStart(method *C.char, url *C.char, headersJSON *C.char, contentLeng
 func DuneHttpBind(tailnetPort C.int) *C.char {
 	binding, err := tailscale.HttpBind(int(tailnetPort))
 	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+		return C.CString(tailscale.ErrorJSON(err))
 	}
 	result, _ := json.Marshal(map[string]any{
 		"bindingId":      binding.ID,
@@ -242,14 +260,14 @@ func DuneHttpCloseBinding(bindingID C.longlong) {
 }
 
 //export DuneTcpDialFd
-func DuneTcpDialFd(host *C.char, port C.int, timeoutMillis C.longlong) *C.char {
+func DuneTcpDialFd(runtimeToken C.ulonglong, host *C.char, port C.int, timeoutMillis C.longlong) *C.char {
 	h := C.GoString(host)
 	var timeout time.Duration
 	if timeoutMillis > 0 {
 		timeout = time.Duration(timeoutMillis) * time.Millisecond
 	}
 
-	conn, err := tailscale.TcpDialFd(h, int(port), timeout)
+	conn, err := tailscale.TcpDialFd(uint64(runtimeToken), h, int(port), timeout)
 	if err != nil {
 		return C.CString(tailscale.ErrorJSON(err))
 	}
@@ -268,9 +286,7 @@ func DuneTcpListenFd(tailnetPort C.int, tailnetHost *C.char) *C.char {
 	host := C.GoString(tailnetHost)
 	listener, err := tailscale.TcpListenFd(int(tailnetPort), host)
 	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+		return C.CString(tailscale.ErrorJSON(err))
 	}
 	result, _ := json.Marshal(map[string]any{
 		"listenerId":   listener.ID,
@@ -330,9 +346,7 @@ func DuneUdpBindFd(host *C.char, port C.int) *C.char {
 	h := C.GoString(host)
 	binding, err := tailscale.UdpBindFd(h, int(port))
 	if err != nil {
-		m := map[string]string{"error": err.Error()}
-		b, _ := json.Marshal(m)
-		return C.CString(string(b))
+		return C.CString(tailscale.ErrorJSON(err))
 	}
 	result, _ := json.Marshal(map[string]any{
 		"fd":           binding.FD,
@@ -432,8 +446,9 @@ func DuneTlsDomains() *C.char {
 }
 
 //export DuneDiagPing
-func DuneDiagPing(ip *C.char, timeoutMillis C.int, pingType *C.char) *C.char {
+func DuneDiagPing(runtimeToken C.ulonglong, ip *C.char, timeoutMillis C.int, pingType *C.char) *C.char {
 	return C.CString(tailscale.DiagPing(
+		uint64(runtimeToken),
 		C.GoString(ip),
 		int(timeoutMillis),
 		C.GoString(pingType),
@@ -523,6 +538,10 @@ func lifecycleErrorJSON(err error, fields map[string]any) string {
 		m["code"] = "runtimeCleanupFailed"
 	case errors.Is(err, tailscale.ErrConfigurationMismatch):
 		m["code"] = "configurationMismatch"
+	case errors.Is(err, tailscale.ErrDataPlaneNotReady):
+		m["code"] = "dataPlaneNotReady"
+	case errors.Is(err, tailscale.ErrPublicationBootstrapFailure):
+		m["code"] = "publicationBootstrapFailure"
 	case errors.Is(err, tailscale.ErrStartupAbandoned):
 		m["code"] = "startupAbandoned"
 	case errors.Is(err, tailscale.ErrRuntimeStale):
@@ -625,8 +644,24 @@ func DuneExitNodeUseAuto() *C.char {
 }
 
 //export DuneServeForward
-func DuneServeForward(payloadJSON *C.char) *C.char {
-	return C.CString(tailscale.ServeForward(C.GoString(payloadJSON)))
+func DuneServeForward(runtimeToken C.ulonglong, payloadJSON *C.char) *C.char {
+	return C.CString(tailscale.ServeForward(uint64(runtimeToken), C.GoString(payloadJSON)))
+}
+
+//export DuneAcknowledgePublication
+func DuneAcknowledgePublication(runtimeToken, generation, mappingToken C.ulonglong) *C.char {
+	if err := tailscale.AcknowledgePublication(uint64(runtimeToken), uint64(generation), uint64(mappingToken)); err != nil {
+		return C.CString(tailscale.ErrorJSON(err))
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+//export DuneFailPublicationDelivery
+func DuneFailPublicationDelivery(runtimeToken C.ulonglong) *C.char {
+	if err := tailscale.FailPublicationDelivery(uint64(runtimeToken)); err != nil {
+		return C.CString(tailscale.ErrorJSON(err))
+	}
+	return C.CString(`{"ok":true}`)
 }
 
 //export DuneServeClear

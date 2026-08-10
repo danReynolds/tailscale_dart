@@ -37,6 +37,8 @@ layer that proves the behavior.
 | Live Tailscale TLS | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_tls_listener_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS-enabled tailnet | Validates successful `tls.bind` serving. Headscale can only validate the clear failure path because it does not provision Tailscale HTTPS certificates. |
 | Live Tailscale Serve | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_serve_forward_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS-enabled tailnet | Validates `serve.forward` end-to-end by proxying a loopback HTTP server and fetching it from a second embedded node. |
 | Live Tailscale Funnel | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_funnel_forward_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS/Funnel-enabled tailnet + `curl` | Validates `funnel.forward` end-to-end by proxying a loopback HTTP server and fetching its public Funnel URL. Uses DNS-over-HTTPS plus `curl --resolve` to avoid local negative DNS caching while preserving SNI/Host. |
+| Live Funnel tailnet reach | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_funnel_tailnet_reach_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS/Funnel-enabled tailnet | R5 receipt that a Funnel ServeConfig publication remains reachable from a second node inside the tailnet. |
+| Live Serve/Funnel swap | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_funnel_serve_swap_test.dart` | No, opt-in only | Tailscale SaaS + HTTPS/Funnel-enabled tailnet + `curl` | R5 hosted replacement receipt: Serve -> Funnel -> Serve on one coordinate, including public Funnel ingress and stale exact-handle closes. |
 
 The default development loop is therefore:
 
@@ -107,6 +109,10 @@ TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
   dart test test/live_tailscale/live_serve_forward_test.dart
 TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
   dart test test/live_tailscale/live_funnel_forward_test.dart
+TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
+  dart test test/live_tailscale/live_funnel_tailnet_reach_test.dart
+TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
+  dart test test/live_tailscale/live_funnel_serve_swap_test.dart
 tool/test_pr_gate.sh
 tool/test_local_full.sh
 cd packages/demo_core && dart test

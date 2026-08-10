@@ -52,7 +52,9 @@ export 'src/api/serve.dart'
     hide
         createServe,
         createPublishedServiceForFunnel,
+        ServeForwardResult,
         ServeForwardFn,
+        ServeCloseFn,
         ServeClearFn;
 export 'src/api/taildrop.dart';
 export 'src/api/tcp.dart'
@@ -228,8 +230,51 @@ class Tailscale implements TailscaleClient {
     publishState: _stateController.add,
     publishRuntimeError: _errorController.add,
     publishNodes: _publishNodes,
+    onRuntimeTerminated: _handleNativeRuntimeTermination,
     onExit: _handleWorkerExit,
   );
+
+  void _handleNativeRuntimeTermination(
+    Worker worker,
+    int runtimeToken,
+    TailscaleOperationException failure,
+    bool emitStopped,
+    bool cleanupFailed,
+    bool reportRuntimeError,
+  ) {
+    if (!identical(_workerInstance, worker)) return;
+
+    _reset();
+    _publishTerminalNodes();
+    if (reportRuntimeError) {
+      _errorController.add(
+        TailscaleRuntimeError(
+          message: failure.message,
+          code: switch (failure.code) {
+            TailscaleErrorCode.publicationBootstrapFailure =>
+              TailscaleRuntimeErrorCode.publicationBootstrapFailure,
+            TailscaleErrorCode.publicationCommitIndeterminate =>
+              TailscaleRuntimeErrorCode.publicationDeliveryFailure,
+            _ => TailscaleRuntimeErrorCode.unknown,
+          },
+        ),
+      );
+    }
+    if (cleanupFailed) {
+      _retainCleanupFailure(
+        TailscaleOperationException(
+          'native runtime termination',
+          'Native teardown did not reach a proven quiescent state.',
+          code: TailscaleErrorCode.runtimeCleanupFailed,
+          cause: failure,
+        ),
+      );
+      return;
+    }
+
+    _idleStatusError = null;
+    if (emitStopped) _stateController.add(NodeState.stopped);
+  }
 
   Future<void> _awaitWorkerRecoveryCompletion() async {
     while (true) {
@@ -262,9 +307,20 @@ class Tailscale implements TailscaleClient {
     return await operation(await _workerForCall());
   }
 
-  Future<T> _withNativeRuntime<T>(Future<T> Function() operation) async {
-    await _awaitWorkerRecovery();
-    return await operation();
+  Future<T> _withNativeRuntime<T>(
+    Future<T> Function(int runtimeToken) operation,
+  ) {
+    // Capture synchronously, before recovery or the offload semaphore can
+    // yield. A queued operation authorized by runtime A must never discover
+    // and mutate a replacement runtime B when it finally enters native code.
+    final worker = _workerInstance;
+    final runtimeToken = worker != null && !worker.isDisposed
+        ? worker.runtimeToken ?? 0
+        : 0;
+    return () async {
+      await _awaitWorkerRecovery();
+      return await operation(runtimeToken);
+    }();
   }
 
   void _trackWorkerRecovery(Future<void> Function() recovery) {
@@ -732,7 +788,12 @@ class Tailscale implements TailscaleClient {
     // contended (callers dial/status concurrently), so it must not block the
     // worker. See lib/src/worker/native_offload.dart.
     dialFn: (host, port, timeout) => _withNativeRuntime(
-      () => offloadTcpDial(host: host, port: port, timeout: timeout),
+      (runtimeToken) => offloadTcpDial(
+        runtimeToken: runtimeToken,
+        host: host,
+        port: port,
+        timeout: timeout,
+      ),
     ),
     listenFn: (tailnetPort, tailnetHost) => _withWorker(
       (worker) => worker.tcpListenFd(
@@ -774,7 +835,8 @@ class Tailscale implements TailscaleClient {
           required https,
           required funnel,
         }) => _withNativeRuntime(
-          () => offloadServeForward(
+          (runtimeToken) => offloadServeForward(
+            runtimeToken: runtimeToken,
             tailnetPort: tailnetPort,
             localPort: localPort,
             localAddress: localAddress,
@@ -789,6 +851,22 @@ class Tailscale implements TailscaleClient {
             tailnetPort: tailnetPort,
             path: path,
             funnel: funnel,
+          ),
+        ),
+    closeFn:
+        ({
+          required tailnetPort,
+          required path,
+          required funnel,
+          required generation,
+          required mappingToken,
+        }) => _withWorker(
+          (worker) => worker.serveClose(
+            tailnetPort: tailnetPort,
+            path: path,
+            funnel: funnel,
+            generation: generation,
+            mappingToken: mappingToken,
           ),
         ),
   );
@@ -815,7 +893,8 @@ class Tailscale implements TailscaleClient {
           required https,
           required funnel,
         }) => _withNativeRuntime(
-          () => offloadServeForward(
+          (runtimeToken) => offloadServeForward(
+            runtimeToken: runtimeToken,
             tailnetPort: tailnetPort,
             localPort: localPort,
             localAddress: localAddress,
@@ -830,6 +909,22 @@ class Tailscale implements TailscaleClient {
             tailnetPort: tailnetPort,
             path: path,
             funnel: funnel,
+          ),
+        ),
+    closeFn:
+        ({
+          required tailnetPort,
+          required path,
+          required funnel,
+          required generation,
+          required mappingToken,
+        }) => _withWorker(
+          (worker) => worker.serveClose(
+            tailnetPort: tailnetPort,
+            path: path,
+            funnel: funnel,
+            generation: generation,
+            mappingToken: mappingToken,
           ),
         ),
   );
@@ -863,7 +958,12 @@ class Tailscale implements TailscaleClient {
   late final Diag diag = createDiag(
     // Offloaded to a helper isolate (long + contended, like dial).
     pingFn: (ip, timeout, type) => _withNativeRuntime(
-      () => offloadDiagPing(ip: ip, timeout: timeout, pingType: type.name),
+      (runtimeToken) => offloadDiagPing(
+        runtimeToken: runtimeToken,
+        ip: ip,
+        timeout: timeout,
+        pingType: type.name,
+      ),
     ),
     metricsFn: () => _withWorker((worker) => worker.diagMetrics()),
     derpMapFn: () => _withWorker((worker) => worker.diagDERPMap()),
@@ -1186,9 +1286,13 @@ class Tailscale implements TailscaleClient {
     final workerExit = Completer<Object?>();
     var pendingNativeToken = false;
     Future<WorkerStartResult>? originatingStart;
+    Worker? settledWorker;
+    int? settledRuntimeToken;
+    int? bootstrapFailureToken;
+    Future<TailscaleOperationException>? publicationBootstrapFailure;
 
     Future<T> failOnWorkerExit<T>(Future<T> operation) {
-      return Future.any<T>([
+      final futures = <Future<T>>[
         operation,
         workerExit.future.then<T>(
           (cause) => throw TailscaleUpException(
@@ -1197,12 +1301,21 @@ class Tailscale implements TailscaleClient {
             cause: cause,
           ),
         ),
-      ]);
+      ];
+      final fatal = publicationBootstrapFailure;
+      if (fatal != null) {
+        futures.add(fatal.then<T>((failure) => throw failure));
+      }
+      return Future.any<T>(futures);
     }
 
     bool isWorkerTermination(Object error) =>
         error is TailscaleOperationException &&
         error.code == TailscaleErrorCode.workerTerminated;
+
+    bool isPublicationBootstrapFailure(Object error) =>
+        error is TailscaleOperationException &&
+        error.code == TailscaleErrorCode.publicationBootstrapFailure;
 
     Duration remainingBudget() {
       final remaining = timeout - elapsed.elapsed;
@@ -1309,6 +1422,12 @@ class Tailscale implements TailscaleClient {
       }
 
       worker = _currentOrSpawnWorker();
+      settledWorker = worker;
+      final failureToken = worker.runtimeToken ?? requestToken;
+      bootstrapFailureToken = failureToken;
+      publicationBootstrapFailure = worker.publicationBootstrapFailureFor(
+        failureToken,
+      );
       _activeUpToken = requestToken;
       _activeUpWorkerExit = workerExit;
 
@@ -1319,6 +1438,7 @@ class Tailscale implements TailscaleClient {
         authKey: authKey,
         ephemeral: ephemeral,
         controlUrl: controlUrl,
+        bootstrapBudget: remainingBudget(),
       );
       originatingStart = startFuture;
 
@@ -1339,13 +1459,14 @@ class Tailscale implements TailscaleClient {
         );
       }
       pendingNativeToken = false;
+      settledRuntimeToken = startResult.runtimeToken;
 
       _activeUpToken = startResult.runtimeToken;
 
       _idleStatusError = null;
       if (!startResult.alreadyActive || _http == null) {
         _http?.close();
-        _http = TailscaleHttpClient();
+        _http = TailscaleHttpClient(runtimeToken: startResult.runtimeToken);
       }
       startReturned = true;
 
@@ -1367,7 +1488,8 @@ class Tailscale implements TailscaleClient {
       } catch (error, stackTrace) {
         if (isWorkerTermination(error)) {
           await _awaitWorkerRecovery();
-        } else if (!startResult.alreadyActive) {
+        } else if (!isPublicationBootstrapFailure(error) &&
+            !startResult.alreadyActive) {
           await _quarantineTimedOutStart(worker, startResult.runtimeToken);
         }
         Error.throwWithStackTrace(error, stackTrace);
@@ -1407,13 +1529,19 @@ class Tailscale implements TailscaleClient {
       } catch (error, stackTrace) {
         if (isWorkerTermination(error)) {
           await _awaitWorkerRecovery();
-        } else if (!startResult.alreadyActive) {
+        } else if (!isPublicationBootstrapFailure(error) &&
+            !startResult.alreadyActive) {
           await _quarantineTimedOutStart(worker, startResult.runtimeToken);
         }
         Error.throwWithStackTrace(error, stackTrace);
       }
     } catch (error, stackTrace) {
       Object? cleanupError;
+      if (isPublicationBootstrapFailure(error)) {
+        // Native already detached and drained this exact generation before
+        // publishing the terminal event. Do not run startup quarantine again.
+        pendingNativeToken = false;
+      }
       if (pendingNativeToken) {
         _workerInstance?.detachRuntimeToken(requestToken);
         if (isWorkerTermination(error)) {
@@ -1478,6 +1606,17 @@ class Tailscale implements TailscaleClient {
         stackTrace,
       );
     } finally {
+      final token = settledRuntimeToken;
+      if (token != null) {
+        // Linearize the public Future settlement with a possible later first
+        // Running observation. This synchronous native marker happens before
+        // `up()` returns to the host application.
+        settledWorker?.markUpSettled(token);
+      }
+      final failureToken = bootstrapFailureToken;
+      if (failureToken != null) {
+        settledWorker?.retirePublicationBootstrapFailure(failureToken);
+      }
       if (identical(_activeUpWorkerExit, workerExit)) {
         _activeUpWorkerExit = null;
         _activeUpToken = null;

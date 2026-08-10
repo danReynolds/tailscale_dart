@@ -145,7 +145,7 @@ void main() {
         await server.close();
       }
     },
-    timeout: const Timeout(Duration(minutes: 3)),
+    timeout: const Timeout(Duration(minutes: 7)),
   );
 }
 
@@ -172,6 +172,7 @@ Future<({int statusCode, String body})> _runClientFetch({
       'HOSTNAME': hostname,
       'AUTH_KEY': authKey,
       'URL': url.toString(),
+      'FETCH_BUDGET_SECONDS': '150',
       if (controlUrl != null && controlUrl.isNotEmpty)
         'CONTROL_URL': controlUrl,
     },
@@ -215,7 +216,7 @@ Future<({int statusCode, String body})> _runClientFetch({
   );
 
   try {
-    return await result.future.timeout(const Duration(seconds: 90));
+    return await result.future.timeout(const Duration(minutes: 5));
   } finally {
     try {
       process.kill(ProcessSignal.sigterm);

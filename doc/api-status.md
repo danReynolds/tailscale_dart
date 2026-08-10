@@ -9,7 +9,8 @@ example. For the forward-looking phase plan, see
 > **Architecture transition:** this file describes callable APIs in the current
 > source. R4d's persistent StateStore is one authenticated encrypted Go
 > envelope whose 32-byte DEK is held by Keybay; ephemeral nodes use an
-> in-memory StateStore and no Keybay. The [rearchitecture
+> in-memory StateStore and no Keybay. R5's automatic first-`Up` gate and
+> runtime-owned ServeConfig manager are also present. The [rearchitecture
 > plan](rearchitecture-plan.md) and its
 > [runtime](adr-runtime-ownership-and-lifecycle.md) and
 > [encrypted-state](adr-encrypted-node-state.md) ADRs also describe later work
@@ -42,17 +43,18 @@ custody path. Older Android and headless Linux can use explicit ephemeral mode,
 which never accesses Keybay.
 
 **Implementation model:** this package aligns to both upstream
-`tsnet.Server` and upstream `local.Client`. Transport primitives such as
-HTTP, TCP, UDP, TLS, Funnel, and future service listeners follow
-`tsnet`; node introspection, diagnostics, prefs, profiles, serve
-config, exit nodes, and taildrop follow LocalAPI via `local.Client`.
+`tsnet.Server` and upstream `local.Client`. HTTP, TCP, UDP, and raw listeners
+use `tsnet`; node introspection, diagnostics, prefs, profiles, Serve/Funnel
+configuration, exit nodes, certificate lookup, and taildrop use LocalAPI via
+the runtime's cached `local.Client`.
 
-**Mobile TLS qualification:** the current upstream v1.102.2 pin compiles the
-LocalAPI certificate endpoint used by default `tsnet.ListenTLS` and
-`ListenFunnel` as a 404 stub on iOS and Android.
-Those two HTTPS surfaces are therefore unsupported on mobile until an alternate
-certificate path passes real-device handshakes. The private HTTP/TCP/UDP core
-remains the mobile support target.
+**Mobile publication qualification:** the current upstream v1.102.2 pin
+compiles the LocalAPI certificate endpoint used by TLS termination as a 404
+stub on iOS and Android, so `tls.bind` still needs an alternate certificate
+path. R5 no longer uses `ListenFunnel`; Funnel is ServeConfig visibility on the
+shared handler. That path and HTTPS Serve remain unqualified on mobile until
+real-device handshakes and persistent-sidecar inventory pass. The private
+HTTP/TCP/UDP core remains the mobile support target.
 
 **Version note:** the current repo pin is `tailscale.com v1.102.2`. Keep
 upstream version skew visible when adding new wrappers.
@@ -66,9 +68,9 @@ upstream version skew visible when adding new wrappers.
 | [`tcp`](#tcp)           | Raw TCP between tailnet nodes                                      | Core      | ✅        |
 | [`tls`](#tls)           | Certificate-domain discovery and TLS-terminated listener           | Advanced  | domains ✅; bind ✅ desktop/server, unsupported mobile |
 | [`udp`](#udp)           | UDP datagram bindings on a tailnet IP                               | Advanced  | ✅        |
-| [`funnel`](#funnel)     | Public-internet HTTPS forwarding via Tailscale Funnel              | Optional  | ✅ desktop/server; unsupported mobile |
+| [`funnel`](#funnel)     | Public-internet HTTPS forwarding via Tailscale Funnel              | Optional  | ✅ desktop/server; mobile unqualified |
 | [`taildrop`](#taildrop) | Node-to-node file transfer                                          | Optional  | Planned          |
-| [`serve`](#serve)       | Tailnet publication for existing local HTTP services                | Optional  | ✅               |
+| [`serve`](#serve)       | Tailnet publication for existing local HTTP services                | Optional  | ✅ desktop/server HTTPS; mobile HTTPS unqualified |
 | [`services`](#tailscale-services) | Tailscale Services hosts via upstream `ListenService`       | Optional  | Planned          |
 | [`exitNode`](#exitnode) | Route outbound traffic through another node                                | Advanced  | ✅        |
 | [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Optional  | Planned          |
@@ -93,7 +95,7 @@ returning a transitional state such as `starting`.
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
 | `Tailscale.init({stateDir, appId, logLevel})` | ✅ | Freezes one process-wide native path/inode + exact log-level + validated host-app/derived Keybay namespace identity. Repeating the exact tuple is a no-op; a mismatch throws `TailscaleConfigurationException`. Initialization is lazy and performs no Keybay I/O. Native lifecycle calls derive the owned `tailscale/` subtree from this root. | `Tailscale.init(stateDir: '/app/state', appId: 'com.example.myapp');` |
-| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine. Persistent mode authenticates or provisions the encrypted Store through one Keybay DEK and fails closed on custody/layout errors; recognized legacy state is not migrated. `ephemeral: true` requires an auth key, uses an in-memory Store plus fresh scratch, never accesses Keybay, and rejects filesystem-visible persistent package state. Same-config active calls are idempotent and an auth key never replaces the active identity. Resolves on the first stable state only; timeout returns only after token-qualified quarantine is established. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
+| `up({hostname, authKey, ephemeral, controlUrl, timeout})` → `TailscaleStatus` | ✅ | Start engine. Persistent mode authenticates or provisions the encrypted Store through one Keybay DEK and fails closed on custody/layout errors; recognized legacy state is not migrated. `ephemeral: true` requires an auth key, uses an in-memory Store plus fresh scratch, never accesses Keybay, and rejects filesystem-visible persistent package state. Same-config active calls are idempotent and an auth key never replaces the active identity. On first upstream Running, an automatic bounded `Server.Up` reset must succeed before package Running/data-plane readiness is exposed; failure quarantines the exact generation. Timeout likewise returns only after token-qualified quarantine. | `final s = await tsnet.up(authKey: 'tskey-...', ephemeral: true);` |
 | `down()` | ✅ | Stop the exact active generation and keep persisted credentials. A completed native result survives worker-response loss. Cleanup failure returns `runtimeCleanupFailed`, publishes no false clean-state transition, and blocks replacement until process restart. | `await tsnet.down();` |
 | `logout()` | ✅ | Remote-first revocation. Confirmed success lets upstream remove the logical profile while preserving the encrypted StateStore container and DEK. Reconstructs a temporary runtime after `down()` using authenticated persisted state; that internal runtime stays event-silent. Failure preserves local recovery evidence and returns `logoutIndeterminate`. A confirmed result survives worker-response loss. | `await tsnet.logout();` |
 | `forgetLocalIdentity()` | ✅ | Irreversible local-only reset. Stops any active runtime, durably records reset intent, deletes the exact Keybay DEK, and removes only the package-owned state subtree. It does not contact the control plane, so the remote node may remain. An interrupted reset returns `localResetIncomplete` and must be resumed with the same method. | `await tsnet.forgetLocalIdentity();` |
@@ -176,24 +178,29 @@ remote tailnet endpoint on each delivery.
 
 ## `funnel`
 
-Public-internet HTTPS via Tailscale Funnel: publish an existing local
-HTTP service at this node's Funnel hostname. The package uses upstream
-`tsnet.ListenFunnel` for the public listener and proxies requests to the
-loopback service.
+Public-internet HTTPS via Tailscale Funnel: publish an existing local HTTP
+service at this node's Funnel hostname. R5 writes the same upstream ServeConfig
+handler used by Serve and enables `AllowFunnel` for its host and port. There is
+no package-owned Funnel listener or reverse-proxy loop.
+
+`AllowFunnel` is host:port-scoped, not path-scoped. Enabling Funnel for one path
+can make every handler on that port publicly reachable. Use a dedicated public
+port or authenticate every handler sharing it.
 
 This is explicitly optional: useful for some hosted/server apps, but
 not part of the core embedded-private-network story.
 
-**Status:** implemented for desktop/server local HTTP forwarding; unsupported
-on iOS and Android pending an alternate certificate path. **Requires:** operator
-has enabled HTTPS and Funnel for this node and an allowed Funnel port
-(usually 443, 8443, or 10000). Headscale doesn't support Funnel; live
-Tailscale test only.
+**Status:** implemented and desktop/server-qualified for local HTTP forwarding.
+The R5 hosted Funnel-tailnet and Serve/Funnel swap tests passed on 2026-08-10;
+mobile remains unqualified pending separate device handshakes and sidecar
+inventory. **Requires:** the operator has enabled HTTPS and Funnel for this node
+and an allowed Funnel port (usually 443, 8443, or 10000). Headscale doesn't
+support Funnel, so public ingress requires hosted Tailscale evidence.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |
-| `funnel.forward({publicPort, localPort, localAddress, path})` → `Future<TailscalePublishedService>` | ✅ desktop/server; unsupported mobile | Publicly publish a local HTTP service through Funnel. | `final p = await tsnet.funnel.forward(localPort: 3000);` |
-| `funnel.clear({publicPort, path})` | ✅ desktop/server; unsupported mobile | Remove a Funnel publication. | `await tsnet.funnel.clear();` |
+| `funnel.forward({publicPort, localPort, localAddress, path})` → `Future<TailscalePublishedService>` | ✅ desktop/server; mobile unqualified | Make the shared ServeConfig mapping publicly reachable. A later Serve/Funnel call at the same coordinate replaces it. | `final p = await tsnet.funnel.forward(localPort: 3000);` |
+| `funnel.clear({publicPort, path})` | ✅ desktop/server; mobile unqualified | Coordinate clear: remove the shared handler and disable Funnel visibility for its host/port. | `await tsnet.funnel.clear();` |
 | `TailscalePublishedService.close()` | ✅ where publication is supported | Remove the publication created by `forward`. Idempotent per handle. | `await p.close();` |
 
 ## `taildrop`
@@ -245,11 +252,15 @@ Serve/Funnel publications created by this package are process-scoped rather
 than persistent `tailscale serve --bg` configuration. Close the returned
 `TailscalePublishedService` explicitly; `Tailscale.down()` also removes
 package-created publications best-effort before stopping the embedded node.
+Serve and Funnel share one coordinate namespace. The latest forward at a
+port/path owns the handler and visibility mode; `close()` is exact-token and
+cannot remove a same-generation replacement or a mapping from a newer runtime.
 
-**Status:** implemented for local HTTP forwarding. Desktop/server HTTPS has a
-live hosted-Tailscale receipt; mobile HTTPS Serve remains unqualified pending
-its own real-device receipt. Raw `ServeConfig` get/set remains a possible future
-escape hatch.
+**Status:** implemented for local HTTP forwarding. Desktop/server HTTPS and the
+R5 swap/exact-handle sequence have hosted-Tailscale receipts, most recently
+2026-08-10. Crash/restart evidence and mobile HTTPS Serve remain pending; mobile
+requires its own real-device and sidecar receipts. Raw `ServeConfig` get/set
+remains a possible future escape hatch.
 
 | API | Status | Description | Example |
 | --- | ------ | ----------- | ------- |

@@ -27,6 +27,26 @@ void main() {
       expect(err.toString(), isNot(contains('unknown')));
     });
 
+    test('R5 publication codes have stable wire names', () {
+      expect(TailscaleErrorCode.dataPlaneNotReady.name, 'dataPlaneNotReady');
+      expect(
+        TailscaleErrorCode.publicationBootstrapFailure.name,
+        'publicationBootstrapFailure',
+      );
+      expect(
+        TailscaleErrorCode.serveConfigConflict.name,
+        'serveConfigConflict',
+      );
+      expect(
+        TailscaleErrorCode.publicationNotApplied.name,
+        'publicationNotApplied',
+      );
+      expect(
+        TailscaleErrorCode.publicationCommitIndeterminate.name,
+        'publicationCommitIndeterminate',
+      );
+    });
+
     test('every namespace has its own exception subtype', () {
       const errors = <TailscaleOperationException>[
         TailscaleUpException('_'),
@@ -63,6 +83,24 @@ void main() {
         'code': 'worker',
       });
       expect(workerError.code, TailscaleRuntimeErrorCode.worker);
+
+      final bootstrapError = TailscaleRuntimeError.fromPushPayload({
+        'error': 'first Up failed',
+        'code': 'publicationBootstrapFailure',
+      });
+      expect(
+        bootstrapError.code,
+        TailscaleRuntimeErrorCode.publicationBootstrapFailure,
+      );
+
+      final deliveryError = TailscaleRuntimeError.fromPushPayload({
+        'error': 'publication handle delivery expired',
+        'code': 'publicationDeliveryFailure',
+      });
+      expect(
+        deliveryError.code,
+        TailscaleRuntimeErrorCode.publicationDeliveryFailure,
+      );
     });
 
     test('unknown runtime error codes fall back to unknown', () {

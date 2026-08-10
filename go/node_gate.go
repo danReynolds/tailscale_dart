@@ -1,6 +1,7 @@
 package tailscale
 
 import (
+	"context"
 	"encoding/json"
 	"sync/atomic"
 
@@ -12,13 +13,14 @@ import (
 // detached. Each Start..Stop span therefore has a distinct value.
 //
 // This is the process-wide guard against the teardown registration race: since
-// slow operations (serve/funnel forward, dial, HTTP requests) moved off the
-// serial worker isolate, they can be in flight while Stop tears the node down,
-// and a result committed into a process-global registry after that registry's
-// teardown sweep would outlive the node (a persisted serve mount that
-// re-exposes on the next Start, a forwarder on a dead listener, a cached dead
-// server). Every such op snapshots a nodeGate at entry and re-checks it at its
-// commit point, under the destination registry's own lock:
+// slow data-plane operations run outside the serial worker isolate, they can be
+// in flight while Stop tears the node down. A result committed after teardown
+// could otherwise outlive its node (for example, a listener registered after
+// its registry sweep). Every operation snapshots a nodeGate at entry and
+// re-checks it at its commit point under the destination owner's lock. R5's
+// Serve/Funnel publication manager is itself runtime-owned and performs the
+// equivalent check while holding its mutation lock; the remaining registries
+// use the pattern below:
 //
 //	gate, ok := acquireNodeGate()          // at op entry
 //	...slow work, no locks held...
@@ -48,6 +50,12 @@ import (
 //     world. Epochs distinguish "my lifecycle" from "any later lifecycle".
 var nodeEpoch atomic.Uint64
 
+func init() {
+	// Generation zero is reserved as an absent/invalid capability on the FFI
+	// wire. Starting at one keeps exact publication-handle equality natural.
+	nodeEpoch.Store(1)
+}
+
 // nodeGate is an operation's entry-time snapshot of the node it is working
 // against: the server to use for the work and the epoch to re-check at commit.
 type nodeGate struct {
@@ -71,6 +79,27 @@ func acquireNodeGate() (nodeGate, bool) {
 	}, true
 }
 
+// acquireNodeGateForRuntimeToken admits work only for the exact runtime
+// capability captured by Dart before it queued a helper-isolate call. The
+// comparison and snapshot happen under the controller lock, so stale work can
+// never be redirected to a replacement runtime's Server or LocalClient.
+func acquireNodeGateForRuntimeToken(runtimeToken uint64) (nodeGate, bool) {
+	if runtimeToken == 0 {
+		return nodeGate{}, false
+	}
+	runtimes.mu.Lock()
+	defer runtimes.mu.Unlock()
+	runtime := runtimes.current
+	if runtime == nil || runtime.token != runtimeToken || runtime.ctx.Err() != nil {
+		return nodeGate{}, false
+	}
+	return nodeGate{
+		runtime: runtime,
+		s:       runtime.server,
+		epoch:   runtime.generation,
+	}, true
+}
+
 // stillCurrent reports whether the gated lifecycle is still the live one. Safe
 // to call under any registry lock (lock-free atomic load; never touches mu).
 // Callers must hold the destination registry's lock from this check through
@@ -80,13 +109,29 @@ func (g nodeGate) stillCurrent() bool {
 	return nodeEpoch.Load() == g.epoch
 }
 
+// awaitDataPlaneReady joins the runtime's one bounded first-Up bootstrap, then
+// rechecks this exact generation before callers touch Server or LocalAPI.
+func (g nodeGate) awaitDataPlaneReady(ctx context.Context) error {
+	if g.runtime == nil || g.runtime.publication == nil {
+		return ErrRuntimeStale
+	}
+	if err := g.runtime.publication.awaitDataPlaneReady(ctx); err != nil {
+		return err
+	}
+	if !g.stillCurrent() || g.runtime.ctx.Err() != nil {
+		return ErrRuntimeStale
+	}
+	return nil
+}
+
 // nodeStateSnapshot is a point-in-time census of every process-global registry,
 // for tests and leak diagnostics. The JSON tags are the FFI contract with
 // `Diag.nodeState()` on the Dart side.
 type nodeStateSnapshot struct {
+	// Funnel is an AllowFunnel bit on the same ServeConfig entry, so there is
+	// no separate funnelForwarders registry or diagnostic count.
 	Epoch             uint64 `json:"epoch"`
 	ServePublications int    `json:"servePublications"`
-	FunnelForwarders  int    `json:"funnelForwarders"`
 	HttpBindings      int    `json:"httpBindings"`
 	TcpListeners      int    `json:"tcpListeners"`
 	UdpBridges        int    `json:"udpBridges"`
@@ -110,13 +155,9 @@ func DebugNodeState() string {
 func debugNodeState() nodeStateSnapshot {
 	snap := nodeStateSnapshot{Epoch: nodeEpoch.Load()}
 
-	servePublicationMu.Lock()
-	snap.ServePublications = len(servePublications)
-	servePublicationMu.Unlock()
-
-	funnelMu.Lock()
-	snap.FunnelForwarders = len(funnelForwarders)
-	funnelMu.Unlock()
+	if runtime := currentRuntime(); runtime != nil {
+		snap.ServePublications = runtime.publication.count()
+	}
 
 	httpBindingMu.Lock()
 	snap.HttpBindings = len(httpBindingRegistry)

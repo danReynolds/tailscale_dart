@@ -36,8 +36,8 @@ func nextDirectRuntimeToken() uint64 {
 // `.timeout()` abandons the future without cancelling the native work — so an
 // unbounded call stuck on an unreachable peer would hold all of that until
 // process exit. 30s is generous for a worst-case DERP-relayed path while still
-// guaranteeing stuck calls drain. (ListenFunnel's internal Up remains
-// unbounded inside tsnet; its outer Up is bounded by funnelUpTimeout.)
+// guaranteeing stuck calls drain. The runtime's one mandatory first-Up
+// bootstrap has its own stored result and a separate 30-second maximum.
 const defaultNativeCallTimeout = 30 * time.Second
 
 type runtimeStartDependencies struct {
@@ -287,6 +287,35 @@ func StartRuntimeWithHostNetwork(hostname, authKey, controlURL string, ephemeral
 // returned token is the active runtime token; for an idempotent start it may be
 // older than requestToken.
 func StartRuntimeWithToken(requestToken uint64, hostname, authKey, controlURL string, ephemeral bool, hostNetworkSnapshot string) (alreadyActive bool, runtimeToken uint64, err error) {
+	return startRuntimeWithTokenDeadline(
+		requestToken,
+		hostname,
+		authKey,
+		controlURL,
+		ephemeral,
+		hostNetworkSnapshot,
+		time.Time{},
+	)
+}
+
+// StartRuntimeWithBootstrapBudget is the public-Dart startup path. The budget
+// is captured at native entry so Server.Start time is charged to the caller's
+// original up(timeout:) deadline. Internal temporary runtimes use
+// StartRuntimeWithToken and therefore never race an automatic bootstrap with
+// idle logout reconstruction.
+func StartRuntimeWithBootstrapBudget(requestToken uint64, hostname, authKey, controlURL string, ephemeral bool, hostNetworkSnapshot string, bootstrapBudget time.Duration) (alreadyActive bool, runtimeToken uint64, err error) {
+	return startRuntimeWithTokenDeadline(
+		requestToken,
+		hostname,
+		authKey,
+		controlURL,
+		ephemeral,
+		hostNetworkSnapshot,
+		time.Now().Add(bootstrapBudget),
+	)
+}
+
+func startRuntimeWithTokenDeadline(requestToken uint64, hostname, authKey, controlURL string, ephemeral bool, hostNetworkSnapshot string, bootstrapDeadline time.Time) (alreadyActive bool, runtimeToken uint64, err error) {
 	startCall, err := runtimes.beginStartCall(requestToken)
 	if err != nil {
 		return false, 0, err
@@ -297,7 +326,7 @@ func StartRuntimeWithToken(requestToken uint64, hostname, authKey, controlURL st
 	if err != nil {
 		return false, 0, err
 	}
-	return startRuntimeWithDependenciesForToken(
+	return startRuntimeWithDependenciesForTokenAndDeadline(
 		requestToken,
 		hostname,
 		authKey,
@@ -306,6 +335,7 @@ func StartRuntimeWithToken(requestToken uint64, hostname, authKey, controlURL st
 		ephemeral,
 		hostNetworkSnapshot,
 		productionRuntimeStartDependencies,
+		bootstrapDeadline,
 	)
 }
 
@@ -324,6 +354,20 @@ func startRuntimeWithDependencies(hostname, authKey, controlURL, stateDir string
 }
 
 func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey, controlURL, stateDir string, ephemeral bool, hostNetworkSnapshot string, dependencies runtimeStartDependencies) (alreadyActive bool, runtimeToken uint64, err error) {
+	return startRuntimeWithDependenciesForTokenAndDeadline(
+		requestToken,
+		hostname,
+		authKey,
+		controlURL,
+		stateDir,
+		ephemeral,
+		hostNetworkSnapshot,
+		dependencies,
+		time.Time{},
+	)
+}
+
+func startRuntimeWithDependenciesForTokenAndDeadline(requestToken uint64, hostname, authKey, controlURL, stateDir string, ephemeral bool, hostNetworkSnapshot string, dependencies runtimeStartDependencies, bootstrapDeadline time.Time) (alreadyActive bool, runtimeToken uint64, err error) {
 	config := runtimeConfig{
 		hostname:   hostname,
 		controlURL: controlURL,
@@ -336,6 +380,9 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 		return false, 0, err
 	}
 	if refreshed != nil {
+		if !bootstrapDeadline.IsZero() && refreshed.publication != nil {
+			refreshed.publication.beginInitiatingUp(bootstrapDeadline)
+		}
 		return true, refreshed.token, nil
 	}
 	var candidate, active *nodeRuntime
@@ -363,6 +410,9 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 		}
 		if refreshed == nil {
 			return false, 0, fmt.Errorf("%w: active runtime changed during refresh", ErrRuntimeStale)
+		}
+		if !bootstrapDeadline.IsZero() && refreshed.publication != nil {
+			refreshed.publication.beginInitiatingUp(bootstrapDeadline)
 		}
 		return true, refreshed.token, nil
 	}
@@ -481,6 +531,10 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 	}
 	lc.OmitAuth = true
 	candidate.localClient = lc
+	candidate.publication = newPublicationManager(candidate, lc)
+	if !bootstrapDeadline.IsZero() {
+		candidate.publication.beginInitiatingUp(bootstrapDeadline)
+	}
 
 	// Commit to controller state only after every allocation succeeded. No
 	// per-subsystem re-arming is needed: ops gate on the node epoch (bumped by
@@ -490,6 +544,16 @@ func startRuntimeWithDependenciesForToken(requestToken uint64, hostname, authKey
 		return false, 0, err
 	}
 	return false, candidate.token, nil
+}
+
+// MarkRuntimeUpSettled linearizes a completed Dart up Future with the exact
+// runtime's future first-Running observation. Stale tokens are harmless.
+func MarkRuntimeUpSettled(token uint64) {
+	runtime := currentRuntime()
+	if runtime == nil || runtime.token != token || runtime.publication == nil {
+		return
+	}
+	runtime.publication.markInitiatingUpSettled()
 }
 
 var ErrEphemeralAuthKeyRequired = errors.New("ephemeral startup requires an auth key")
@@ -576,6 +640,9 @@ func DuneStatus() string {
 	err = runtime.resultError(err)
 	if err != nil {
 		return localAPIError(err)
+	}
+	if runtime.publication != nil {
+		status.BackendState = runtime.publication.maskRunningState(status.BackendState)
 	}
 	jsonBytes, err := json.Marshal(status)
 	if err != nil {

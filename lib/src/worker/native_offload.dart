@@ -23,7 +23,9 @@ part of 'worker.dart';
 // state shared across all cgo calls, and `@Native` bindings resolve in any
 // isolate.
 //
-// Concurrency is capped (see [_offloadGate]). Each in-flight offloaded call
+// Concurrency is capped by the caller-isolate gate in
+// `native_offload_gate.dart`. HTTP native admission shares that same bound.
+// Each in-flight offloaded call
 // pins an OS thread inside its synchronous cgo call for the call's whole
 // duration, and the Dart VM's thread pool does not shrink back after a helper
 // isolate exits — so peak concurrency permanently raises the process thread
@@ -35,31 +37,25 @@ part of 'worker.dart';
 // Note on timeouts: every offloaded call is bounded on the Go side. A caller
 // timeout is honored as given; with none, Go applies defaultNativeCallTimeout
 // (30s) — `dial`/`ping` contexts and `serve.forward`'s LocalAPI round trips
-// are never unbounded. The one residual exception is inside tsnet itself:
-// `funnel.forward`'s outer `s.Up` is bounded by funnelUpTimeout, but
-// `ListenFunnel` then calls `s.Up(context.Background())` internally, so a node
-// regressing to NeedsLogin mid-call can pin that one step until Stop. An
-// abandoned call (a caller-side `.timeout()` doesn't cancel native work) still
-// holds its helper isolate/thread, gate permit, and Go goroutine — but now
-// only until the deadline fires, so stuck calls drain instead of accumulating
-// for the life of the process and the shared gate cannot wedge permanently.
+// are never unbounded. Serve and Funnel mutate the shared ServeConfig directly;
+// neither invokes `ListenFunnel` nor starts another `Server.Up`. An abandoned
+// call (a caller-side `.timeout()` doesn't cancel native work) still holds its
+// helper isolate/thread, gate permit, and Go goroutine, but only until the
+// native deadline fires, so stuck calls drain instead of accumulating for the
+// life of the process and the shared gate cannot wedge permanently.
 //
 // Ordering: offloaded calls are NOT ordered w.r.t. the worker's FIFO calls.
-// `forward` in particular no longer happens-before `clear`/`down`/`logout`. The
-// awaited handle path is safe — a published service's `close()`→`clear` is built
-// only after `forward` completes, so it has a happens-before and Go serializes
-// the config mutation. An *un-awaited* `forward` racing a concurrent
-// `down()`/`logout()` is refused by the Go layer's node-epoch commit gate
-// (see doc/concurrency.md): the forward fails with a "raced node teardown"
-// error instead of installing state behind the teardown sweep. So concurrent
-// lifecycle misuse degrades to a clean error, never a stale mount.
+// `forward` in particular no longer happens-before `clear`/`down`/`logout`.
+// Each `forward` captures its exact runtime token before it can queue here, so
+// a delayed runtime-A request cannot enter native against replacement B. After
+// a successful config commit, native retains the exact mapping as pending
+// delivery until this caller isolate validates the result and acknowledges its
+// generation/mapping token. Malformed or lost results actively quarantine A;
+// a bounded native acknowledgement timer is the fallback when neither helper
+// nor caller isolate can run compensation. Concurrent lifecycle misuse thus
+// degrades to a clean error or exact-generation teardown, never stale or
+// ownerless ingress.
 // ---------------------------------------------------------------------------
-
-/// Caps concurrent helper isolates. Generous enough for real parallelism (a
-/// busy connection pool), bounded enough to stay safe on mobile where thread
-/// and memory limits are tight; excess calls queue.
-const int _maxConcurrentOffloads = 32;
-final _offloadGate = _Semaphore(_maxConcurrentOffloads);
 
 /// Event-silent native quarantine receipt used by the caller-isolate
 /// supervisor. This path deliberately bypasses the ordinary offload semaphore:
@@ -146,7 +142,7 @@ RuntimeQuarantineResult _execRuntimeQuarantine(int token) {
         : TailscaleOperationException(
             'runtime quarantine',
             errorMessage,
-            code: _parseErrorCode(result['code'] as String?),
+            code: parseTailscaleErrorCode(result['code'] as String?),
             statusCode: result['statusCode'] as int?,
           ),
   );
@@ -301,7 +297,7 @@ Future<NativeLocalResetBeginResult> beginNativeLocalReset(int token) =>
             : TailscaleOperationException(
                 'forget local identity',
                 message,
-                code: _parseErrorCode(result['code'] as String?),
+                code: parseTailscaleErrorCode(result['code'] as String?),
                 statusCode: result['statusCode'] as int?,
               ),
       );
@@ -368,39 +364,7 @@ Future<void> retireNativeAbandonedRuntimeToken(int token) => Isolate.run(() {
 /// capturing only sendable state and returning sendable data; thrown exceptions
 /// propagate to the caller with their type and fields intact.
 Future<T> _offloadNativeCall<T>(T Function() nativeOp) async {
-  await _offloadGate.acquire();
-  try {
-    return await Isolate.run(nativeOp);
-  } finally {
-    _offloadGate.release();
-  }
-}
-
-/// Minimal FIFO counting semaphore. Permits are released in acquire order, so
-/// queued offloaded calls run oldest-first.
-final class _Semaphore {
-  _Semaphore(this._permits);
-
-  int _permits;
-  final _waiters = Queue<Completer<void>>();
-
-  Future<void> acquire() {
-    if (_permits > 0) {
-      _permits--;
-      return Future<void>.value();
-    }
-    final waiter = Completer<void>();
-    _waiters.add(waiter);
-    return waiter.future;
-  }
-
-  void release() {
-    if (_waiters.isNotEmpty) {
-      _waiters.removeFirst().complete();
-    } else {
-      _permits++;
-    }
-  }
+  return runCappedNativeOffload(nativeOp);
 }
 
 /// Test seam: runs [tasks] short tasks through a fresh [_Semaphore] with the
@@ -410,31 +374,26 @@ final class _Semaphore {
 Future<int> debugMaxSemaphoreConcurrency({
   required int permits,
   required int tasks,
-}) async {
-  final semaphore = _Semaphore(permits);
-  var active = 0;
-  var peak = 0;
-  Future<void> task() async {
-    await semaphore.acquire();
-    active++;
-    if (active > peak) peak = active;
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-    active--;
-    semaphore.release();
-  }
-
-  await Future.wait(<Future<void>>[for (var i = 0; i < tasks; i++) task()]);
-  return peak;
+}) {
+  // Deliberate forwarding seam: tests import this worker-facing library while
+  // the shared semaphore implementation remains isolated in its own library.
+  // ignore: invalid_use_of_visible_for_testing_member
+  return debugMaxNativeOffloadConcurrency(permits: permits, tasks: tasks);
 }
 
 /// Offloaded `tcp.dial`. Mirrors the shape the API layer expects.
 Future<({int fd, TailscaleEndpoint local, TailscaleEndpoint remote})>
-offloadTcpDial({required String host, required int port, Duration? timeout}) =>
-    _offloadNativeCall(
-      () => _execTcpDial(host, port, timeout?.inMilliseconds ?? 0),
-    );
+offloadTcpDial({
+  required int runtimeToken,
+  required String host,
+  required int port,
+  Duration? timeout,
+}) => _offloadNativeCall(
+  () => _execTcpDial(runtimeToken, host, port, timeout?.inMilliseconds ?? 0),
+);
 
 ({int fd, TailscaleEndpoint local, TailscaleEndpoint remote}) _execTcpDial(
+  int runtimeToken,
   String host,
   int port,
   int timeoutMillis,
@@ -443,7 +402,12 @@ offloadTcpDial({required String host, required int port, Duration? timeout}) =>
   try {
     final result =
         _callNativeJson(
-              () => native.duneTcpDialFd(hostPtr, port, timeoutMillis),
+              () => native.duneTcpDialFd(
+                runtimeToken,
+                hostPtr,
+                port,
+                timeoutMillis,
+              ),
               onError: TailscaleTcpException.new,
             )
             as Map<String, dynamic>;
@@ -471,20 +435,31 @@ offloadTcpDial({required String host, required int port, Duration? timeout}) =>
 
 /// Offloaded `diag.ping`.
 Future<PingResult> offloadDiagPing({
+  required int runtimeToken,
   required String ip,
   Duration? timeout,
   required String pingType,
 }) => _offloadNativeCall(
-  () => _execDiagPing(ip, timeout?.inMilliseconds ?? 0, pingType),
+  () => _execDiagPing(runtimeToken, ip, timeout?.inMilliseconds ?? 0, pingType),
 );
 
-PingResult _execDiagPing(String ip, int timeoutMillis, String pingType) {
+PingResult _execDiagPing(
+  int runtimeToken,
+  String ip,
+  int timeoutMillis,
+  String pingType,
+) {
   final ipPtr = ip.toNativeUtf8();
   final pingTypePtr = pingType.toNativeUtf8();
   try {
     final result =
         _callNativeJson(
-              () => native.duneDiagPing(ipPtr, timeoutMillis, pingTypePtr),
+              () => native.duneDiagPing(
+                runtimeToken,
+                ipPtr,
+                timeoutMillis,
+                pingTypePtr,
+              ),
               onError: TailscaleDiagException.new,
             )
             as Map<String, dynamic>;
@@ -497,18 +472,8 @@ PingResult _execDiagPing(String ip, int timeoutMillis, String pingType) {
 
 /// Offloaded serve/funnel `forward`. The `funnel` flag selects the exception
 /// type on failure, matching the previous worker handler.
-Future<
-  ({
-    Uri url,
-    int port,
-    String localAddress,
-    int localPort,
-    String path,
-    bool https,
-    bool funnel,
-  })
->
-offloadServeForward({
+Future<ServeForwardResult> offloadServeForward({
+  required int runtimeToken,
   required int tailnetPort,
   required int localPort,
   required String localAddress,
@@ -524,39 +489,234 @@ offloadServeForward({
     'https': https,
     'funnel': funnel,
   });
-  return _offloadNativeCall(() => _execServeForward(payload, funnel));
+  return _completePublicationDelivery(
+    runtimeToken: runtimeToken,
+    funnel: funnel,
+    dispatch: () => guardPublicationResultDeliveryForTesting(
+      dispatch: () => _offloadNativeCall(
+        () => _execServeForward(
+          runtimeToken,
+          payload,
+          funnel: funnel,
+          tailnetPort: tailnetPort,
+          path: path,
+        ),
+      ),
+      onResultLoss: () => _execFailPublicationDelivery(runtimeToken, funnel),
+    ),
+  );
 }
 
-({
-  Uri url,
-  int port,
-  String localAddress,
-  int localPort,
-  String path,
-  bool https,
-  bool funnel,
-})
-_execServeForward(String payloadJson, bool funnel) {
+ServeForwardResult _execServeForward(
+  int runtimeToken,
+  String payloadJson, {
+  required bool funnel,
+  required int tailnetPort,
+  required String path,
+}) {
   final payloadPtr = payloadJson.toNativeUtf8();
   try {
     final result =
         _callNativeJson(
-              () => native.duneServeForward(payloadPtr),
+              () => native.duneServeForward(runtimeToken, payloadPtr),
               onError: funnel
                   ? TailscaleFunnelException.new
                   : TailscaleServeException.new,
             )
             as Map<String, dynamic>;
-    return (
-      url: Uri.parse(result['url'] as String? ?? ''),
-      port: result['port'] as int? ?? 0,
-      localAddress: result['localAddress'] as String? ?? '',
-      localPort: result['localPort'] as int? ?? 0,
-      path: result['path'] as String? ?? '/',
-      https: result['https'] as bool? ?? true,
-      funnel: result['funnel'] as bool? ?? false,
+    return validateServeForwardResultForTesting(
+      result,
+      funnel: funnel,
+      tailnetPort: tailnetPort,
+      path: path,
+      onInvalid: () => _execFailPublicationDelivery(runtimeToken, funnel),
+    );
+  } on TailscaleOperationException {
+    rethrow;
+  } catch (error, stackTrace) {
+    try {
+      _execFailPublicationDelivery(runtimeToken, funnel);
+    } catch (cleanupError, cleanupStackTrace) {
+      Error.throwWithStackTrace(cleanupError, cleanupStackTrace);
+    }
+    Error.throwWithStackTrace(
+      _publicationDeliveryException(
+        funnel,
+        'Native returned an unreadable publication result.',
+        cause: error,
+      ),
+      stackTrace,
     );
   } finally {
     calloc.free(payloadPtr);
   }
+}
+
+@visibleForTesting
+ServeForwardResult validateServeForwardResultForTesting(
+  Map<String, dynamic> result, {
+  required bool funnel,
+  required int tailnetPort,
+  required String path,
+  void Function()? onInvalid,
+}) {
+  final url = Uri.tryParse(result['url'] as String? ?? '');
+  final port = result['port'] as int?;
+  final localAddress = result['localAddress'] as String?;
+  final localPort = result['localPort'] as int?;
+  final resultPath = result['path'] as String?;
+  final https = result['https'] as bool?;
+  final resultFunnel = result['funnel'] as bool?;
+  final generation = result['generation'] as int?;
+  final mappingToken = result['mappingToken'] as int?;
+  if (generation == null ||
+      generation <= 0 ||
+      mappingToken == null ||
+      mappingToken <= 0 ||
+      url == null ||
+      !url.hasScheme ||
+      url.host.isEmpty ||
+      port == null ||
+      port != tailnetPort ||
+      localAddress == null ||
+      localAddress.isEmpty ||
+      localPort == null ||
+      localPort <= 0 ||
+      resultPath == null ||
+      resultPath != path ||
+      https == null ||
+      resultFunnel == null ||
+      resultFunnel != funnel) {
+    onInvalid?.call();
+    _throwInvalidPublicationResult(funnel);
+  }
+  return (
+    url: url,
+    port: port,
+    localAddress: localAddress,
+    localPort: localPort,
+    path: resultPath,
+    https: https,
+    funnel: resultFunnel,
+    generation: generation,
+    mappingToken: mappingToken,
+  );
+}
+
+Future<ServeForwardResult> _completePublicationDelivery({
+  required int runtimeToken,
+  required bool funnel,
+  required Future<ServeForwardResult> Function() dispatch,
+}) async {
+  late final ServeForwardResult publication;
+  try {
+    publication = await dispatch();
+  } on TailscaleOperationException {
+    rethrow;
+  } catch (error, stackTrace) {
+    Error.throwWithStackTrace(
+      _publicationDeliveryException(
+        funnel,
+        'Publication result was lost before exact handle delivery.',
+        cause: error,
+      ),
+      stackTrace,
+    );
+  }
+
+  try {
+    _execAcknowledgePublication(runtimeToken, publication, funnel);
+  } catch (error, stackTrace) {
+    try {
+      _execFailPublicationDelivery(runtimeToken, funnel);
+    } catch (cleanupError, cleanupStackTrace) {
+      Error.throwWithStackTrace(cleanupError, cleanupStackTrace);
+    }
+    if (error is TailscaleOperationException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      _publicationDeliveryException(
+        funnel,
+        'Publication acknowledgement was lost.',
+        cause: error,
+      ),
+      stackTrace,
+    );
+  }
+  return publication;
+}
+
+@visibleForTesting
+Future<T> guardPublicationResultDeliveryForTesting<T>({
+  required Future<T> Function() dispatch,
+  required void Function() onResultLoss,
+}) async {
+  try {
+    return await dispatch();
+  } on TailscaleOperationException {
+    // A typed exception is a successfully delivered native rejection. Native
+    // either proved no commit or already quarantined an indeterminate commit.
+    rethrow;
+  } catch (error, stackTrace) {
+    onResultLoss();
+    Error.throwWithStackTrace(error, stackTrace);
+  }
+}
+
+void _execAcknowledgePublication(
+  int runtimeToken,
+  ServeForwardResult publication,
+  bool funnel,
+) {
+  _callNativeJson(
+    () => native.duneAcknowledgePublication(
+      runtimeToken,
+      publication.generation,
+      publication.mappingToken,
+    ),
+    onError: funnel
+        ? TailscaleFunnelException.new
+        : TailscaleServeException.new,
+  );
+}
+
+void _execFailPublicationDelivery(int runtimeToken, bool funnel) {
+  _callNativeJson(
+    () => native.duneFailPublicationDelivery(runtimeToken),
+    onError: funnel
+        ? TailscaleFunnelException.new
+        : TailscaleServeException.new,
+  );
+}
+
+TailscaleOperationException _publicationDeliveryException(
+  bool funnel,
+  String message, {
+  Object? cause,
+}) => funnel
+    ? TailscaleFunnelException(
+        message,
+        code: TailscaleErrorCode.publicationCommitIndeterminate,
+        cause: cause,
+      )
+    : TailscaleServeException(
+        message,
+        code: TailscaleErrorCode.publicationCommitIndeterminate,
+        cause: cause,
+      );
+
+Never _throwInvalidPublicationResult(bool funnel) {
+  const message =
+      'Native runtime returned a publication without a valid exact handle.';
+  if (funnel) {
+    throw const TailscaleFunnelException(
+      message,
+      code: TailscaleErrorCode.publicationCommitIndeterminate,
+    );
+  }
+  throw const TailscaleServeException(
+    message,
+    code: TailscaleErrorCode.publicationCommitIndeterminate,
+  );
 }

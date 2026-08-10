@@ -3,6 +3,7 @@
 package tailscale
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -94,6 +95,9 @@ func HttpBind(tailnetPort int) (*HttpBinding, error) {
 	gate, ok := acquireNodeGate()
 	if !ok {
 		return nil, fmt.Errorf("HttpBind called before Start")
+	}
+	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+		return nil, fmt.Errorf("http bind data plane: %w", err)
 	}
 
 	ln, err := gate.s.Listen("tcp", fmt.Sprintf(":%d", tailnetPort))
@@ -242,6 +246,7 @@ func (s *httpBindingState) close() {
 // HttpStart starts one tailnet HTTP request and returns private fd capabilities
 // for request and response bodies.
 func HttpStart(
+	runtimeToken uint64,
 	method string,
 	rawURL string,
 	headersJSON string,
@@ -258,7 +263,13 @@ func HttpStart(
 
 	gate, ok := acquireNodeGate()
 	if !ok {
-		return nil, errors.New("HttpStart called before Start")
+		return nil, fmt.Errorf("%w: HttpStart called before Start", ErrRuntimeStale)
+	}
+	if runtimeToken == 0 || gate.runtime.token != runtimeToken {
+		return nil, fmt.Errorf("%w: HTTP client belongs to another runtime", ErrRuntimeStale)
+	}
+	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+		return nil, fmt.Errorf("HTTP client data plane: %w", err)
 	}
 
 	headers := http.Header{}

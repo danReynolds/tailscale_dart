@@ -3,7 +3,8 @@
 ## Status
 
 **Current implementation reference.** The runtime/fail-safe foundations, R4d
-secure-state cutover, and R5 publication convergence are reflected here. See
+secure-state cutover, R5 publication convergence, and R7 ownership moves are
+reflected here. See
 the [accepted rearchitecture
 plan](rearchitecture-plan.md), [runtime lifecycle
 ADR](adr-runtime-ownership-and-lifecycle.md), and [encrypted-state
@@ -15,11 +16,12 @@ authenticated loopback session design with fd-backed local capabilities.
 
 The implementation is no longer a throwaway spike. HTTP, TCP, and UDP are
 implemented and validated through unit tests, package tests, Flutter demo tests,
-and Headscale E2E. R4d secure state and R5 publication ownership have focused Go
-and Dart coverage. The hosted R5 Funnel-tailnet and swap receipts passed on
-2026-08-10, as did the macOS production-Keybay persisted process-crash/restart
-receipt. This remains pre-production/beta until the remaining platform Keybay/
-publication, backup-exclusion, sidecar-inventory, and rearchitecture gates pass.
+and Headscale E2E. R4d secure state, R5 publication ownership, and R7 runtime
+ownership have focused Go and Dart coverage. The hosted R5 Funnel-tailnet and
+swap receipts passed on 2026-08-10, as did the macOS production-Keybay persisted
+process-crash/restart receipt. This remains pre-production/beta until the
+remaining platform Keybay/publication, backup-exclusion, sidecar-inventory, and
+rearchitecture gates pass.
 
 ## Summary
 

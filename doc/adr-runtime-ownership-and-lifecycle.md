@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted; R2-R5 code present in current source — 2026-08-10.**
+**Accepted; R2-R5 and R7 code present in current source — 2026-08-11.**
 
 R2/R3 provide `nodeRuntime`, generation-bound supervision, and fail-safe
 teardown; R4a-R4d add Keybay custody, the encrypted/in-memory StateStores,
@@ -22,8 +22,8 @@ Before R2, one public Tailscale instance fanned out across a process-global
 listener registries, and subsystem locks. The node epoch prevented slow work
 from committing into a later lifecycle, but ownership was implicit and teardown
 had to discover resources across the package. R2-R4d moved the Server, Store,
-DEK, state lease, and ephemeral scratch to `nodeRuntime`; the epoch still guards
-the registries awaiting R7.
+DEK, state lease, and ephemeral scratch to `nodeRuntime`; R7 has since moved the
+HTTP transport, listener registries, and watcher there as well.
 
 That has produced several classes of risk:
 

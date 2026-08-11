@@ -1,11 +1,12 @@
 ## Unreleased — rearchitecture in progress
 
-The R4d secure-state cutover, lifecycle foundations, and R5 runtime-owned
-publication convergence are implemented in the current source. Hosted R5
-tailnet/swap receipts and the macOS production-Keybay process-crash/restart
-receipt passed on 2026-08-10; remaining mobile/platform Keybay and publication
-receipts, backup-exclusion and sidecar inventory, and the remaining
-rearchitecture gates are still required before release.
+The R4d secure-state cutover, lifecycle foundations, R5 runtime-owned
+publication convergence, and R7 transport/registry/watcher ownership moves are
+implemented in the current source. Hosted R5 tailnet/swap receipts and the
+macOS production-Keybay process-crash/restart receipt passed on 2026-08-10;
+remaining mobile/platform Keybay and publication receipts, backup-exclusion and
+sidecar inventory, and the remaining R8-R10 gates are still required before
+release.
 
 **Android:**
 

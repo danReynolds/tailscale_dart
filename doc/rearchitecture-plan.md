@@ -2,8 +2,8 @@
 
 ## Status
 
-**Accepted; implementation in progress — R5 merged and R6 evidence underway
-2026-08-10.**
+**Accepted; implementation in progress — R2-R5 and R7 code present;
+R6/R8-R10 evidence remains as of 2026-08-11.**
 
 This is the source of truth for the target architecture and implementation
 order. It incorporates the August 2026 architecture alignment audit, review of
@@ -25,9 +25,9 @@ NeedsLogin with zero SIGSYS, raw-disco pin as shipped, no tailnet traffic)
 passed the same day after fixing ephemeral scratch to use the Dart-supplied
 platform temp directory; the matching iOS-simulator runtime receipt (iPhone 17
 Pro, two generations to NeedsLogin, tsnet netstack boot logged, no crash)
-passed the same day. Mobile custody and remaining platform receipts,
-R6 permission/backup/sidecar evidence, later ownership work, and the R10
-integrated gate remain authoritative requirements below.
+passed the same day. Mobile custody and remaining platform receipts, R6
+permission/backup/sidecar evidence, the R8/R9 audits, and the R10 integrated
+gate remain authoritative requirements below.
 
 The two detailed decisions are:
 

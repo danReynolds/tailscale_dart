@@ -35,11 +35,11 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 | [`test/README.md`](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
 
 > **Architecture work in progress.** The secure-state cutover, fail-safe
-> lifecycle, and runtime-owned Serve/Funnel convergence are implemented in the
-> current source. The hosted Funnel-tailnet, replacement, and macOS production-
-> Keybay process-crash/restart receipts passed on 2026-08-10; remaining mobile/
-> platform, permission, backup-exclusion, sidecar-inventory, and later ownership/
-> release receipts are still pending.
+> lifecycle, runtime-owned Serve/Funnel convergence, and R7 ownership moves are
+> implemented in the current source. The hosted Funnel-tailnet, replacement,
+> and macOS production-Keybay process-crash/restart receipts passed on
+> 2026-08-10; remaining mobile/platform, permission, backup-exclusion,
+> sidecar-inventory, R8/R9 audit, and release receipts are still pending.
 
 ## What you can build
 

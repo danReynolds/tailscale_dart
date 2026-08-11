@@ -146,23 +146,6 @@ external ffi.Pointer<Utf8> duneFinishCustody(
   int cleanupSucceeded,
 );
 
-/// Non-blocking data-plane readiness probe for [runtimeToken].
-///
-/// Returns 1 only when the token identifies the current runtime and that
-/// runtime's one-time publication bootstrap has succeeded — the state in which
-/// `DuneHttpStart` can no longer block.
-///
-/// Deliberately NOT a leaf call. Native answers from in-memory state and
-/// never calls back into Dart, but it still takes the controller and
-/// bootstrap mutexes and crosses cgo, either of which can park briefly. A
-/// leaf call keeps the isolate out of a safepoint-safe state for its whole
-/// duration, so a probe landing while the watcher holds those locks would
-/// stall the isolate group's GC — the exact stall this fast path exists to
-/// avoid. The saving that matters here is skipping the isolate hop, which a
-/// non-leaf native call already delivers.
-@ffi.Native<ffi.Int32 Function(ffi.Uint64)>(symbol: 'DuneDataPlaneReady')
-external int duneDataPlaneReady(int runtimeToken);
-
 /// Starts one outgoing tailnet HTTP request.
 ///
 /// Returns JSON:

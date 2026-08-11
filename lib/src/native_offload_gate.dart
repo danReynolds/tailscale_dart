@@ -8,11 +8,8 @@ import 'package:meta/meta.dart';
 /// short-lived helper isolates that block in synchronous FFI.
 ///
 /// HTTP request admission shares this gate with dial, ping, and publication
-/// calls while its runtime's data plane is not yet ready; once the one-time
-/// bootstrap succeeds, HTTP admission calls native directly instead (see
-/// `http_fd_client.dart`). Only the native admission call holds a permit;
-/// fd-backed HTTP body streaming remains independently concurrent after
-/// admission returns.
+/// calls. Only the native admission call holds a permit; fd-backed HTTP body
+/// streaming remains independently concurrent after admission returns.
 const int maxConcurrentNativeOffloads = 32;
 
 final _nativeOffloadGate = _NativeOffloadSemaphore(maxConcurrentNativeOffloads);

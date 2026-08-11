@@ -39,9 +39,10 @@ final class TailscaleHttpClient extends http.BaseClient {
       throw const TailscaleHttpException('Windows is not supported.');
     }
     final nativeRequest = _NativeHttpRequest.fromRequest(request);
-    final start = await admitNativeHttpStartForTesting(
-      runtimeToken: runtimeToken,
-      start: () => _startNativeRequest(runtimeToken, nativeRequest),
+    // The native readiness gate can join the one bounded first-Up bootstrap.
+    // Keep that synchronous FFI wait off the caller's event-loop isolate.
+    final start = await runCappedNativeOffload(
+      () => _startNativeRequest(runtimeToken, nativeRequest),
     );
     if (_closed) {
       closePosixFdForCleanup(start.requestBodyFd);
@@ -168,38 +169,6 @@ Future<http.StreamedResponse> sendOverFdsForTesting({
   responseBodyFd: responseBodyFd,
   request: request,
 );
-
-/// Admits one synchronous native HttpStart call, choosing between the direct
-/// caller-isolate path and the shared offload gate. Production calls this
-/// directly; the injectable probe and offload runner exist so tests can pin
-/// the routing without touching native code.
-///
-/// Native HttpStart can only block in its readiness gate during the runtime's
-/// one bounded first-Up bootstrap; once that bootstrap succeeds it is a short
-/// non-blocking call for the rest of the generation, so [start] runs directly
-/// on the caller isolate — no offload-gate permit, no helper-isolate spawn.
-/// Before readiness, and whenever [runtimeToken] no longer matches the current
-/// runtime, the call still routes through the offload gate, whose helper
-/// isolate absorbs the synchronous native wait. The probe is per runtime
-/// token, so a replacement runtime's un-bootstrapped generation can never
-/// inherit a stale ready answer; native re-checks token and readiness under
-/// its own gate, so a probe that goes stale mid-flight degrades to a fast
-/// typed error, never a blocked caller isolate.
-@visibleForTesting
-Future<T> admitNativeHttpStartForTesting<T>({
-  required int runtimeToken,
-  required T Function() start,
-  bool Function(int runtimeToken) isDataPlaneReady = _isNativeDataPlaneReady,
-  Future<T> Function(FutureOr<T> Function() operation)? offload,
-}) {
-  if (isDataPlaneReady(runtimeToken)) {
-    return Future<T>.value(start());
-  }
-  return (offload ?? runCappedNativeOffload)(start);
-}
-
-bool _isNativeDataPlaneReady(int runtimeToken) =>
-    native.duneDataPlaneReady(runtimeToken) != 0;
 
 ({int requestBodyFd, int responseBodyFd}) _startNativeRequest(
   int runtimeToken,

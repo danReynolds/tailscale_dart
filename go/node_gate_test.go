@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
-	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 )
 
@@ -88,52 +87,6 @@ func TestAcquireNodeGateForRuntimeTokenRejectsSupersededRuntime(t *testing.T) {
 	gate, ok := acquireNodeGateForRuntimeToken(replacement.token)
 	if !ok || gate.runtime != replacement || gate.s != replacement.server {
 		t.Fatalf("replacement token gate = %+v, ok=%v; want exact replacement", gate, ok)
-	}
-}
-
-// TestDataPlaneReadyTracksExactRuntimeBootstrap pins the non-blocking probe
-// behind Dart's direct HTTP admission fast path: ready only for the exact
-// current runtime's token, and only once its one first-Up bootstrap succeeded.
-func TestDataPlaneReadyTracksExactRuntimeBootstrap(t *testing.T) {
-	withLiveServer(t, &tsnet.Server{})
-	runtime := currentRuntime()
-	if DataPlaneReady(runtime.token) {
-		t.Fatal("probe reported ready without a publication manager")
-	}
-	manager := newPublicationManagerWithClient(runtime, nil)
-	runtime.publication = manager
-
-	if DataPlaneReady(runtime.token) {
-		t.Fatal("probe reported ready before the publication bootstrap")
-	}
-
-	_, start := manager.observeState(ipn.Running)
-	if start == nil {
-		t.Fatal("Running did not create bootstrap start")
-	}
-	if DataPlaneReady(runtime.token) {
-		t.Fatal("probe reported ready while the bootstrap was still running")
-	}
-
-	run := installBootstrapWatcherForTest(t, runtime, func(map[string]any) {})
-	if !manager.publishBootstrapSuccess(run) {
-		t.Fatal("current watcher could not publish bootstrap success")
-	}
-	close(start.done)
-	if !DataPlaneReady(runtime.token) {
-		t.Fatal("probe not ready after the bootstrap succeeded")
-	}
-
-	if DataPlaneReady(0) {
-		t.Fatal("zero runtime token reported ready")
-	}
-	if DataPlaneReady(runtime.token + 1) {
-		t.Fatal("mismatched runtime token reported ready against a ready runtime")
-	}
-
-	runtime.cancel()
-	if DataPlaneReady(runtime.token) {
-		t.Fatal("stale (canceled) runtime token still reported ready")
 	}
 }
 

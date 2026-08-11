@@ -19,13 +19,12 @@ import (
 // connection presents: the RemoteAddr of an inbound tailnet connection is the
 // peer's own tailnet IP, never a subnet-routed or 4via6 source. So by address
 // type the index covers everything an accept can present; the cases WhoIs
-// resolves that this skips can't appear as an accept RemoteAddr. The one
-// transient gap is temporal, not structural: a peer admitted just before its
-// netmap reaches the watcher — see lookup.
+// resolves that this skips can't appear as an accept RemoteAddr. A peer
+// admitted just before its netmap reaches the watcher misses this cache and
+// falls through to the bounded authoritative WhoIs path.
 type identityIndex struct {
-	mu        sync.RWMutex
-	populated bool
-	byAddr    map[netip.Addr]*nodeIdentity
+	mu     sync.RWMutex
+	byAddr map[netip.Addr]*nodeIdentity
 }
 
 // identityCache is the process-wide accept-path identity index. There is one
@@ -37,7 +36,6 @@ var identityCache identityIndex
 func (c *identityIndex) replace(byAddr map[netip.Addr]*nodeIdentity) {
 	c.mu.Lock()
 	c.byAddr = byAddr
-	c.populated = true
 	c.mu.Unlock()
 }
 
@@ -47,25 +45,17 @@ func (c *identityIndex) replace(byAddr map[netip.Addr]*nodeIdentity) {
 func (c *identityIndex) invalidate() {
 	c.mu.Lock()
 	c.byAddr = nil
-	c.populated = false
 	c.mu.Unlock()
 }
 
-// lookup returns (identity, true) when the cache is warm. The boolean is false
-// only when the cache is cold (never populated or invalidated), signaling the
-// caller to fall back to a live lookup. A warm cache that lacks the address
-// returns (nil, true) and is treated as authoritative — no live fallback —
-// which keeps the accept path O(1) and non-DoS-able. The window this trades
-// away: a peer admitted just before its netmap reaches the watcher resolves to
-// nil until the next tick (self-healing); callers needing a hard guarantee
-// use whois().
-func (c *identityIndex) lookup(addr netip.Addr) (*nodeIdentity, bool) {
+// lookup returns the cached identity for addr. Both a cold cache and a warm
+// miss return nil, so the caller falls through to bounded authoritative WhoIs.
+// This preserves the fast path without treating a temporarily stale mirror as
+// identity authority.
+func (c *identityIndex) lookup(addr netip.Addr) *nodeIdentity {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if !c.populated {
-		return nil, false
-	}
-	return c.byAddr[addr], true
+	return c.byAddr[addr]
 }
 
 // buildIdentityIndex flattens a netmap into an address -> identity map: self

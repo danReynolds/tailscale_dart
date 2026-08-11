@@ -15,60 +15,51 @@ import (
 // resolution. These benchmarks cover that gap: they isolate the one thing
 // accept-time identity adds — a WhoIs over the in-process LocalAPI loopback.
 
-// BenchmarkLookupNodeIdentityLoopback measures the cold-cache fallback: one
-// LocalAPI WhoIs over the in-process loopback against a live netmap. This is
-// the "before" — the per-accept cost when the cache is not warm. Gated on a
-// Headscale environment (same gating as the Dart e2e) because a real control
-// plane is required to produce a netmap.
+// BenchmarkLookupNodeIdentity measures both identity paths against one
+// independently identified live peer. The shared parent fixture matters:
+// Configure is intentionally process-once, while Go may re-enter a top-level
+// benchmark during calibration.
 //
 //	HEADSCALE_URL=http://localhost:8080 HEADSCALE_AUTH_KEY=<key> \
-//	  go test -run '^$' -bench BenchmarkLookupNodeIdentityLoopback -benchtime=300x .
-func BenchmarkLookupNodeIdentityLoopback(b *testing.B) {
-	ip := startTestNode(b)
-	identityCache.invalidate() // force the loopback fallback path
-	if id := lookupNodeIdentity(ip); id != nil {
-		b.Logf("resolved self via loopback: nodeId=%s host=%s", id.NodeID, id.HostName)
-	} else {
-		b.Logf("self IP %s did not resolve; still measuring loopback round-trip", ip)
-	}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = lookupNodeIdentity(ip)
-	}
-}
+//	  go test -run '^$' -bench BenchmarkLookupNodeIdentity -benchtime=500x -benchmem .
+func BenchmarkLookupNodeIdentity(b *testing.B) {
+	_ = startTestNode(b)
+	peer := startIdentityGatePeer(b)
+	addr, identity := waitForIdentityGatePeer(b, peer)
+	b.Cleanup(identityCache.invalidate)
 
-// BenchmarkLookupNodeIdentityCached measures the warm path: the same
-// lookupNodeIdentity call once the state watcher has mirrored the netmap into
-// the identity cache. This is the "after" — what accept-time identity costs
-// with the cache in place. Same Headscale gating.
-func BenchmarkLookupNodeIdentityCached(b *testing.B) {
-	ip := startTestNode(b)
-	StartWatch()
-	b.Cleanup(StopWatch)
+	b.Run("Direct", func(b *testing.B) {
+		// A cold cache forces one LocalAPI WhoIs over the in-process loopback.
+		identityCache.invalidate()
+		if id := lookupNodeIdentity(peer.ip); id == nil || id.NodeID != identity.NodeID {
+			b.Fatalf("peer lookup = %#v, want node ID %q", id, identity.NodeID)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if id := lookupNodeIdentity(peer.ip); id == nil || id.NodeID != peer.nodeID {
+				b.Fatalf("peer lookup = %#v, want node ID %q", id, peer.nodeID)
+			}
+		}
+	})
 
-	addr := netip.MustParseAddr(ip)
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		if id := identityCache.lookup(addr); id != nil {
-			b.Logf("cache warm: self nodeId=%s", id.NodeID)
-			break
+	b.Run("Cached", func(b *testing.B) {
+		// Seed the verified identity directly. Watcher/cache-population behavior
+		// has separate tests and must not add timing noise to this cost measure.
+		identityCache.replace(map[netip.Addr]*nodeIdentity{addr: identity})
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if id := lookupNodeIdentity(peer.ip); id == nil || id.NodeID != peer.nodeID {
+				b.Fatalf("peer lookup = %#v, want node ID %q", id, peer.nodeID)
+			}
 		}
-		if time.Now().After(deadline) {
-			b.Fatal("identity cache did not warm within 30s")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = lookupNodeIdentity(ip)
-	}
+	})
 }
 
 // BenchmarkIdentityCacheFloor is the lower bound a cache would approach: a pure
 // in-memory address->identity read with no loopback. The gap between this and
-// BenchmarkLookupNodeIdentityLoopback is what a netmap/result cache could save
+// BenchmarkLookupNodeIdentity/Direct is what a netmap/result cache could save
 // per accept — the number that decides whether a cache is worth its complexity.
 // Runs without a tailnet.
 func BenchmarkIdentityCacheFloor(b *testing.B) {

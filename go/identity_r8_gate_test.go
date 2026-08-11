@@ -137,6 +137,25 @@ type identityGatePeer struct {
 	nodeID string
 }
 
+func waitForIdentityGatePeer(
+	tb testing.TB,
+	peer identityGatePeer,
+) (netip.Addr, *nodeIdentity) {
+	tb.Helper()
+	addr := netip.MustParseAddr(peer.ip)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		identity := lookupNodeIdentityViaLocalAPI(addr)
+		if identity != nil && identity.NodeID == peer.nodeID {
+			return addr, identity
+		}
+		if time.Now().After(deadline) {
+			tb.Fatalf("authoritative WhoIs did not resolve peer %q within 30s", peer.nodeID)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // startIdentityGatePeer starts the remote side the accept path actually sees.
 // Measuring WhoIs against the package node's own IP can exercise a fast
 // self/not-found response instead of peer identity resolution, which would
@@ -185,23 +204,11 @@ func startIdentityGatePeer(tb testing.TB) identityGatePeer {
 func TestR8IdentityLatencyGate(t *testing.T) {
 	_ = startTestNode(t)
 	peer := startIdentityGatePeer(t)
-	addr := netip.MustParseAddr(peer.ip)
 
 	// Wait until the package node's authoritative WhoIs sees the independently
 	// reported peer. Waiting on an incidental watcher tick made repeat runs
 	// flaky, while beginning before WhoIs was ready measured missing identities.
-	deadline := time.Now().Add(30 * time.Second)
-	var liveIdentity *nodeIdentity
-	for {
-		liveIdentity = lookupNodeIdentityViaLocalAPI(addr)
-		if liveIdentity != nil && liveIdentity.NodeID == peer.nodeID {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("authoritative WhoIs did not resolve peer %q within 30s", peer.nodeID)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	addr, liveIdentity := waitForIdentityGatePeer(t, peer)
 
 	// Seed the cached path from that verified identity. Watcher/cache-building
 	// contracts have separate tests and are not part of this latency measure.

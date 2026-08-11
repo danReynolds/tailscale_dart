@@ -50,8 +50,9 @@ the runtime's cached `local.Client`.
 
 **Mobile publication qualification:** the current upstream v1.102.2 pin
 compiles the LocalAPI certificate endpoint used by TLS termination as a 404
-stub on iOS and Android, so `tls.bind` still needs an alternate certificate
-path. R5 no longer uses `ListenFunnel`; Funnel is ServeConfig visibility on the
+stub on iOS and Android, so `tls.bind` rejects immediately on those platforms;
+the package does not add a parallel certificate path. R5 no longer uses
+`ListenFunnel`; Funnel is ServeConfig visibility on the
 shared handler. That path and HTTPS Serve remain unqualified on mobile until
 real-device handshakes and persistent-sidecar inventory pass. The private
 HTTP/TCP/UDP core remains the mobile support target.
@@ -150,8 +151,8 @@ valuable.
 **Status:** `tls.domains()` is a read-only status query and does not use the
 disabled LocalAPI certificate endpoint; it remains available as discovery and
 does not imply certificate provisioning works. `tls.bind()` is implemented with
-package-native fd-backed listeners on desktop/server builds and unsupported on
-iOS/Android pending an alternate certificate path and real-device proof.
+package-native fd-backed listeners on desktop/server builds and explicitly
+unsupported on iOS/Android in conformance with the upstream build.
 **Requires:** MagicDNS **and** HTTPS enabled on the tailnet by the
 operator. Headscale CI covers only the clear unsupported failure path; live
 Tailscale tests cover successful TLS serving against hosted Tailscale.

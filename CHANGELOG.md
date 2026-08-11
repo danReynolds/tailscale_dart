@@ -4,9 +4,39 @@ The R4d secure-state cutover, lifecycle foundations, R5 runtime-owned
 publication convergence, and R7 transport/registry/watcher ownership moves are
 implemented in the current source. Hosted R5 tailnet/swap receipts and the
 macOS production-Keybay process-crash/restart receipt passed on 2026-08-10;
-remaining mobile/platform Keybay and publication receipts, backup-exclusion and
-sidecar inventory, and the remaining R8-R10 gates are still required before
-release.
+R8's cache-retention decision, R9's conformance audit, and the non-device R6
+inventory/backup integration completed on 2026-08-11. Real-device Keybay,
+backup readback, private-data-plane/publication, and the R10 physical launch
+gate remain before release.
+
+**Conformance and performance closeout:**
+
+- Default `udp.bind()` now asks the initialized upstream server for
+  `TailscaleIPs()` directly instead of materializing the public full-status
+  model in Dart solely to recover the node's IPv4 address.
+- `tls.bind()` rejects iOS and Android immediately at the native boundary,
+  matching upstream's compiled-out LocalAPI certificate endpoint instead of
+  implying that a package-specific certificate workaround is planned.
+- Retained the runtime-owned accept-identity cache from measured evidence. At
+  32 callers on the final integrated macOS run, cached lookup measured about
+  5.14M/s and 945 ns CPU/lookup versus 18,446/s and 236.664 µs direct;
+  cached/direct TCP and HTTP accepts plus a real netmap-replacement load receipt
+  passed. The retained cache now lives on `nodeRuntime`, removing the last unsanctioned
+  identity process-global.
+- The R9 audit now records the narrow direct APIs, justified status calls,
+  typed error authorities, OmitAuth/private-Dial trust boundary, and the two
+  unavoidable prose backstops.
+
+**R6 non-device evidence:**
+
+- Headscale E2E now emits a content-free persistent-tree receipt after
+  HTTP/TCP/UDP use and rejects unknown artifacts, symlinks, or unsafe modes.
+  Explicit categories cover the encrypted envelope, log credential/logs,
+  ACME certificate material, and upstream profile netmap cache.
+- The persistent Flutter demo now sets and reads back Apple backup exclusion
+  before enabling its state root, and packages Android API-31+ plus legacy
+  cloud/device-transfer exclusion rules for the exact state directory. macOS,
+  iOS-simulator, and Android APK builds passed.
 
 **Android:**
 

@@ -6,10 +6,23 @@ import (
 	"bytes"
 	"encoding/binary"
 	"net"
+	"net/netip"
 	"testing"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestResolveUDPBindHostUsesUpstreamIPv4(t *testing.T) {
+	got, err := resolveUDPBindHost(netip.MustParseAddr("100.64.0.9"))
+	if err != nil || got != "100.64.0.9" {
+		t.Fatalf("resolveUDPBindHost = (%q, %v), want upstream IPv4", got, err)
+	}
+	for _, ip := range []netip.Addr{{}, netip.MustParseAddr("fd7a:115c:a1e0::9")} {
+		if _, err := resolveUDPBindHost(ip); err == nil {
+			t.Fatalf("resolveUDPBindHost(%v) succeeded without IPv4", ip)
+		}
+	}
+}
 
 // TestDecodeUdpEnvelope_RejectsHostname guards that the outbound datagram
 // address is parsed as an IP literal only — a hostname must be rejected, not

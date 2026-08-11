@@ -872,7 +872,6 @@ class Tailscale implements TailscaleClient {
       (runtimeToken) =>
           offloadUdpBindFd(runtimeToken: runtimeToken, host: host, port: port),
     ),
-    defaultAddressFn: () async => (await status()).ipv4,
     closeFn: (bindingId) =>
         _withWorker((worker) => worker.udpCloseBinding(bindingId: bindingId)),
   );

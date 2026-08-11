@@ -15,7 +15,7 @@ echo "== Dart analyze =="
 "$DART" analyze lib/ test/ hook/
 
 echo "== Dart tests =="
-"$DART" test
+"$DART" test --exclude-tags live-tailscale
 
 echo "== Go tests =="
 (cd go && "$GO" test -count=1 ./...)

@@ -23,6 +23,7 @@ import 'support/native_asset_workaround.dart';
 import 'support/peer_process.dart';
 import 'support/state_waiters.dart';
 import 'support/test_keybay_backend.dart';
+import '../support/persistent_state_inventory.dart';
 
 void main() {
   final controlUrl = Platform.environment['HEADSCALE_URL'];
@@ -524,6 +525,14 @@ void main() {
         );
       },
     );
+  });
+
+  test('persistent runtime subtree has an explicit secure inventory', () {
+    final inventory = auditPersistentRuntimeInventory(stateDir);
+    // Machine-readable and content-free: safe to retain as the Linux
+    // Headscale receipt without exposing the envelope or log contents.
+    // ignore: avoid_print
+    print('R6_STATE_INVENTORY ${jsonEncode(inventory)}');
   });
 
   group('peer reconnects with persisted credentials', () {

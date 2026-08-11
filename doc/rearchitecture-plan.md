@@ -2,8 +2,8 @@
 
 ## Status
 
-**Accepted; implementation in progress — R2-R5 and R7 code present;
-R6/R8-R10 evidence remains as of 2026-08-11.**
+**Accepted; implementation in progress — R2-R5 and R7-R9 are complete;
+R6 device receipts and the R10 physical launch gate remain as of 2026-08-11.**
 
 This is the source of truth for the target architecture and implementation
 order. It incorporates the August 2026 architecture alignment audit, review of
@@ -25,9 +25,10 @@ NeedsLogin with zero SIGSYS, raw-disco pin as shipped, no tailnet traffic)
 passed the same day after fixing ephemeral scratch to use the Dart-supplied
 platform temp directory; the matching iOS-simulator runtime receipt (iPhone 17
 Pro, two generations to NeedsLogin, tsnet netstack boot logged, no crash)
-passed the same day. Mobile custody and remaining platform receipts, R6
-permission/backup/sidecar evidence, the R8/R9 audits, and the R10 integrated
-gate remain authoritative requirements below.
+passed the same day. The non-device R6 inventory/backup work and the R8/R9
+audits closed on 2026-08-11. Real-device custody, backup-policy readback,
+private-data-plane/publication receipts, and the R10 integrated physical gate
+remain authoritative requirements below.
 
 The two detailed decisions are:
 
@@ -92,9 +93,10 @@ it does not mean copying the Go API shape into Dart.
 - Windows support as part of this rearchitecture.
 - In-place profile switching. A future switch is an identity transition that
   drains one generation and starts another; it never mutates a live runtime.
-- Claiming mobile `tls.bind` before an alternate certificate path is verified,
-  or claiming ServeConfig-based Funnel before real-device handshakes and a
-  persistent-file inventory exist.
+- Working around upstream's mobile certificate-endpoint exclusion. Mobile
+  `tls.bind` is unsupported unless upstream exposes a supported certificate
+  surface; ServeConfig-based Funnel remains unqualified before real-device
+  handshakes and a persistent-file inventory exist.
 
 ## Target architecture
 
@@ -300,12 +302,13 @@ require backup exclusion while we pursue an upstream-supported encrypted
 cert-store hook.
 
 On iOS and Android, upstream compiles the LocalAPI certificate endpoint as a
-404 stub, so `tls.bind` remains unsupported until an alternate certificate path
-has real-device receipts. R5 removed the package's direct `ListenFunnel` path
-and moved Funnel to shared `ServeConfig`/`AllowFunnel`; that implementation
-avoids the package-side certificate call but remains **unqualified** until
-real-device handshakes and the sidecar inventory pass. The private HTTP/TCP/UDP
-path remains the mobile core.
+404 stub, so `tls.bind` is explicitly unsupported. The package fails at the
+native boundary instead of inventing a certificate path; revisit only if
+upstream exposes a supported mobile surface. R5 removed the package's direct
+`ListenFunnel` path and moved Funnel to shared `ServeConfig`/`AllowFunnel`;
+that implementation avoids the package-side certificate call but remains
+**unqualified** until real-device handshakes and the sidecar inventory pass.
+The private HTTP/TCP/UDP path remains the mobile core.
 
 Do not spoof Kubernetes environment detection to route certificates through
 StateStore.
@@ -614,14 +617,31 @@ platform/permission/backup/sidecar receipts stay authoritative.
   DEK presence without disclosure, SIGKILL, same stable node/IP reopen without
   auth, continuous stale-publication probing across first-`Up`, and explicit
   DEK/package-subtree reset all passed against hosted Tailscale on 2026-08-10.
+- Completed non-device evidence on 2026-08-11: the Headscale E2E gate now
+  classifies every persistent runtime file after HTTP/TCP/UDP use, rejects
+  unknown artifacts and unsafe modes, and emits a content-free relative-path
+  receipt. The live hosted path additionally observed upstream's owner-only
+  ACME account key and `profile-data/<id>/netmap-cache` hierarchy; both are now
+  explicit inventory categories. A fresh hosted certificate order was rejected
+  by the external ACME service, so that run is recorded as an attempted
+  sidecar receipt rather than a new successful TLS handshake.
+- Completed first-party backup-policy integration on 2026-08-11: the Android
+  persistent demo packages both API-31+ data-extraction exclusions and legacy
+  full-backup exclusions for its exact state root; iOS/macOS set and read back
+  `NSURLIsExcludedFromBackupKey` before enabling the node. Android APK, iOS
+  simulator, and macOS builds passed. Physical-device readback remains below.
+- Crash/response-loss, custody, envelope rename, reset-marker, key deletion,
+  subtree cleanup, permissions, and ephemeral-scratch behavior have focused
+  deterministic unit/race coverage. They are not substitutes for real Keybay
+  and filesystem receipts on each remaining device platform.
 - Prove fresh enrollment and restart with the real Keybay backend on each
   remaining supported target, not only with the package-internal fake backend.
-- Run crash/response-loss fault cases across custody write, encrypted-envelope
-  rename, reset-marker commit, key deletion, and subtree cleanup.
-- Verify fail-closed permissions, Apple/Android host-owned backup exclusion,
-  Linux/operator residual policy, and ephemeral scratch cleanup.
-- Capture the complete persistent-file inventory after normal, TLS, Serve, and
-  Funnel runs, including tailscaled/sockstats logs and certificate sidecars.
+- On physical Apple/Android targets, verify fail-closed permissions, the
+  configured backup policy's exact resolved root, and ephemeral scratch
+  cleanup. Linux/custom-host backup exclusion remains operator-owned.
+- Repeat the complete persistent-file inventory on the physical mobile
+  private-data-plane and qualified Serve/Funnel paths. Re-run the hosted
+  desktop TLS inventory when ACME order issuance is healthy.
 - Run real-device ServeConfig Funnel handshakes before qualifying mobile
   support. Upstream `StateEncrypted` telemetry is not a security receipt.
 
@@ -664,16 +684,12 @@ the authoritative in-process LocalAPI; the watcher is not a universal mirror.
 
 ### R8 — benchmark-governed cache deletion
 
-**Status 2026-08-11:** the gate harness is implemented in
-`go/identity_r8_gate_test.go` — p50/p95/p99 for the direct and cached paths at
-1, 8, and 32 concurrent acceptors against a separate live peer, with a verdict
-against the provisional latency thresholds below. Every timed lookup must
-resolve the stable node ID reported independently by that peer, so a fast
-nil/error/wrong-peer path cannot produce a false pass. The allocation benchmark
-uses the same live-peer validation. Sustained CPU and throughput, end-to-end
-TCP/HTTP accepts, netmap churn, and qualified-platform receipts remain required
-before a final retention design is accepted. Both gates are Headscale-gated;
-the first macOS receipts are recorded below.
+**Status 2026-08-11: complete; retain the runtime-owned cache.** The gate
+harness measures p50/p95/p99 plus sustained CPU/throughput at 1, 8, and 32
+callers against an independently identified peer. It also exercises the exact
+TCP and HTTP accept adapters and keeps 32 lookup workers active across a real
+Headscale peer join/netmap replacement. Each receipt runs in its own Go process
+from the Headscale E2E gate because package configuration is process-once.
 
 R8 also owns a correctness question, not only a cost one. Before this
 correction, a warm `identityCache` that lacked an address answered `(nil, true)`
@@ -698,9 +714,7 @@ microseconds. This is not an arm64 Go receipt.
 This rejects deletion on this environment. The cache remains a performance
 fast path, but a miss — cold or warm — now falls through to bounded
 authoritative WhoIs, closing the correctness window without adding a second
-cache or invalidation protocol. Full R8 remains open for sustained
-CPU/throughput, end-to-end accept, netmap-churn, and other qualified-platform
-evidence.
+cache or invalidation protocol.
 
 **macOS allocation receipt, 2026-08-11:** three independent Headscale runs of
 the corrected live-peer benchmark, each with 500 measured lookups, produced
@@ -715,14 +729,22 @@ The benchmark uses a separate peer and verifies its independently reported
 stable node ID on every measured lookup. It also shares one live fixture across
 sub-benchmarks because package configuration is intentionally process-once.
 This is far beyond the plan's 20% cache-benefit threshold and reinforces the
-macOS retention decision. Sustained CPU/throughput, end-to-end TCP/HTTP accept,
-netmap churn, and other qualified-platform receipts remain open.
+retention decision.
 
-Measure direct `LocalClient.WhoIs` through the exact in-process client with
-`OmitAuth` on macOS, Linux, iOS, and Android where practical. Record p50/p95/p99,
-allocations/op, sustained CPU and throughput for 1, 8, and 32 concurrent TCP/HTTP
-acceptors, both steady-state and during netmap churn, and compare the same
-end-to-end accept path with the existing mirror.
+**macOS sustained-load receipt, 2026-08-11:** the final integrated
+runtime-owned-cache run measured about 5.14 million cached lookups/s at 945 ns
+CPU/lookup versus 18,446 direct lookups/s at 236.664 µs CPU/lookup at 32
+callers. Cached/direct identity attachment passed through both TCP and HTTP
+accepts. During a real netmap replacement, 32 cached workers completed
+2,330,679 correct lookups at about 5.57 million/s and 513 ns CPU/lookup. The
+1/8/32 rows all retained the same independently reported peer identity. These
+figures are a machine/toolchain receipt, not a
+universal throughput promise, but they exceed the 20% retention threshold by
+more than two orders of magnitude at the highest measured concurrency.
+
+R10 physical-platform receipts may repeat the same direct
+`LocalClient.WhoIs`/cached comparison where practical, but they are not a
+prerequisite for the now-settled retention design.
 
 The default decision is deletion. The provisional removal gate is direct-path
 p95 at or below 1 ms, p99 at or below 5 ms, and no more than 10% end-to-end
@@ -738,17 +760,24 @@ LocalAPI `WhoIs` on every datagram; evaluate any UDP simplification separately.
 
 ### R9 — direct APIs and error conformance
 
-**Status 2026-08-10:** WhoIs not-found classifies by the exported
-`local.ErrPeerNotFound` sentinel, and the package's own in-process
-serve/funnel precondition failures wrap a typed sentinel so featureDisabled
-no longer depends on prose on the live path. Two recorded deviations remain
-in `go/localapi.go` with rationale, revisit triggers, and real-string tests:
-the transient exit-node-suggestion match (upstream's handler exposes no
-typed/status signal) and the prose backstop for backend-originated serve
-errors. The direct-API audit rows below remain open.
+**Status 2026-08-11: complete.** WhoIs not-found classifies by exported
+`local.ErrPeerNotFound`; package Serve/Funnel preconditions use a typed
+sentinel; the cached in-process LocalClient's private Dial/OmitAuth trust
+boundary has a construction test. TLS discovery calls `CertDomains()`
+directly, and default UDP bind now calls `TailscaleIPs()` directly instead of
+round-tripping a full public status model through Dart. Full `Status` remains
+only where peer/state data is the requested result; `StatusWithoutPeers`
+remains the narrower self/publication query.
+
+Two recorded prose deviations remain in `go/localapi.go` with rationale,
+revisit triggers, and real-string tests: transient exit-node suggestion
+(upstream exposes no typed/status signal) and the backend-originated Serve
+error backstop. Mobile `tls.bind` now rejects immediately at the native
+boundary in conformance with upstream's compiled-out certificate endpoint.
 
 - Replace full status calls with `CertDomains` or `TailscaleIPs` only where the
-  narrower result is sufficient and the runtime is fully initialized.
+  narrower result is sufficient and the runtime is fully initialized. Done for
+  TLS discovery and default UDP bind.
 - Keep LocalAPI for state, health, authentication URL, peer inventory, prefs,
   diagnostics, and WhoIs authority.
 - Audit every Dart error mapping against a typed upstream error, HTTP status,
@@ -812,8 +841,8 @@ After R1 lands:
 - R7 implementation may begin after R4d and migrates one resource family at a
   time, but no release containing that stack bypasses the R6 platform/inventory
   gate.
-- R8 benchmarks can run in parallel, but cache deletion should rebase on the
-  runtime-owned watcher.
+- R8 retained the cache from measured evidence and moved it onto the same
+  `nodeRuntime` as its watcher.
 - Documentation corrections for unsupported claims do not wait for code.
 
 ## Verification matrix
@@ -828,7 +857,7 @@ Every workstream owns focused tests, and R10 reruns the integrated matrix.
 | Hosted Tailscale | Serve/Funnel ordering and clearing, desktop TLS handshake, control-plane logout failure/success, no stale publication. |
 | Android | Cross-build plus real x86_64 and physical/representative device start/reconnect/stop; core private data plane. |
 | iOS | Real-device start/reconnect/stop and core private data plane. |
-| Mobile publication | `tls.bind` needs an alternate certificate path. R5 ServeConfig Funnel and HTTPS Serve remain unqualified until real iOS/Android handshakes and sidecar inventory pass. |
+| Mobile publication | `tls.bind` is unsupported while upstream omits its certificate endpoint; no package workaround. R5 ServeConfig Funnel and HTTPS Serve remain unqualified until real iOS/Android handshakes and sidecar inventory pass. |
 | Persistence security | Wrong/missing key, tamper/truncation, before/after-rename response loss, two-process lease, fail-closed permissions, platform-owned backup-exclusion receipt, plaintext secret inventory. |
 | Performance | Startup/reconnect, StateStore write, LocalAPI/WhoIs p50/p95/p99, allocations/CPU and 1/8/32-acceptor throughput/netmap churn, memory/handle counts across repeated cycles. |
 

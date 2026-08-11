@@ -41,8 +41,9 @@ still needs a decision.
   and an already-running peer proved the restarted node reachable with TSMP and
   completed repeated fresh raw-TCP probes through the restart window with zero
   stale responses and zero sentinel-backend hits.
-  Real-device mobile handshakes and the remaining platform, permission, backup,
-  custody-fault, and sidecar receipts are still pending.
+  R8/R9 and non-device R6 inventory/backup integration closed on 2026-08-11.
+  Real-device mobile handshakes, Keybay restart, backup readback, permissions,
+  and sidecar receipts are still pending.
 
 ## 2026-05-01: TLS listener moves onto the fd transport
 

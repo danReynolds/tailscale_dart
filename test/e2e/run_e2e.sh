@@ -44,14 +44,14 @@ done
 
 # Create a user plus separate disposable and persistence auth keys.
 echo "=== Creating Headscale user and auth keys ==="
-docker compose -f "$COMPOSE_FILE" exec headscale \
+docker compose -f "$COMPOSE_FILE" exec -T headscale \
     headscale users create dune-test 2>/dev/null || true
 
-AUTH_KEY=$(docker compose -f "$COMPOSE_FILE" exec headscale \
+AUTH_KEY=$(docker compose -f "$COMPOSE_FILE" exec -T headscale \
     headscale preauthkeys create --user dune-test --reusable --ephemeral --expiration 10m \
     2>/dev/null | tail -1)
 
-PERSIST_AUTH_KEY=$(docker compose -f "$COMPOSE_FILE" exec headscale \
+PERSIST_AUTH_KEY=$(docker compose -f "$COMPOSE_FILE" exec -T headscale \
     headscale preauthkeys create --user dune-test --reusable --expiration 10m \
     2>/dev/null | tail -1)
 
@@ -73,5 +73,30 @@ HEADSCALE_URL="http://localhost:$HEADSCALE_PORT" \
 HEADSCALE_AUTH_KEY="$AUTH_KEY" \
 HEADSCALE_PERSIST_AUTH_KEY="$PERSIST_AUTH_KEY" \
     "${DART:-dart}" test test/e2e/e2e_test.dart --enable-experiment=native-assets --timeout=360s
+
+# R8's two live receipts each configure the process-global native runtime, so
+# they must run in separate Go test processes. Reuse this suite's disposable
+# Headscale control plane and auth key; keep the Go cache somewhere writable on
+# both developer machines and CI runners.
+R8_GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/tailscale_dart_go_cache}"
+mkdir -p "$R8_GOCACHE"
+
+echo "=== Running R8 identity latency receipt ==="
+(
+    cd "$PKG_DIR/go"
+    HEADSCALE_URL="http://localhost:$HEADSCALE_PORT" \
+    HEADSCALE_AUTH_KEY="$AUTH_KEY" \
+    GOCACHE="$R8_GOCACHE" \
+        go test -count=1 -run '^TestR8IdentityLatencyGate$' -v .
+)
+
+echo "=== Running R8 identity load receipt ==="
+(
+    cd "$PKG_DIR/go"
+    HEADSCALE_URL="http://localhost:$HEADSCALE_PORT" \
+    HEADSCALE_AUTH_KEY="$AUTH_KEY" \
+    GOCACHE="$R8_GOCACHE" \
+        go test -count=1 -run '^TestR8IdentityLoadReceipt$' -v .
+)
 
 echo "=== E2E tests passed ==="

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -122,6 +123,9 @@ func TcpListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*Tcp
 // runtime token. Offloaded like TcpListenFd — see that function's comment for
 // why this must never execute on the worker FIFO.
 func TlsListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
+	if err := validateTLSListenPlatform(runtime.GOOS); err != nil {
+		return nil, err
+	}
 	if tailnetPort < 0 || tailnetPort > 65535 {
 		return nil, fmt.Errorf("invalid port %d", tailnetPort)
 	}
@@ -149,6 +153,18 @@ func TlsListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*Tcp
 	}
 
 	return registerTcpFdListener(gate, ln, tailnetHost)
+}
+
+func validateTLSListenPlatform(goos string) error {
+	switch goos {
+	case "android", "ios":
+		return fmt.Errorf(
+			"tls.bind is not supported on %s: upstream Tailscale disables its LocalAPI certificate endpoint on mobile",
+			goos,
+		)
+	default:
+		return nil
+	}
 }
 
 // readyTLSListenServer is the subset of tsnet.Server used after the runtime's

@@ -8,9 +8,9 @@ the checked-in code until their workstream lands.
 
 | Document | Status | Purpose |
 | --- | --- | --- |
-| [Rearchitecture plan](rearchitecture-plan.md) | In progress; R2-R5 and R7 code present, R6/R8/R10 evidence remains | North Star, decisions, live PR disposition, implementation order, and release gates. |
-| [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | R2-R5 and R7 code present; macOS crash receipt passed; remaining R6/R8/R10 work pending | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
-| [Encrypted node state ADR](adr-encrypted-node-state.md) | Implemented through R4d; macOS production-Keybay receipt passed; remaining R6 evidence pending | Direct Keybay custody binding, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
+| [Rearchitecture plan](rearchitecture-plan.md) | In progress; R2-R5 and R7-R9 complete, device R6/R10 evidence remains | North Star, decisions, live PR disposition, implementation order, and release gates. |
+| [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | R2-R5 and R7-R9 complete; physical launch receipts remain | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
+| [Encrypted node state ADR](adr-encrypted-node-state.md) | R4d plus non-device R6 evidence complete; remaining platform receipts pending | Direct Keybay custody binding, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
 | [Current architecture and API feedback](current-architecture-and-api-feedback.md) | Current implementation | Existing Go/Dart/fd ownership and public API shape. |
 | [Concurrency model](concurrency.md) | Current implementation | Existing epoch, registries, lock order, and teardown commit protocol. |
 | [API status](api-status.md) | Current public surface | Namespace-by-namespace callable API and platform qualifications. |
@@ -64,8 +64,8 @@ Documentation must not say that the entire package or tsnet subtree is
 encrypted: on non-Kubernetes paths, upstream ACME/TLS private-key sidecars, a
 credential-bearing log config, and sensitive logs can bypass StateStore. The
 whole state root still needs owner-only permissions and backup exclusion.
-`tls.bind` still depends on a mobile-disabled certificate endpoint and requires
-an alternate path before mobile qualification. R5 has removed the direct
-`ListenFunnel` implementation in favor of shared ServeConfig/`AllowFunnel`, but
-HTTPS Serve and Funnel remain unqualified on mobile until real-device and
-sidecar receipts pass.
+`tls.bind` depends on a mobile-disabled certificate endpoint and is explicitly
+unsupported there rather than given a package-specific workaround. R5 has
+removed the direct `ListenFunnel` implementation in favor of shared
+ServeConfig/`AllowFunnel`, but HTTPS Serve and Funnel remain unqualified on
+mobile until real-device and sidecar receipts pass.

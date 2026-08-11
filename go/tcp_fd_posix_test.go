@@ -108,6 +108,20 @@ func TestListenTLSOnReadyServerRequiresHTTPSBeforeListening(t *testing.T) {
 	}
 }
 
+func TestValidateTLSListenPlatformMatchesUpstreamCertificateBoundary(t *testing.T) {
+	for _, goos := range []string{"android", "ios"} {
+		err := validateTLSListenPlatform(goos)
+		if err == nil || !strings.Contains(err.Error(), "upstream Tailscale") {
+			t.Fatalf("validateTLSListenPlatform(%q) = %v, want upstream mobile rejection", goos, err)
+		}
+	}
+	for _, goos := range []string{"darwin", "linux"} {
+		if err := validateTLSListenPlatform(goos); err != nil {
+			t.Fatalf("validateTLSListenPlatform(%q) = %v, want supported", goos, err)
+		}
+	}
+}
+
 func TestListenTLSOnReadyServerWrapsRawListenerWithoutUp(t *testing.T) {
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

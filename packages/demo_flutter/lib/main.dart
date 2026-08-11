@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'src/backup_policy.dart';
+
 const _voidBlack = Color(0xff020706);
 const _terminal = Color(0xff061815);
 const _panel = Color(0xe6091815);
@@ -211,8 +213,9 @@ class _DemoHomePageState extends State<DemoHomePage> {
     try {
       final support = await getApplicationSupportDirectory();
       path = p.join(support.path, 'tailscale_demo');
+      await preparePersistentStateDirectory(path);
     } catch (error) {
-      _log('application support directory unavailable: $error');
+      _log('secure state directory unavailable: $error');
       return;
     }
     if (!mounted) return;

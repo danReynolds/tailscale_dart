@@ -1,7 +1,13 @@
+import 'dart:io';
+
 import 'package:dune_core_flutter/main.dart';
+import 'package:dune_core_flutter/src/backup_policy.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   testWidgets('renders validation demo shell', (tester) async {
     await tester.pumpWidget(const DemoApp());
     await tester.pump();
@@ -29,5 +35,52 @@ void main() {
     expect(find.text('Tailscale API key'), findsOneWidget);
     expect(find.text('Tailnet ID'), findsOneWidget);
     expect(find.text('Join as admin'), findsOneWidget);
+  });
+
+  test('Apple state preparation verifies backup exclusion', () async {
+    const channel = MethodChannel('dev.tailscale.dart.demo/backup-policy');
+    String? receivedPath;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          expect(call.method, 'excludeFromBackup');
+          receivedPath = call.arguments as String;
+          return true;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+
+    final root = Directory.systemTemp.createTempSync('tailscale_demo_backup_');
+    root.deleteSync();
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
+
+    await preparePersistentStateDirectory(root.path, operatingSystem: 'ios');
+
+    expect(root.existsSync(), isTrue);
+    expect(receivedPath, root.path);
+  });
+
+  test('Apple state preparation fails closed without readback', () async {
+    const channel = MethodChannel('dev.tailscale.dart.demo/backup-policy');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async => false);
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+
+    final root = Directory.systemTemp.createTempSync('tailscale_demo_backup_');
+    root.deleteSync();
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
+
+    await expectLater(
+      preparePersistentStateDirectory(root.path, operatingSystem: 'macos'),
+      throwsStateError,
+    );
   });
 }

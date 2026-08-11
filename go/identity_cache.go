@@ -27,10 +27,6 @@ type identityIndex struct {
 	byAddr map[netip.Addr]*nodeIdentity
 }
 
-// identityCache is the process-wide accept-path identity index. There is one
-// embedded engine per process, so one cache suffices.
-var identityCache identityIndex
-
 // replace swaps in a freshly built index and marks the cache warm. Called from
 // the state watcher on every netmap tick.
 func (c *identityIndex) replace(byAddr map[netip.Addr]*nodeIdentity) {

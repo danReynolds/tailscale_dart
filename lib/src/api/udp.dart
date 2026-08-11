@@ -32,7 +32,6 @@ typedef UdpBindFn =
       String host,
       int port,
     );
-typedef UdpDefaultAddressFn = Future<String?> Function();
 
 /// Tears down the Go-side UDP bridge for the given opaque binding id (from the
 /// bind response). A datagram socketpair peer-close does not wake the Go
@@ -119,11 +118,8 @@ abstract class Udp {
 
 /// Library-internal factory. Reach via `Tailscale.instance.udp`.
 @internal
-Udp createUdp({
-  required UdpBindFn bindFn,
-  required UdpDefaultAddressFn defaultAddressFn,
-  required UdpCloseFn closeFn,
-}) => _Udp(bindFn, defaultAddressFn, closeFn);
+Udp createUdp({required UdpBindFn bindFn, required UdpCloseFn closeFn}) =>
+    _Udp(bindFn, closeFn);
 
 @internal
 Future<TailscaleDatagramBinding> createFdTailscaleDatagramBinding({
@@ -148,10 +144,9 @@ Future<TailscaleDatagramBinding> createFdTailscaleDatagramBinding({
 }
 
 final class _Udp implements Udp {
-  const _Udp(this._bind, this._defaultAddress, this._close);
+  const _Udp(this._bind, this._close);
 
   final UdpBindFn _bind;
-  final UdpDefaultAddressFn _defaultAddress;
   final UdpCloseFn _close;
 
   @override
@@ -162,12 +157,7 @@ final class _Udp implements Udp {
     if (Platform.isWindows) {
       throw const TailscaleUdpException('Windows is not supported.');
     }
-    final resolvedAddress = address ?? await _defaultAddress();
-    if (resolvedAddress == null || resolvedAddress.isEmpty) {
-      throw const TailscaleUdpException(
-        'udp.bind requires a local tailnet address before this node has IPv4.',
-      );
-    }
+    final resolvedAddress = address ?? '';
     try {
       final (:fd, :bindingId, :local) = await _bind(resolvedAddress, port);
       try {

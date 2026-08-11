@@ -28,9 +28,9 @@ layer that proves the behavior.
 | Suite | Command | Runs by default? | External dependency | Purpose |
 | --- | --- | --- | --- | --- |
 | Static analysis | `dart analyze` | Yes, PR gate | None | Analyzer/type/lint correctness. |
-| Root Dart suite | `dart test` | Yes, PR gate | None by default | Unit, FFI, fd, runtime tests. Persistent runtime integration uses a package-internal in-memory Keybay test backend, not the Linux Secret Service. `test/e2e/` and `test/live_tailscale/` register as skipped/no-op unless their required env vars are present. |
+| Root Dart suite | `dart test --exclude-tags live-tailscale` | Yes, PR gate | None | Unit, FFI, fd, runtime tests. Persistent runtime integration uses a package-internal in-memory Keybay test backend, not the Linux Secret Service. E2E registers as a no-op without Headscale variables; hosted-live tests are explicitly excluded even if credentials happen to be exported. |
 | Go suite | `cd go && go test -count=1 ./...` | Yes, PR gate | None | Go wrappers, LocalAPI mapping helpers, native-side validation. |
-| Headscale E2E | `test/e2e/run_e2e.sh` | Yes, PR gate | Docker | Starts local Headscale, exercises encrypted persistent enrollment/reconnect through a test-only file custodian, and uses ephemeral peers for disposable data-plane cases. It does not exercise production Linux Secret Service custody. |
+| Headscale E2E + R8 receipts | `test/e2e/run_e2e.sh` | Yes, PR gate | Docker | Starts local Headscale; exercises encrypted persistent enrollment/reconnect, HTTP/TCP/UDP, the classified R6 persistent-file inventory, and separate-process R8 latency/load/churn receipts. The test custodian is not production Linux Secret Service. |
 | Local full suite | `tool/test_local_full.sh` | No, local/release confidence | Docker for Headscale | PR gate plus demo package tests and whitespace checks. |
 | Platform smoke matrix | `tool/smoke/run_matrix.sh` | No, local/release confidence | Docker plus local Flutter platforms/devices | Runs explicitly ephemeral nodes to validate native asset packaging and HTTP/TCP/UDP smoke behavior on macOS/iOS/Android/etc.; it is not a persistent-storage receipt. |
 | Live Tailscale routing controls | `TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... dart test test/live_tailscale/live_routing_controls_test.dart` | No, opt-in only | Tailscale SaaS + API key | Validates hosted-control-plane behavior Headscale cannot model: exit-node route approval, `suggest`, `useAuto`, and cleanup. |
@@ -45,7 +45,7 @@ The default development loop is therefore:
 
 ```bash
 dart analyze
-dart test
+dart test --exclude-tags live-tailscale
 cd go && go test -count=1 ./...
 ```
 
@@ -81,8 +81,16 @@ same-node recovery without an auth key after SIGKILL, automatic stale-
 publication cleanup, and explicit DEK/state-subtree reset. Equivalent real-
 Keybay evidence on each other claimed persistent platform, platform backup
 exclusion, fail-closed platform permissions, custody fault injection, and the
-complete plaintext sidecar inventory remain R6 evidence. A green Linux PR
-gate, Headscale E2E run, or smoke matrix is not a substitute.
+mobile persistent-sidecar inventory remain R6 evidence. The first-party demo's
+Apple exclusion/readback code and Android backup rules compile in CI/local
+builds, but physical readback is still required. A green Linux PR gate,
+Headscale E2E run, or smoke matrix is not a substitute for those device
+receipts.
+
+The Headscale E2E run does provide the non-device inventory authority for its
+own path: after normal HTTP/TCP/UDP use it classifies every relative artifact,
+checks owner-only modes, and prints `R6_STATE_INVENTORY` without file contents.
+The same classifier is used by hosted TLS and Serve/Funnel receipt tests.
 
 ## Placement Rules
 
@@ -156,6 +164,8 @@ PR CI is intentionally narrow and fast. It runs on Linux and covers:
 - Dart analysis and root tests, using the internal in-memory Keybay test backend
   for persistent runtime integration.
 - Headscale E2E with the test-only persistent custodian plus ephemeral peers.
+- R8 identity latency, sustained CPU/throughput, exact TCP/HTTP accepts, and
+  netmap-replacement load in separate Go processes.
 
 Run the same shape locally with:
 

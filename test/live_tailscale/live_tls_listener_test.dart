@@ -24,7 +24,7 @@ import 'package:test/test.dart';
 
 import '../e2e/support/native_asset_workaround.dart';
 import '../e2e/support/state_waiters.dart';
-import '../integration/support/process_state_root.dart';
+import '../support/persistent_state_inventory.dart';
 import 'support/tailscale_api.dart';
 
 const _liveTlsHandshakeBudget = Duration(seconds: 120);
@@ -64,7 +64,7 @@ void main() {
 
   tearDownAll(() async {
     try {
-      await tsnet?.down();
+      await tsnet?.forgetLocalIdentity();
     } catch (_) {}
     for (final id in deviceIdsToDelete) {
       try {
@@ -73,7 +73,9 @@ void main() {
     }
     try {
       final dir = stateDir;
-      if (dir != null) clearProcessIntegrationState(Directory(dir));
+      if (dir != null && Directory(dir).existsSync()) {
+        Directory(dir).deleteSync(recursive: true);
+      }
     } catch (_) {}
     try {
       final dir = clientStateDir;
@@ -88,13 +90,17 @@ void main() {
       await warmUpNativeAssetForPeerSubprocesses();
 
       api = LiveTailscaleApi(apiKey: apiKey, tailnetId: tailnetId);
-      final processStateRoot = processIntegrationStateRoot();
-      clearProcessIntegrationState(processStateRoot);
+      final processStateRoot = Directory.systemTemp.createTempSync(
+        'tailscale_live_tls_persistent_',
+      );
       stateDir = processStateRoot.path;
       final authKey = await api!.createAuthKey();
       final clientAuthKey = await api!.createAuthKey();
 
-      Tailscale.init(stateDir: stateDir!, appId: processIntegrationAppId);
+      Tailscale.init(
+        stateDir: stateDir!,
+        appId: 'dev.tailscale.dart.live.tls.$suffix',
+      );
       tsnet = Tailscale.instance;
       await recordUntil(
         tsnet!,
@@ -102,7 +108,6 @@ void main() {
         () => tsnet!.up(
           hostname: hostname,
           authKey: authKey,
-          ephemeral: true,
           controlUrl: controlUri(),
           timeout: const Duration(seconds: 120),
         ),
@@ -132,6 +137,7 @@ void main() {
           },
         ),
       );
+      late final List<Map<String, Object>> inventory;
       try {
         clientStateDir = Directory.systemTemp
             .createTempSync('tailscale_live_tls_client_')
@@ -158,12 +164,17 @@ void main() {
         expect(response.statusCode, 200);
         expect(response.body, 'hello from tls');
         await handled.timeout(const Duration(seconds: 15));
-      } catch (_) {
-        await handled.catchError((_) {});
-        rethrow;
       } finally {
         await server.close();
+        inventory = auditPersistentRuntimeInventory(stateDir!);
+        stdout.writeln('R6_TLS_STATE_INVENTORY ${jsonEncode(inventory)}');
       }
+
+      expect(
+        inventory.any((entry) => entry['category'] == 'certificate-key'),
+        isTrue,
+        reason: 'the completed TLS handshake must inventory its private key',
+      );
     },
     timeout: const Timeout(Duration(minutes: 7)),
   );

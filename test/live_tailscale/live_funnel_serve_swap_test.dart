@@ -25,7 +25,7 @@ import 'package:test/test.dart';
 
 import '../e2e/support/native_asset_workaround.dart';
 import '../e2e/support/state_waiters.dart';
-import '../integration/support/process_state_root.dart';
+import '../support/persistent_state_inventory.dart';
 import 'support/live_tailnet_fetch.dart';
 import 'support/tailscale_api.dart';
 
@@ -69,7 +69,7 @@ void main() {
 
   tearDownAll(() async {
     try {
-      await tsnet?.down();
+      await tsnet?.forgetLocalIdentity();
     } catch (_) {}
     for (final id in deviceIdsToDelete) {
       try {
@@ -78,7 +78,7 @@ void main() {
     }
     try {
       final root = stateRoot;
-      if (root != null) clearProcessIntegrationState(root);
+      if (root != null && root.existsSync()) root.deleteSync(recursive: true);
     } catch (_) {}
     api?.close();
   });
@@ -89,11 +89,15 @@ void main() {
       await warmUpNativeAssetForPeerSubprocesses();
 
       api = LiveTailscaleApi(apiKey: apiKey, tailnetId: tailnetId);
-      stateRoot = processIntegrationStateRoot();
-      clearProcessIntegrationState(stateRoot!);
+      stateRoot = Directory.systemTemp.createTempSync(
+        'tailscale_live_swap_persistent_',
+      );
       final publisherAuthKey = await api!.createAuthKey();
 
-      Tailscale.init(stateDir: stateRoot!.path, appId: processIntegrationAppId);
+      Tailscale.init(
+        stateDir: stateRoot!.path,
+        appId: 'dev.tailscale.dart.live.swap.$suffix',
+      );
       tsnet = Tailscale.instance;
       await recordUntil(
         tsnet!,
@@ -101,7 +105,6 @@ void main() {
         () => tsnet!.up(
           hostname: hostname,
           authKey: publisherAuthKey,
-          ephemeral: true,
           controlUrl: controlUri(),
           timeout: const Duration(seconds: 120),
         ),
@@ -203,6 +206,11 @@ void main() {
         await serveBackend.close(force: true);
         await funnelBackend.close(force: true);
       }
+
+      final inventory = auditPersistentRuntimeInventory(stateRoot!.path);
+      stdout.writeln(
+        'R6_SERVE_FUNNEL_STATE_INVENTORY ${jsonEncode(inventory)}',
+      );
     },
     timeout: const Timeout(Duration(minutes: 15)),
   );

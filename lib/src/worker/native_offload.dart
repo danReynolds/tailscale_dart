@@ -16,12 +16,12 @@ part of 'worker.dart';
 // these calls' own latency. Each offloaded call is independent — its helper
 // isolate handles exactly one call and returns one result — so no request-id
 // correlation is needed, and the worker keeps its simple serial FIFO for the
-// fast, uncontended local calls that stay on it (status, prefs, listeners, …)
+// fast, uncontended local calls that stay on it (status, prefs, whois, …)
 // and the lifecycle calls the caller awaits exclusively anyway (start, logout).
 //
-// The helper isolate needs no worker-style init: the Go node is process-global
-// state shared across all cgo calls, and `@Native` bindings resolve in any
-// isolate.
+// The helper isolate needs no worker-style init: Go library state is
+// process-wide and shared across all cgo calls, and `@Native` bindings resolve
+// in any isolate.
 //
 // Concurrency is capped by the caller-isolate gate in
 // `native_offload_gate.dart`. HTTP native admission shares that same bound.

@@ -89,10 +89,12 @@ Future<void> main() async {
       '=== status() latency while dial is in flight: $blockedMs ms '
       '(baseline ${baselineMs.toStringAsFixed(2)} ms) ===',
     );
-    final verdict = blockedMs < 2000
+    final responsive = blockedMs < 2000;
+    final verdict = responsive
         ? 'PASS: worker remained responsive.'
         : 'FAIL: status() stalled behind the dial.';
     stdout.writeln(verdict);
+    if (!responsive) exitCode = 1;
   } finally {
     try {
       await tsnet.down();

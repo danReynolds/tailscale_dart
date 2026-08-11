@@ -1012,6 +1012,9 @@ final class _ManagedPeer {
       await process.exitCode.timeout(const Duration(seconds: 10));
     } on TimeoutException {
       process.kill(ProcessSignal.sigkill);
+      // Do not return until the OS has reaped the process. The caller deletes
+      // the peer's state directory immediately after this method completes.
+      await process.exitCode.timeout(const Duration(seconds: 10));
     }
     await stdoutSub.cancel();
     await stderrSub.cancel();

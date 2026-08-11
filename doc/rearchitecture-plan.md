@@ -672,18 +672,36 @@ resolve the stable node ID reported independently by that peer, so a fast
 nil/error/wrong-peer path cannot produce a false pass. This harness covers only
 the latency portion of the removal gate; allocations, sustained CPU and
 throughput, end-to-end TCP/HTTP accepts, netmap churn, and qualified-platform
-receipts remain required before a deletion decision. It is Headscale-gated like
-the identity benchmarks and still needs a run; record its output and commit
-here when it lands.
+receipts remain required before a final retention design is accepted. It is
+Headscale-gated like the identity benchmarks; the first macOS receipt is
+recorded below.
 
-R8 also now owns a correctness question, not only a cost one. A warm
-`identityCache` that lacks an address answers `(nil, true)` and is treated as
-authoritative, so `lookupNodeIdentity` skips its live fallback
-(`go/identity_cache.go`, `go/localapi.go`). Moving listen/bind off the worker
-FIFO removes the accidental delay that used to keep accepts outside that
-window, and the two e2e accept-identity assertions fail as a result (see the
-parked listen/bind PR). Deleting the cache closes the window by construction;
-retaining it requires closing the window some other way.
+R8 also owns a correctness question, not only a cost one. Before this
+correction, a warm `identityCache` that lacked an address answered `(nil, true)`
+and was treated as authoritative, so `lookupNodeIdentity` skipped its live
+fallback (`go/identity_cache.go`, `go/localapi.go`). Moving listen/bind off the
+worker FIFO removed the accidental delay that had kept accepts outside that
+window, and the two e2e accept-identity assertions failed as a result (see the
+parked listen/bind PR).
+
+**macOS arm64 latency receipt, 2026-08-11:** five independent valid Headscale
+runs, spanning harness commit `1ecbc0b` and correctness follow-up `89e07f7`,
+produced the following direct-path ranges. Every timed result matched the stable
+node ID reported independently by the peer; cached p99 remained at or below 4
+microseconds.
+
+| Concurrent callers | Direct p95 | Direct p99 | Provisional gate |
+| --- | ---: | ---: | --- |
+| 1 | 136–327 µs | 485 µs–1.649 ms | pass |
+| 8 | 1.263–2.185 ms | 2.646–4.350 ms | p95 breach |
+| 32 | 3.892–7.945 ms | 6.950–12.883 ms | p95 and p99 breach |
+
+This rejects deletion on this environment. The cache remains a performance
+fast path, but a miss — cold or warm — now falls through to bounded
+authoritative WhoIs, closing the correctness window without adding a second
+cache or invalidation protocol. Full R8 remains open for allocations,
+sustained CPU/throughput, end-to-end accept, netmap-churn, and other
+qualified-platform evidence.
 
 Measure direct `LocalClient.WhoIs` through the exact in-process client with
 `OmitAuth` on macOS, Linux, iOS, and Android where practical. Record p50/p95/p99,

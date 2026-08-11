@@ -27,6 +27,9 @@ import '../e2e/support/state_waiters.dart';
 import '../integration/support/process_state_root.dart';
 import 'support/tailscale_api.dart';
 
+const _liveTlsHandshakeBudget = Duration(seconds: 120);
+const _liveTlsListenerBudget = Duration(seconds: 180);
+
 void main() {
   final apiKey = Platform.environment['TAILSCALE_API_KEY'];
   final tailnetId = Platform.environment['TAILSCALE_TAILNET_ID'];
@@ -105,28 +108,45 @@ void main() {
         ),
       );
 
+      final status = await tsnet!.status();
       final device = await api!.waitForDevice(
         hostname: hostname,
-        ipv4: (await tsnet!.status()).ipv4,
+        ipv4: status.ipv4,
       );
       deviceIdsToDelete.add(device.id);
 
       final domains = await _waitForTlsDomains(tsnet!);
       final server = await tsnet!.tls.bind(port: 443);
+      stdout.writeln(
+        'LIVE_TLS_SERVER ${jsonEncode({'ipv4': status.ipv4, 'domain': domains.first, 'bindAddress': server.local.address, 'bindPort': server.local.port})}',
+      );
       final handled = _serveOnePlaintextHttpRequest(server);
-      unawaited(handled.catchError((_) {}));
+      final handlerFailure = Completer<({int statusCode, String body})>();
+      unawaited(
+        handled.then<void>(
+          (_) {},
+          onError: (Object error, StackTrace stackTrace) {
+            if (!handlerFailure.isCompleted) {
+              handlerFailure.completeError(error, stackTrace);
+            }
+          },
+        ),
+      );
       try {
         clientStateDir = Directory.systemTemp
             .createTempSync('tailscale_live_tls_client_')
             .path;
-        final response = await _runClientFetch(
-          stateDir: clientStateDir!,
-          appId: 'dev.tailscale.dart.live.tls.client',
-          hostname: clientHostname,
-          authKey: clientAuthKey,
-          controlUrl: controlUrl,
-          url: Uri.https(domains.first, '/live-tls'),
-        );
+        final response = await Future.any([
+          _runClientFetch(
+            stateDir: clientStateDir!,
+            appId: 'dev.tailscale.dart.live.tls.client',
+            hostname: clientHostname,
+            authKey: clientAuthKey,
+            controlUrl: controlUrl,
+            url: Uri.https(domains.first, '/live-tls'),
+          ),
+          handlerFailure.future,
+        ]);
 
         try {
           final clientDevice = await api!.waitForDevice(
@@ -242,39 +262,44 @@ Future<List<String>> _waitForTlsDomains(Tailscale tsnet) async {
 }
 
 Future<void> _serveOnePlaintextHttpRequest(TailscaleListener server) async {
-  final conn = await server.connections.first.timeout(
-    const Duration(seconds: 90),
-  );
-  try {
-    await _readHttpRequestHead(conn.input);
-    await conn.output.write(
-      ascii.encode(
-        'HTTP/1.1 200 OK\r\n'
-        'content-length: 14\r\n'
-        'content-type: text/plain\r\n'
-        'connection: close\r\n'
-        '\r\n'
-        'hello from tls',
-      ),
-    );
-    await conn.output.close();
-  } finally {
-    await conn.close();
+  await for (final conn in server.connections.timeout(_liveTlsListenerBudget)) {
+    try {
+      // tls.Listener.Accept returns before the handshake is complete. First
+      // certificate issuance can close an early attempt before any plaintext
+      // HTTP bytes arrive, so keep the listener subscription alive and allow
+      // the client's bounded retry loop to establish a fresh connection.
+      if (!await _readHttpRequestHead(conn.input)) continue;
+      await conn.output.write(
+        ascii.encode(
+          'HTTP/1.1 200 OK\r\n'
+          'content-length: 14\r\n'
+          'content-type: text/plain\r\n'
+          'connection: close\r\n'
+          '\r\n'
+          'hello from tls',
+        ),
+      );
+      await conn.output.close();
+      return;
+    } finally {
+      await conn.close();
+    }
   }
+  fail('TLS listener closed before receiving a complete HTTP request head.');
 }
 
-Future<void> _readHttpRequestHead(Stream<Uint8List> input) async {
+Future<bool> _readHttpRequestHead(Stream<Uint8List> input) async {
   final buffer = BytesBuilder();
   await for (final chunk in input.timeout(
-    const Duration(seconds: 15),
+    _liveTlsHandshakeBudget,
     onTimeout: (sink) => sink.close(),
   )) {
     buffer.add(chunk);
     if (ascii
         .decode(buffer.toBytes(), allowInvalid: true)
         .contains('\r\n\r\n')) {
-      return;
+      return true;
     }
   }
-  fail('TLS listener did not receive a complete HTTP request head.');
+  return false;
 }

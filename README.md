@@ -38,8 +38,10 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 > lifecycle, runtime-owned Serve/Funnel convergence, and R7 ownership moves are
 > implemented in the current source. The hosted Funnel-tailnet, replacement,
 > and macOS production-Keybay process-crash/restart receipts passed on
-> 2026-08-10; remaining mobile/platform, permission, backup-exclusion,
-> sidecar-inventory, R8/R9 audit, and release receipts are still pending.
+> 2026-08-10. R8 retained the identity cache from measured evidence, R9's
+> conformance audit is complete, and non-device R6 inventory/backup integration
+> is present. Real-device custody, backup readback, data-plane/publication, and
+> final launch receipts remain.
 
 ## What you can build
 
@@ -123,7 +125,9 @@ Only the logical Tailscale StateStore is encrypted by this mechanism. The
 package-owned `tailscale/` subtree can also contain upstream logs, log
 configuration, and TLS/certificate sidecars outside that encryption boundary.
 Keep those residuals owner-only and the entire `stateDir` private and excluded
-from backups.
+from backups. The persistent demo shows a fail-closed Apple resource-value
+readback and Android cloud/device-transfer exclusion rules for its exact state
+root; production embedders own the equivalent host policy.
 
 Calling `logout()` is remote-first: confirmed control-plane success removes
 the current logical profile, but the StateStore container and DEK remain.
@@ -176,7 +180,7 @@ Outbound HTTP | `http.client` | Supported | A normal `package:http` client route
 Inbound HTTP | `http.bind` | Supported | Package-native request/response types backed by fd streams.
 Raw TCP | `tcp.dial`, `tcp.bind` | Supported | Explicit read/write halves and half-close.
 Raw UDP | `udp.bind` | Supported | Message-preserving datagrams with remote endpoint metadata.
-TLS listener | `tls.bind` | Desktop/server only | Requires MagicDNS and HTTPS. Upstream's default certificate endpoint is disabled on iOS/Android, so mobile termination is unsupported pending an alternate path and real-device receipt.
+TLS listener | `tls.bind` | Desktop/server only | Requires MagicDNS and HTTPS. Upstream's certificate endpoint is disabled on iOS/Android, so mobile termination is explicitly unsupported; the package does not add a parallel certificate path.
 TLS discovery | `tls.domains` | Supported read-only API | Reads the runtime's advertised certificate domains directly; this does not provision a certificate or imply that `tls.bind` works on mobile.
 Serve | `serve.forward`, `serve.clear` | Desktop/server qualified | Tailnet publication through the runtime-owned ServeConfig manager. The R5 replacement/exact-handle and macOS persisted process-crash/restart receipts passed 2026-08-10; mobile HTTPS qualification remains pending.
 Funnel | `funnel.forward`, `funnel.clear` | Desktop/server qualified | The public-visibility mode of the same ServeConfig mapping used by Serve. Public ingress, tailnet reach, and the R5 swap receipt have passed hosted Tailscale; all mobile receipts remain pending.
@@ -271,7 +275,8 @@ to publish that existing loopback port.
 
 The HTTPS example below is currently a desktop/server-qualified path. Mobile
 HTTPS Serve and ServeConfig Funnel still need their own real-device and sidecar
-receipts; `tls.bind` remains a separate certificate-path qualification.
+receipts; `tls.bind` remains unsupported there with the upstream certificate
+endpoint omitted.
 
 ```dart
 final publication = await Tailscale.instance.serve.forward(
@@ -297,8 +302,8 @@ port or authenticate all handlers that share it.
 
 Platform | Status | Notes
 --- | --- | ---
-iOS | Core supported | Userspace tsnet, no VPN entitlement. Core lifecycle and private data-plane smoke validated; `tls.bind`, HTTPS Serve, and ServeConfig Funnel remain unqualified pending real-device receipts.
-Android | Core supported | Userspace tsnet, no root. Persistent nodes require Android 12 / API 31+; older versions can run explicitly ephemeral nodes. Core smoke is validated; `tls.bind`, HTTPS Serve, and ServeConfig Funnel remain unqualified pending real-device receipts.
+iOS | Core supported | Userspace tsnet, no VPN entitlement. Core lifecycle and private data-plane smoke validated; `tls.bind` is unsupported by the upstream mobile build, while HTTPS Serve and ServeConfig Funnel remain unqualified pending real-device receipts.
+Android | Core supported | Userspace tsnet, no root. Persistent nodes require Android 12 / API 31+; older versions can run explicitly ephemeral nodes. Core smoke is validated; `tls.bind` is unsupported by the upstream mobile build, while HTTPS Serve and ServeConfig Funnel remain unqualified pending real-device receipts.
 macOS | Supported | Native asset and kqueue reactor path validated locally.
 Linux | Supported with storage qualification | Native asset and epoll reactor path validated in Headscale E2E. Persistent nodes require a desktop session with `secret-tool` and an available, unlocked Secret Service; headless Linux supports ephemeral nodes only.
 Windows | Unsupported | Excluded from the package platform list until a Windows-native backend is designed.
@@ -356,7 +361,7 @@ Issues, bug reports, and PRs are welcome.
 
 - **Found a bug or have a feature request?** [Open an issue](https://github.com/danReynolds/tailscale_dart/issues).
 - **Have a question or want to share what you're building?** [Start a discussion](https://github.com/danReynolds/tailscale_dart/discussions).
-- **Want to send a PR?** Run `dart analyze`, `dart test`, and `tool/test_pr_gate.sh` before pushing. The full test setup — including the Headscale E2E suite and opt-in live Tailscale runs — is documented in [test/README.md](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md).
+- **Want to send a PR?** Run `dart analyze`, `dart test --exclude-tags live-tailscale`, and `tool/test_pr_gate.sh` before pushing. The full test setup — including the Headscale E2E suite and opt-in live Tailscale runs — is documented in [test/README.md](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md).
 
 If you're using `package:tailscale` in production, I'd love to hear about it — open a discussion and let me know.
 

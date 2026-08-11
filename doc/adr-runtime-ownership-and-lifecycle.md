@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted; R2-R5 and R7 code present in current source — 2026-08-11.**
+**Accepted; R2-R5 and R7-R9 complete in current source — 2026-08-11.**
 
 R2/R3 provide `nodeRuntime`, generation-bound supervision, and fail-safe
 teardown; R4a-R4d add Keybay custody, the encrypted/in-memory StateStores,
@@ -12,8 +12,9 @@ authority, and exact handles. The hosted Funnel-tailnet, replacement, and macOS
 production-Keybay process-crash/restart receipts passed on 2026-08-10. The
 R7a-R7c have since moved the outbound HTTP transport, the fd listener
 registries, and the state watcher onto `nodeRuntime` (2026-08-10). The
-remaining R6/R10 evidence, the R8 identity-cache benchmark decision, and R9
-error conformance still remain.
+R8 retained the runtime-owned identity cache from measured evidence and R9
+closed the direct-API/error audit on 2026-08-11. Real-device R6 receipts and
+the R10 physical launch gate remain.
 
 ## Context
 

@@ -7,9 +7,11 @@
 This ADR defines the pre-launch persistence replacement. There is deliberately
 no SQLite migration. R4d now wires the encrypted Store, Keybay custody, state
 lease, secure idle operations, explicit local forget, and ephemeral in-memory
-path together and removes the SQLite runtime/dependency. R6 real-platform
-custody, backup-exclusion, crash, and complete sidecar-inventory receipts remain
-release gates; this status does not certify those receipts.
+path together and removes the SQLite runtime/dependency. R6 now has
+deterministic crash/custody/permission coverage, a Linux Headscale runtime
+inventory, and compiled first-party Apple/Android backup integration.
+Real-device custody/readback and mobile publication inventories remain release
+gates; this status does not certify those receipts.
 
 ## Context
 
@@ -833,8 +835,9 @@ current `tls.bind` certificate callback cannot complete its handshake. R5 has
 replaced package Funnel with ServeConfig/`AllowFunnel`; that path does not use
 the same package-side certificate call and is therefore **unqualified**, not
 proven impossible. It must pass real-device Serve/Funnel handshakes and the
-same sidecar inventory before support is claimed. `tls.bind` still needs an
-alternate certificate path.
+same sidecar inventory before support is claimed. `tls.bind` remains
+unsupported while upstream omits its mobile certificate endpoint; the package
+does not invent an alternate certificate authority.
 
 ## Backup-exclusion ownership and receipts
 
@@ -1034,8 +1037,8 @@ do not expose the DEK, StateStore values, or auth key.
   packaged backup rules, and ephemeral scratch policy in first-party example
   apps; on Linux/custom hosts, record the operator-owned exclusion and the
   residual that CI cannot configure it;
-- keep `tls.bind` unsupported on mobile until an alternate certificate path
-  passes; and keep R5 ServeConfig Funnel/HTTPS Serve unqualified until full
+- keep `tls.bind` unsupported on mobile while upstream omits the certificate
+  endpoint; and keep R5 ServeConfig Funnel/HTTPS Serve unqualified until full
   real-device handshakes and their sidecar inventory pass.
 
 ### Performance

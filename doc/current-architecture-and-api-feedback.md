@@ -19,9 +19,10 @@ implemented and validated through unit tests, package tests, Flutter demo tests,
 and Headscale E2E. R4d secure state, R5 publication ownership, and R7 runtime
 ownership have focused Go and Dart coverage. The hosted R5 Funnel-tailnet and
 swap receipts passed on 2026-08-10, as did the macOS production-Keybay persisted
-process-crash/restart receipt. This remains pre-production/beta until the
-remaining platform Keybay/publication, backup-exclusion, sidecar-inventory, and
-rearchitecture gates pass.
+process-crash/restart receipt. R8's cache-retention decision, R9's conformance
+audit, and non-device R6 inventory/backup integration completed on 2026-08-11.
+This remains pre-production/beta until the physical platform Keybay,
+backup-readback, private-data-plane/publication, and launch gates pass.
 
 ## Summary
 
@@ -483,11 +484,11 @@ It is production-shaped in architecture, but not yet production-hardened.
 
 Known remaining work:
 
-- Real Keybay restart, failure, backup-exclusion, and full sidecar-inventory
-  receipts on each remaining persistent platform. macOS CLI enrollment,
+- Real Keybay restart, backup-policy readback, and persistent sidecar-inventory
+  receipts on each remaining physical platform. macOS CLI enrollment,
   SIGKILL/restart, stale-publication cleanup, and explicit reset passed against
   production Keybay and hosted Tailscale on 2026-08-10.
-- R8 identity-cache benchmark decision and R9 typed-error conformance.
+- R10 integrated physical-device launch gate and raw-disco decision.
 - Windows support decision.
 - More HTTP fd server lifecycle/error tests.
 - More stress tests for backpressure and resource limits.

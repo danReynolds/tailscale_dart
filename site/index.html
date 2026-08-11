@@ -115,8 +115,9 @@ print(res.statusCode);</code></pre>
             This is intentionally explicit. Implemented means there is a typed
             Dart API and coverage in unit, integration, Headscale, or live
             Tailscale tests depending on what the feature requires.
-            TLS certificate lookup is disabled upstream on iOS and Android.
-            R5 Funnel now uses shared ServeConfig rather than ListenFunnel, but
+            TLS certificate lookup is disabled upstream on iOS and Android, so
+            <code>tls.bind</code> is explicitly unsupported there. R5 Funnel
+            uses shared ServeConfig rather than ListenFunnel, but
             mobile HTTPS Serve/Funnel still awaits real-device and sidecar
             receipts.
           </p>
@@ -279,8 +280,9 @@ print(res.statusCode);</code></pre>
             <a href="https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md">accepted target plan</a>
             also specifies Keybay-custodied encrypted node state; that secure
             storage cutover is in the current source, with upstream log/TLS
-            sidecars outside the encryption boundary and mobile platform and
-            backup-exclusion receipts still pending.
+            sidecars outside the encryption boundary. First-party Apple and
+            Android backup integration is present; physical-device custody,
+            policy readback, and sidecar receipts remain.
           </p>
         </div>
         <div class="architecture-grid">

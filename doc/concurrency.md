@@ -6,9 +6,9 @@ new offloaded call.
 
 > **Current-state document.** Server, StateStore, DEK, state lease, scratch,
 > publication/bootstrap manager, outbound HTTP transport, fd registries, and
-> state watcher now live on `nodeRuntime`. The identity mirror remains
-> process-global pending R8; the fd-reactor registry, Dart port, and Android
-> host-network snapshot are sanctioned bridge infrastructure. See the
+> state watcher and measured accept-identity cache now live on `nodeRuntime`.
+> The fd-reactor registry, Dart port, and Android host-network snapshot are
+> sanctioned bridge infrastructure. See the
 > [rearchitecture plan](rearchitecture-plan.md) and [runtime lifecycle
 > ADR](adr-runtime-ownership-and-lifecycle.md).
 
@@ -252,7 +252,7 @@ Relevant nested orders; take locks left to right, never right to left:
 ```
 runtimeController.configureMu  →  runtimeController.mu
 runtimeController.hostNetworkMu  →  runtimeController.mu
-nodeRuntime.watchMu  →  identityCache.mu
+nodeRuntime.watchMu  →  nodeRuntime.identity.mu
 nodeRuntime.watchMu  →  publicationBootstrap.mu
 runtimeController.mu, nodeRuntime.httpMu, nodeRuntime.fd.<family>.mu,
 reactorMu, dartPortMu, publicationManager.mu,

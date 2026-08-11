@@ -186,6 +186,40 @@ func TestRuntimeController_AbandonedTokenCannotRefreshActiveRuntime(t *testing.T
 	}
 }
 
+func TestRuntimeController_RefreshRejectsRuntimeDetachedDuringCallback(t *testing.T) {
+	config := runtimeConfig{hostname: "active", controlURL: "https://control.example/"}
+	active := newNodeRuntime(nodeEpoch.Load(), 303, config)
+	defer active.cancel()
+	controller := runtimeController{current: active}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	type result struct {
+		runtime *nodeRuntime
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		refreshed, err := controller.refreshActiveRuntime(304, config, func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+		done <- result{runtime: refreshed, err: err}
+	}()
+
+	<-entered
+	controller.mu.Lock()
+	controller.current = nil
+	controller.mu.Unlock()
+	close(release)
+
+	got := <-done
+	if got.runtime != nil || !errors.Is(got.err, ErrRuntimeStale) {
+		t.Fatalf("refresh after detach = (%p, %v), want (nil, ErrRuntimeStale)", got.runtime, got.err)
+	}
+}
+
 func TestRuntimeController_CleanupFailurePoisonsReplacementAdmission(t *testing.T) {
 	var controller runtimeController
 	candidate, active, err := controller.reserve(70001, runtimeConfig{})

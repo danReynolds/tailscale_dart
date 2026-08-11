@@ -176,9 +176,9 @@ func DataPlaneReady(runtimeToken uint64) bool {
 	return ok && gate.runtime.publication.bootstrapReady()
 }
 
-// nodeStateSnapshot is a point-in-time census of every process-global registry,
-// for tests and leak diagnostics. The JSON tags are the FFI contract with
-// `Diag.nodeState()` on the Dart side.
+// nodeStateSnapshot is a point-in-time census of the current runtime's owned
+// registries, for tests and leak diagnostics. The JSON tags are the FFI
+// contract with `Diag.nodeState()` on the Dart side.
 type nodeStateSnapshot struct {
 	// Funnel is an AllowFunnel bit on the same ServeConfig entry, so there is
 	// no separate funnelForwarders registry or diagnostic count.

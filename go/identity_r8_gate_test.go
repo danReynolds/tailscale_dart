@@ -187,23 +187,28 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 	peer := startIdentityGatePeer(t)
 	addr := netip.MustParseAddr(peer.ip)
 
-	// Warm path first, so the direct measurements below cannot be helped by a
-	// cache the watcher populates mid-run.
-	StartWatch()
+	// Wait until the package node's authoritative WhoIs sees the independently
+	// reported peer. Waiting on an incidental watcher tick made repeat runs
+	// flaky, while beginning before WhoIs was ready measured missing identities.
 	deadline := time.Now().Add(30 * time.Second)
+	var liveIdentity *nodeIdentity
 	for {
-		if id, ok := identityCache.lookup(addr); ok && id != nil {
-			if id.NodeID != peer.nodeID {
-				t.Fatalf("cached peer node ID = %q, want live peer ID %q", id.NodeID, peer.nodeID)
-			}
+		liveIdentity = lookupNodeIdentityViaLocalAPI(addr)
+		if liveIdentity != nil && liveIdentity.NodeID == peer.nodeID {
 			break
 		}
 		if time.Now().After(deadline) {
-			StopWatch()
-			t.Fatal("identity cache did not warm within 30s")
+			t.Fatalf("authoritative WhoIs did not resolve peer %q within 30s", peer.nodeID)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+
+	// Seed the cached path from that verified identity. Watcher/cache-building
+	// contracts have separate tests and are not part of this latency measure.
+	identityCache.replace(map[netip.Addr]*nodeIdentity{
+		addr: liveIdentity,
+	})
+	t.Cleanup(identityCache.invalidate)
 	type row struct {
 		label   string
 		workers int
@@ -218,9 +223,7 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 		})
 	}
 
-	// Direct path: hold the cache cold for the whole measurement. The watcher
-	// repopulates on every netmap tick, so invalidate per worker batch.
-	StopWatch()
+	// Direct path: hold the cache cold for the whole measurement.
 	identityCache.invalidate()
 	var direct []row
 	for _, workers := range []int{1, 8, 32} {

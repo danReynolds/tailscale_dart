@@ -86,10 +86,7 @@ func UdpCloseBinding(id int64) {
 // TcpListenFd — see that function's comment for why this must never execute on
 // the worker FIFO.
 func UdpBindFd(runtimeToken uint64, host string, port int) (*UdpFdBinding, error) {
-	if host == "" {
-		return nil, errors.New("host is required")
-	}
-	if net.ParseIP(host) == nil {
+	if host != "" && net.ParseIP(host) == nil {
 		return nil, fmt.Errorf("host %q is not a valid IP address", host)
 	}
 	if port < 0 || port > 65535 {
@@ -102,6 +99,13 @@ func UdpBindFd(runtimeToken uint64, host string, port int) (*UdpFdBinding, error
 	}
 	if err := gate.awaitDataPlaneReadyForCall(); err != nil {
 		return nil, fmt.Errorf("udp bind data plane: %w", err)
+	}
+	if host == "" {
+		ip4, _ := gate.s.TailscaleIPs()
+		host, err = resolveUDPBindHost(ip4)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
@@ -133,6 +137,13 @@ func UdpBindFd(runtimeToken uint64, host string, port int) (*UdpFdBinding, error
 		LocalAddress: localAddress,
 		LocalPort:    localPort,
 	}, nil
+}
+
+func resolveUDPBindHost(ip4 netip.Addr) (string, error) {
+	if !ip4.Is4() {
+		return "", errors.New("udp.bind requires a local tailnet address before this node has IPv4")
+	}
+	return ip4.String(), nil
 }
 
 func newDatagramSocketPair() (int, int, error) {

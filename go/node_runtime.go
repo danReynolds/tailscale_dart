@@ -87,6 +87,9 @@ type nodeRuntime struct {
 	httpTransportClosed bool
 
 	fd fdResources
+	// identity is the watcher-maintained accept hot-path index for this exact
+	// server generation. A replacement runtime starts cold by construction.
+	identity identityIndex
 
 	watchMu sync.Mutex
 	watch   *watcherRun

@@ -24,13 +24,14 @@ import (
 //	  go test -run '^$' -bench BenchmarkLookupNodeIdentity -benchtime=500x -benchmem .
 func BenchmarkLookupNodeIdentity(b *testing.B) {
 	_ = startTestNode(b)
+	cache := activeIdentityIndex(b)
 	peer := startIdentityGatePeer(b)
 	addr, identity := waitForIdentityGatePeer(b, peer)
-	b.Cleanup(identityCache.invalidate)
+	b.Cleanup(cache.invalidate)
 
 	b.Run("Direct", func(b *testing.B) {
 		// A cold cache forces one LocalAPI WhoIs over the in-process loopback.
-		identityCache.invalidate()
+		cache.invalidate()
 		if id := lookupNodeIdentity(peer.ip); id == nil || id.NodeID != identity.NodeID {
 			b.Fatalf("peer lookup = %#v, want node ID %q", id, identity.NodeID)
 		}
@@ -46,7 +47,7 @@ func BenchmarkLookupNodeIdentity(b *testing.B) {
 	b.Run("Cached", func(b *testing.B) {
 		// Seed the verified identity directly. Watcher/cache-population behavior
 		// has separate tests and must not add timing noise to this cost measure.
-		identityCache.replace(map[netip.Addr]*nodeIdentity{addr: identity})
+		cache.replace(map[netip.Addr]*nodeIdentity{addr: identity})
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {

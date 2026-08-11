@@ -122,12 +122,9 @@ func StartWatch() {
 		previous.cancel()
 		stopWatcherTimerLocked(previous)
 	}
-	// A replacement watcher must not inherit an identity index from the old
-	// generation while it waits for its initial netmap. The identity cache is
-	// process-global until R8 decides its fate; guarding it under this
-	// runtime's watchMu is sound because the controller serializes lifecycles
-	// — the prior runtime's stopWatch joins before a successor can start.
-	identityCache.invalidate()
+	// A replacement watcher starts this runtime's index cold while it waits for
+	// its initial netmap. A successor runtime owns a distinct index.
+	runtime.identity.invalidate()
 	runtime.watchMu.Unlock()
 
 	go func() {
@@ -143,7 +140,7 @@ func StartWatch() {
 				current := watcherRunCurrentLocked(run)
 				preReady := current && !runtime.publication.bootstrapReady()
 				if current {
-					identityCache.invalidate()
+					runtime.identity.invalidate()
 				}
 				if preReady {
 					// Make an Up success racing this watcher failure observe lost
@@ -185,7 +182,7 @@ func StartWatch() {
 				idx := buildIdentityIndex(n.NetMap)
 				runtime.watchMu.Lock()
 				if watcherRunCurrentLocked(run) {
-					identityCache.replace(idx)
+					runtime.identity.replace(idx)
 				}
 				runtime.watchMu.Unlock()
 				schedulePeerPublish(run, lc)
@@ -321,7 +318,7 @@ func finishWatcherRun(run *watcherRun) {
 	runtime.watchMu.Lock()
 	if runtime.watch == run {
 		stopWatcherTimerLocked(run)
-		identityCache.invalidate()
+		runtime.identity.invalidate()
 	}
 	runtime.watchMu.Unlock()
 
@@ -363,7 +360,7 @@ func (r *nodeRuntime) stopWatch() {
 	}
 	// Invalidate before releasing the barrier so no accept path can consume an
 	// old generation's identity index while watcher teardown drains.
-	identityCache.invalidate()
+	r.identity.invalidate()
 	r.watchMu.Unlock()
 
 	if run == nil {

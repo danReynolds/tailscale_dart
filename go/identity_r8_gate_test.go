@@ -28,7 +28,7 @@ import (
 //	  go test -run TestR8IdentityLatencyGate -v .
 //
 // Record the output in the plan's R8 section together with the commit it ran
-// against; the decision it governs is whether identityCache survives.
+// against; the decision it governs is whether the runtime-owned cache survives.
 const (
 	// r8P95Budget and r8P99Budget are the plan's provisional removal gate for
 	// the direct path (doc/rearchitecture-plan.md, R8).
@@ -135,6 +135,7 @@ func measureIdentityLatency(tb testing.TB, ip, expectedNodeID string, workers in
 type identityGatePeer struct {
 	ip     string
 	nodeID string
+	server *tsnet.Server
 }
 
 func waitForIdentityGatePeer(
@@ -192,6 +193,7 @@ func startIdentityGatePeer(tb testing.TB) identityGatePeer {
 			return identityGatePeer{
 				ip:     status.Self.TailscaleIPs[0].String(),
 				nodeID: string(status.Self.ID),
+				server: peer,
 			}
 		}
 		if time.Now().After(deadline) {
@@ -203,6 +205,7 @@ func startIdentityGatePeer(tb testing.TB) identityGatePeer {
 
 func TestR8IdentityLatencyGate(t *testing.T) {
 	_ = startTestNode(t)
+	cache := activeIdentityIndex(t)
 	peer := startIdentityGatePeer(t)
 
 	// Wait until the package node's authoritative WhoIs sees the independently
@@ -212,10 +215,10 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 
 	// Seed the cached path from that verified identity. Watcher/cache-building
 	// contracts have separate tests and are not part of this latency measure.
-	identityCache.replace(map[netip.Addr]*nodeIdentity{
+	cache.replace(map[netip.Addr]*nodeIdentity{
 		addr: liveIdentity,
 	})
-	t.Cleanup(identityCache.invalidate)
+	t.Cleanup(cache.invalidate)
 	type row struct {
 		label   string
 		workers int
@@ -231,10 +234,10 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 	}
 
 	// Direct path: hold the cache cold for the whole measurement.
-	identityCache.invalidate()
+	cache.invalidate()
 	var direct []row
 	for _, workers := range []int{1, 8, 32} {
-		identityCache.invalidate()
+		cache.invalidate()
 		direct = append(direct, row{
 			label:   fmt.Sprintf("direct/%d", workers),
 			workers: workers,
@@ -283,8 +286,17 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 		t.Logf("LATENCY RESULT: provisional threshold breached — %s", breach)
 	}
 	t.Log("LATENCY RESULT: deletion is blocked on this environment unless a " +
-		"confirming run passes; retaining identityCache still requires the plan's " +
+		"confirming run passes; retaining the cache still requires the plan's " +
 		"documented improvement and invalidation evidence.")
+}
+
+func activeIdentityIndex(tb testing.TB) *identityIndex {
+	tb.Helper()
+	runtime := currentRuntime()
+	if runtime == nil {
+		tb.Fatal("package runtime is unavailable")
+	}
+	return &runtime.identity
 }
 
 func TestLatencyDistributionUsesNearestRank(t *testing.T) {

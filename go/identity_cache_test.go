@@ -104,3 +104,20 @@ func TestIdentityIndexLookupSemantics(t *testing.T) {
 		t.Errorf("post-invalidate lookup = %v, want nil", id)
 	}
 }
+
+func TestIdentityIndexIsRuntimeOwned(t *testing.T) {
+	first := newNodeRuntime(1, 1, runtimeConfig{})
+	second := newNodeRuntime(2, 2, runtimeConfig{})
+	t.Cleanup(first.cancel)
+	t.Cleanup(second.cancel)
+	addr := netip.MustParseAddr("100.64.0.2")
+
+	first.identity.replace(buildIdentityIndex(testNetmap()))
+
+	if id := first.identity.lookup(addr); id == nil || id.NodeID != "nPEER" {
+		t.Fatalf("first runtime identity = %v, want nPEER", id)
+	}
+	if id := second.identity.lookup(addr); id != nil {
+		t.Fatalf("replacement runtime inherited identity = %v", id)
+	}
+}

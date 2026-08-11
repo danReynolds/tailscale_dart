@@ -211,10 +211,14 @@ func lookupNodeIdentity(ip string) *nodeIdentity {
 	if err != nil {
 		return nil
 	}
-	if id := identityCache.lookup(addr); id != nil {
+	lc, err := lcOr("lookupNodeIdentity")
+	if err != nil {
+		return nil
+	}
+	if id := lc.runtime.identity.lookup(addr); id != nil {
 		return id
 	}
-	return lookupNodeIdentityViaLocalAPI(addr)
+	return lookupNodeIdentityViaLocalAPIWithClient(lc, addr)
 }
 
 // lookupNodeIdentityViaLocalAPI is the cache-miss fallback: a live WhoIs over
@@ -226,6 +230,10 @@ func lookupNodeIdentityViaLocalAPI(addr netip.Addr) *nodeIdentity {
 	if err != nil {
 		return nil
 	}
+	return lookupNodeIdentityViaLocalAPIWithClient(lc, addr)
+}
+
+func lookupNodeIdentityViaLocalAPIWithClient(lc *runtimeLocalClient, addr netip.Addr) *nodeIdentity {
 	ctx, cancel := lc.callContext(identityLookupTimeout)
 	defer cancel()
 	resp, err := lc.WhoIs(ctx, addr.String())

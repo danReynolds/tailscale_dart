@@ -420,7 +420,12 @@ void _emitTiming(
 }
 
 void _emitRss(String scenario) {
-  _emitMetric(scenario, unit: 'bytes', samples: <num>[ProcessInfo.currentRss]);
+  _emitMetric(
+    scenario,
+    unit: 'bytes',
+    samples: <num>[ProcessInfo.currentRss],
+    advisoryOnly: true,
+  );
 }
 
 void _emitMetric(

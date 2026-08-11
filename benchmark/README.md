@@ -42,10 +42,12 @@ percentage changes are not mislabeled, plus the same direction in at least 80%
 of three or more paired trials. One-trial quick runs cannot emit regression or
 improvement verdicts, and material results without a consistent direction are
 reported as inconclusive rather than parity. Initial enrollment, first-path
-setup, and host event-loop lag remain explicitly advisory because control-plane
-behavior, path selection, and host scheduling dominate them. If a repeatable
-scenario regresses, use a profiler or targeted instrumentation to find the
-cause; do not add tracing to this comparison harness.
+setup, host event-loop lag, and process RSS remain explicitly advisory because
+control-plane behavior, path selection, host scheduling, and VM allocation
+state dominate them. RSS still records every checkpoint and paired direction;
+it needs repeat evidence rather than a single threshold crossing. If a
+repeatable scenario regresses, use a profiler or targeted instrumentation to
+find the cause; do not add tracing to this comparison harness.
 
 ## POSIX fd transport
 

@@ -191,7 +191,11 @@ Future<void> main(List<String> args) async {
         'package': 'tailscale',
         'version': baselineVersion,
       },
-      'current': <String, Object?>{'path': repo.path, 'commit': currentCommit},
+      'current': <String, Object?>{
+        'path': repo.path,
+        'commit': currentCommit,
+        'dirty': await _gitDirty(repo),
+      },
       'environment': <String, Object?>{
         'dart': Platform.version,
         'operatingSystem': Platform.operatingSystem,
@@ -586,6 +590,14 @@ Future<String> _gitHead(Directory repo) async {
     'HEAD',
   ], workingDirectory: repo.path);
   return result.exitCode == 0 ? (result.stdout as String).trim() : 'unknown';
+}
+
+Future<bool> _gitDirty(Directory repo) async {
+  final result = await Process.run('git', const <String>[
+    'status',
+    '--porcelain',
+  ], workingDirectory: repo.path);
+  return result.exitCode != 0 || (result.stdout as String).trim().isNotEmpty;
 }
 
 void _printComparisons(

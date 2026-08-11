@@ -105,9 +105,8 @@ final class _SmokeMatrixRunner {
       if (config.strict && skipped.isNotEmpty) return false;
       return failed.isEmpty;
     } finally {
-      // Cleanup tasks are independent: parallelize the foreground ones and
-      // detach `compose down -v` so the runner exits as soon as the summary
-      // is reported. Detached docker continues teardown in the background.
+      // Detach `compose down -v` so the runner exits as soon as the summary is
+      // reported. Detached docker continues teardown in the background.
       if (headscaleStarted && !config.keepHeadscale) {
         _log('detaching docker compose down -v in background');
         try {
@@ -121,8 +120,11 @@ final class _SmokeMatrixRunner {
           stderr.writeln('failed to detach docker compose down -v: $error');
         }
       }
+      // The peer owns a runtime rooted below stateRoot. Stop it before deleting
+      // that directory so native teardown can validate and release its state
+      // lease instead of racing a recursive delete.
+      if (peer != null) await peer.stop();
       await Future.wait(<Future<void>>[
-        if (peer != null) peer.stop(),
         Future(() {
           try {
             stateRoot.deleteSync(recursive: true);

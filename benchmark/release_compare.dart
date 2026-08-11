@@ -629,7 +629,8 @@ void _printGroup(
     '${(primaryP95 ? 'release p95' : 'release p50').padLeft(12)} '
     '${(primaryP95 ? 'current p95' : 'current p50').padLeft(12)} '
     '${'delta'.padLeft(9)} '
-    '${(primaryP95 ? 'current p50' : 'current p95').padLeft(12)}  verdict',
+    '${(primaryP95 ? 'current p50' : 'current p95').padLeft(12)} '
+    "${'W/L'.padLeft(7)}  verdict",
   );
   for (final row in rows) {
     final deltaValue = row.currentDeltaPercent;
@@ -645,7 +646,8 @@ void _printGroup(
       '${_formatValue(baselinePrimary, row.unit).padLeft(12)} '
       '${_formatValue(currentPrimary, row.unit).padLeft(12)} '
       '${delta.padLeft(9)} '
-      '${_formatValue(currentSecondary, row.unit).padLeft(12)}  '
+      '${_formatValue(currentSecondary, row.unit).padLeft(12)} '
+      '${'${row.currentWins}/${row.currentLosses}'.padLeft(7)}  '
       '${row.verdict}',
     );
   }

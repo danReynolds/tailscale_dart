@@ -38,11 +38,14 @@ separate platform/device receipt.
 The 15% verdict is an initial materiality label, not a CI gate. Establish the
 runner's variance across repeated jobs before making it blocking. Verdicts also
 require an absolute change of at least 0.1 ms (1 ms for event-loop p95) so tiny
-percentage changes are not mislabeled. Initial enrollment, first-path setup,
-and host event-loop lag remain explicitly advisory because control-plane/path
-selection and host scheduling dominate them. If a repeatable scenario
-regresses, use a profiler or targeted instrumentation to find the cause; do not
-add tracing to this comparison harness.
+percentage changes are not mislabeled, plus the same direction in at least 80%
+of three or more paired trials. One-trial quick runs cannot emit regression or
+improvement verdicts, and material results without a consistent direction are
+reported as inconclusive rather than parity. Initial enrollment, first-path
+setup, and host event-loop lag remain explicitly advisory because control-plane
+behavior, path selection, and host scheduling dominate them. If a repeatable
+scenario regresses, use a profiler or targeted instrumentation to find the
+cause; do not add tracing to this comparison harness.
 
 ## POSIX fd transport
 

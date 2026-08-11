@@ -10,6 +10,9 @@ final class PerfComparison {
     required this.currentP95,
     required this.currentDeltaPercent,
     required this.advisoryOnly,
+    required this.pairedTrials,
+    required this.currentWins,
+    required this.currentLosses,
     required this.verdict,
     required this.baselineSamples,
     required this.currentSamples,
@@ -27,6 +30,9 @@ final class PerfComparison {
   /// whether that is good depends on [higherIsBetter].
   final double? currentDeltaPercent;
   final bool advisoryOnly;
+  final int pairedTrials;
+  final int currentWins;
+  final int currentLosses;
   final String verdict;
   final List<double> baselineSamples;
   final List<double> currentSamples;
@@ -47,6 +53,9 @@ final class PerfComparison {
     },
     'currentDeltaPercent': currentDeltaPercent,
     'advisoryOnly': advisoryOnly,
+    'pairedTrials': pairedTrials,
+    'currentWins': currentWins,
+    'currentLosses': currentLosses,
     'verdict': verdict,
   };
 }
@@ -75,12 +84,14 @@ List<PerfComparison> summarizePerfRecords(
     final unit = record['unit'];
     final higherIsBetter = record['higherIsBetter'];
     final advisoryOnly = record['advisoryOnly'] ?? false;
+    final trial = record['trial'] ?? 0;
     final rawSamples = record['samples'];
     if (target is! String ||
         scenario is! String ||
         unit is! String ||
         higherIsBetter is! bool ||
         advisoryOnly is! bool ||
+        trial is! int ||
         rawSamples is! List) {
       throw FormatException('invalid metric record: $record');
     }
@@ -96,6 +107,10 @@ List<PerfComparison> summarizePerfRecords(
     );
     group.samplesByTarget
         .putIfAbsent(target, () => <double>[])
+        .addAll(rawSamples.map((value) => (value as num).toDouble()));
+    group.samplesByTargetAndTrial
+        .putIfAbsent(target, () => <int, List<double>>{})
+        .putIfAbsent(trial, () => <double>[])
         .addAll(rawSamples.map((value) => (value as num).toDouble()));
   }
 
@@ -133,13 +148,45 @@ List<PerfComparison> summarizePerfRecords(
     final materiallyDifferent =
         absoluteDelta > absoluteFloor &&
         (delta == null || delta.abs() > materialityPercent);
-    final verdict = group.advisoryOnly
+    final baselineTrials =
+        group.samplesByTargetAndTrial[baselineTarget] ??
+        const <int, List<double>>{};
+    final currentTrials =
+        group.samplesByTargetAndTrial[currentTarget] ??
+        const <int, List<double>>{};
+    final pairedTrialIds =
+        baselineTrials.keys.where(currentTrials.containsKey).toList()..sort();
+    var currentWins = 0;
+    var currentLosses = 0;
+    for (final trial in pairedTrialIds) {
+      final baselineTrial = perfPercentile(
+        baselineTrials[trial]!,
+        useP95 ? 0.95 : 0.50,
+      );
+      final currentTrial = perfPercentile(
+        currentTrials[trial]!,
+        useP95 ? 0.95 : 0.50,
+      );
+      final numericTrialDirection = currentTrial.compareTo(baselineTrial);
+      final regressionTrialDirection = group.higherIsBetter
+          ? -numericTrialDirection
+          : numericTrialDirection;
+      if (regressionTrialDirection > 0) currentLosses++;
+      if (regressionTrialDirection < 0) currentWins++;
+    }
+    final enoughTrials = pairedTrialIds.length >= 3;
+    final requiredConsistentTrials = (pairedTrialIds.length * 0.8).ceil();
+    final consistentRegression = currentLosses >= requiredConsistentTrials;
+    final consistentImprovement = currentWins >= requiredConsistentTrials;
+    final verdict = group.advisoryOnly || !enoughTrials
         ? 'advisory'
         : !materiallyDifferent || regressionDirection == 0
         ? 'parity'
-        : regressionDirection > 0
+        : regressionDirection > 0 && consistentRegression
         ? 'regression'
-        : 'improvement';
+        : regressionDirection < 0 && consistentImprovement
+        ? 'improvement'
+        : 'inconclusive';
     comparisons.add(
       PerfComparison(
         scenario: group.scenario,
@@ -151,6 +198,9 @@ List<PerfComparison> summarizePerfRecords(
         currentP95: currentP95,
         currentDeltaPercent: delta,
         advisoryOnly: group.advisoryOnly,
+        pairedTrials: pairedTrialIds.length,
+        currentWins: currentWins,
+        currentLosses: currentLosses,
         verdict: verdict,
         baselineSamples: List<double>.unmodifiable(baseline),
         currentSamples: List<double>.unmodifiable(current),
@@ -174,4 +224,6 @@ final class _MetricGroup {
   final bool higherIsBetter;
   final bool advisoryOnly;
   final Map<String, List<double>> samplesByTarget = <String, List<double>>{};
+  final Map<String, Map<int, List<double>>> samplesByTargetAndTrial =
+      <String, Map<int, List<double>>>{};
 }

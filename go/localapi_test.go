@@ -265,26 +265,36 @@ func TestApplyServeForwardFeatureErrorCodes(t *testing.T) {
 }
 
 func TestClassifyLocalAPIError_FeatureDisabledFromMessage(t *testing.T) {
-	// The live path: the exact strings tailscale.com's ipn/serve.go
-	// NodeCanFunnel returns (both variants). If upstream rewords these, this
-	// test fails — which is the point, since classification hinges on the text.
+	// Exact strings from tailscale.com's ipn/serve.go NodeCanFunnel and
+	// ipn/ipnlocal/serve.go. If upstream rewords these, this test fails — which
+	// is the point, since classification hinges on the text.
 	realUpstream := []string{
 		`Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.`,
 		`Funnel not available; "funnel" node attribute not set. See https://tailscale.com/s/no-funnel.`,
-	}
-	// Speculative backstop phrasings (not tied to a specific current upstream
-	// error — classifyLocalAPIError documents them as such).
-	speculative := []string{
 		"Unable to turn on Funnel while shields-up is enabled",
+	}
+	for _, msg := range realUpstream {
+		t.Run(msg, func(t *testing.T) {
+			for _, err := range []error{errors.New(msg), notAppliedError(errors.New(msg))} {
+				code, _ := classifyLocalAPIError(err)
+				if code != "featureDisabled" {
+					t.Errorf("code = %q, want %q for %q", code, "featureDisabled", err)
+				}
+			}
+		})
+	}
+}
+
+func TestClassifyLocalAPIError_UnrelatedAvailabilityProseStaysUnknown(t *testing.T) {
+	for _, msg := range []string{
+		"network map not available",
 		"feature not enabled for this node",
 		"you must enable this in the admin panel",
 		"this capability is disabled by the operator",
-	}
-	for _, msg := range append(realUpstream, speculative...) {
+	} {
 		t.Run(msg, func(t *testing.T) {
-			code, _ := classifyLocalAPIError(errors.New(msg))
-			if code != "featureDisabled" {
-				t.Errorf("code = %q, want %q", code, "featureDisabled")
+			if code, _ := classifyLocalAPIError(errors.New(msg)); code != "" {
+				t.Fatalf("unrelated error code = %q, want unknown", code)
 			}
 		})
 	}
@@ -682,7 +692,7 @@ func TestClassifyLocalAPIError_KnownCodesAreStable(t *testing.T) {
 		case "preconditionFailed":
 			err = fakeHTTPErr{status: http.StatusPreconditionFailed, msg: "x"}
 		case "featureDisabled":
-			err = errors.New("feature is disabled")
+			err = errServeFeatureUnavailable
 		case "serveConfigConflict":
 			err = ErrServeConfigConflict
 		case "dataPlaneNotReady":

@@ -165,15 +165,17 @@ func (g nodeGate) awaitDataPlaneReadyForCall() error {
 
 // DataPlaneReady reports whether [runtimeToken] still identifies the current
 // runtime and that runtime's one first-Up publication bootstrap has succeeded.
-// It never blocks or joins the bootstrap: Dart's HTTP send path probes it to
-// run the native admission call directly on the caller isolate instead of a
-// helper isolate. Readiness is resolved through the exact token, so a
+// It never waits for or joins the bootstrap: Dart's HTTP send path probes it
+// to run the native admission call directly on the caller isolate instead of
+// a helper isolate. Its in-memory controller/bootstrap lock acquisitions can
+// still park briefly, which is why the FFI binding is deliberately non-leaf.
+// Readiness is resolved through the exact token, so a
 // replacement runtime's un-bootstrapped generation can never inherit a stale
 // ready answer; HttpStart still re-checks token and readiness under its own
 // gate, making this probe an optimization, never the authority.
 func DataPlaneReady(runtimeToken uint64) bool {
 	gate, ok := acquireNodeGateForRuntimeToken(runtimeToken)
-	return ok && gate.runtime.publication.bootstrapReady()
+	return ok && gate.runtime.publication != nil && gate.runtime.publication.bootstrapReady()
 }
 
 // nodeStateSnapshot is a point-in-time census of the current runtime's owned

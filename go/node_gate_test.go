@@ -97,6 +97,9 @@ func TestAcquireNodeGateForRuntimeTokenRejectsSupersededRuntime(t *testing.T) {
 func TestDataPlaneReadyTracksExactRuntimeBootstrap(t *testing.T) {
 	withLiveServer(t, &tsnet.Server{})
 	runtime := currentRuntime()
+	if DataPlaneReady(runtime.token) {
+		t.Fatal("probe reported ready without a publication manager")
+	}
 	manager := newPublicationManagerWithClient(runtime, nil)
 	runtime.publication = manager
 

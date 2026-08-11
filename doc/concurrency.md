@@ -4,12 +4,13 @@ How the Go layer stays correct now that native calls arrive from more than one
 Dart isolate. Read this before adding a lock, a process-global registry, or a
 new offloaded call.
 
-> **Current-state document.** Server, StateStore, DEK, state lease, scratch, and
-> the R5 publication/bootstrap manager now live on `nodeRuntime`. Several
-> data-plane registries and the watcher publication surface remain
-> process-global and are still protected by the epoch/commit gate until R7 moves
-> them. See the [rearchitecture plan](rearchitecture-plan.md) and [runtime
-> lifecycle ADR](adr-runtime-ownership-and-lifecycle.md).
+> **Current-state document.** Server, StateStore, DEK, state lease, scratch,
+> publication/bootstrap manager, outbound HTTP transport, fd registries, and
+> state watcher now live on `nodeRuntime`. The identity mirror remains
+> process-global pending R8; the fd-reactor registry, Dart port, and Android
+> host-network snapshot are sanctioned bridge infrastructure. See the
+> [rearchitecture plan](rearchitecture-plan.md) and [runtime lifecycle
+> ADR](adr-runtime-ownership-and-lifecycle.md).
 
 ## Two execution regimes
 
@@ -31,10 +32,11 @@ Every native call enters the Go layer from one of two places:
    helpers. Data-plane offloads are capped at 32 by the shared gate in the
    supported caller isolate; see `lib/src/native_offload_gate.dart`. Once the
    one-time publication bootstrap succeeds, HTTP admission probes readiness per
-   runtime token (a non-blocking leaf FFI call) and starts the request directly
-   on the caller isolate — the native call can no longer block for that
-   generation, and native still re-checks token and readiness as the authority.
-   Native
+   runtime token with a non-leaf FFI snapshot and starts the request directly
+   on the caller isolate. The probe can park briefly on in-memory mutexes but
+   never joins the bootstrap; native re-checks token and readiness as the
+   authority, so `HttpStart` can no longer wait on bootstrap for that
+   generation. Native
    secure-state preparation, probe, reset, quarantine, and quiescence calls also
    use helper isolates. Rescue and lifecycle custody calls deliberately bypass
    the data-plane gate so a saturated connection workload cannot block cleanup.
@@ -255,10 +257,11 @@ Relevant nested orders; take locks left to right, never right to left:
 
 ```
 runtimeController.configureMu  →  runtimeController.mu
+runtimeController.hostNetworkMu  →  runtimeController.mu
 nodeRuntime.watchMu  →  identityCache.mu
 nodeRuntime.watchMu  →  publicationBootstrap.mu
 runtimeController.mu, nodeRuntime.httpMu, nodeRuntime.fd.<family>.mu,
-reactorMu, dartPortMu, hostNetworkMu, publicationManager.mu,
+reactorMu, dartPortMu, publicationManager.mu,
 encryptedStateStore.mu
   (leaf, no package-lock nesting)
 ```
@@ -277,6 +280,10 @@ Rules that keep it acyclic:
 - `runtimeController.configureMu` serializes one-time path resolution and may
   briefly acquire `runtimeController.mu` to read or publish the frozen tuple;
   no runtime path acquires those locks in the opposite order.
+- `runtimeController.hostNetworkMu` serializes the process-global Android
+  netmon snapshot across idempotent refreshes and replacement starts. It may
+  briefly acquire `runtimeController.mu` to admit/revalidate a refresh; no
+  lifecycle path acquires them in the opposite order.
 - Registry locks never nest with each other; `nodeRuntime.close` takes them one
   at a time.
 - Calls that can block on the tailnet (`Up`, dials, listens) run with **no**

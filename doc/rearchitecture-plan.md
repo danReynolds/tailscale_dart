@@ -666,9 +666,11 @@ the authoritative in-process LocalAPI; the watcher is not a universal mirror.
 
 **Status 2026-08-10:** the gate harness is implemented in
 `go/identity_r8_gate_test.go` — p50/p95/p99 for the direct and cached paths at
-1, 8, and 32 concurrent acceptors, with a verdict against the thresholds
-below. It is Headscale-gated like the identity benchmarks and still needs a
-run; record its output and commit here when it lands.
+1, 8, and 32 concurrent acceptors against a separate live peer, with a verdict
+against the thresholds below. Every timed lookup must resolve that peer's
+stable node ID, so a fast nil/error path cannot produce a false pass. It is
+Headscale-gated like the identity benchmarks and still needs a run; record its
+output and commit here when it lands.
 
 R8 also now owns a correctness question, not only a cost one. A warm
 `identityCache` that lacks an address answers `(nil, true)` and is treated as

@@ -1,6 +1,7 @@
 package tailscale
 
 import (
+	"context"
 	"fmt"
 	"net/netip"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"tailscale.com/tsnet"
 )
 
 // R8's removal gate needs distribution and concurrency, which `go test -bench`
@@ -58,43 +61,122 @@ func (d *latencyDistribution) sort() {
 // distribution. Concurrency is the point: the direct path serializes on
 // LocalAPI, so a mean taken serially would hide contention an accept burst
 // actually produces.
-func measureIdentityLatency(tb testing.TB, ip string, workers int) *latencyDistribution {
+func measureIdentityLatency(tb testing.TB, ip, expectedNodeID string, workers int) *latencyDistribution {
 	tb.Helper()
 	perWorker := make([][]time.Duration, workers)
+	type workerFailures struct {
+		missing       int
+		wrongIdentity int
+		firstWrongID  string
+	}
+	failures := make([]workerFailures, workers)
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
 			samples := make([]time.Duration, 0, r8SamplesPerWorker)
+			var failed workerFailures
 			for i := 0; i < r8SamplesPerWorker; i++ {
 				start := time.Now()
-				_ = lookupNodeIdentity(ip)
+				id := lookupNodeIdentity(ip)
 				samples = append(samples, time.Since(start))
+				if id == nil {
+					failed.missing++
+					continue
+				}
+				if id.NodeID != expectedNodeID {
+					failed.wrongIdentity++
+					if failed.firstWrongID == "" {
+						failed.firstWrongID = id.NodeID
+					}
+				}
 			}
 			perWorker[w] = samples
+			failures[w] = failed
 		}(w)
 	}
 	wg.Wait()
 
 	merged := &latencyDistribution{samples: make([]time.Duration, 0, workers*r8SamplesPerWorker)}
-	for _, samples := range perWorker {
+	missing := 0
+	wrongIdentity := 0
+	firstWrongID := ""
+	for w, samples := range perWorker {
 		merged.samples = append(merged.samples, samples...)
+		missing += failures[w].missing
+		wrongIdentity += failures[w].wrongIdentity
+		if firstWrongID == "" {
+			firstWrongID = failures[w].firstWrongID
+		}
+	}
+	if missing != 0 || wrongIdentity != 0 {
+		tb.Fatalf(
+			"identity measurement returned invalid results: missing=%d wrongIdentity=%d firstWrongNodeID=%q wantNodeID=%q",
+			missing,
+			wrongIdentity,
+			firstWrongID,
+			expectedNodeID,
+		)
 	}
 	merged.sort()
 	return merged
 }
 
+// startIdentityGatePeer starts the remote side the accept path actually sees.
+// Measuring WhoIs against the package node's own IP can exercise a fast
+// self/not-found response instead of peer identity resolution, which would
+// make a latency-only gate capable of passing on semantically invalid work.
+func startIdentityGatePeer(tb testing.TB) string {
+	tb.Helper()
+	url := os.Getenv("HEADSCALE_URL")
+	key := os.Getenv("HEADSCALE_AUTH_KEY")
+	if url == "" || key == "" {
+		tb.Skip("set HEADSCALE_URL and HEADSCALE_AUTH_KEY to run the live identity gate")
+	}
+	peer := &tsnet.Server{
+		Hostname:   "dune-bench-peer",
+		AuthKey:    key,
+		ControlURL: url,
+		Dir:        tb.TempDir(),
+		Ephemeral:  true,
+	}
+	if err := peer.Start(); err != nil {
+		tb.Fatalf("start identity-gate peer: %v", err)
+	}
+	tb.Cleanup(func() { _ = peer.Close() })
+
+	lc, err := peer.LocalClient()
+	if err != nil {
+		tb.Fatalf("identity-gate peer LocalClient: %v", err)
+	}
+	lc.OmitAuth = true
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		status, err := lc.Status(context.Background())
+		if err == nil && status != nil && status.Self != nil && len(status.Self.TailscaleIPs) > 0 {
+			return status.Self.TailscaleIPs[0].String()
+		}
+		if time.Now().After(deadline) {
+			tb.Fatalf("identity-gate peer did not receive a self IP within 60s: %v", err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 func TestR8IdentityLatencyGate(t *testing.T) {
-	ip := startTestNode(t)
+	_ = startTestNode(t)
+	ip := startIdentityGatePeer(t)
 	addr := netip.MustParseAddr(ip)
 
 	// Warm path first, so the direct measurements below cannot be helped by a
 	// cache the watcher populates mid-run.
 	StartWatch()
 	deadline := time.Now().Add(30 * time.Second)
+	expectedNodeID := ""
 	for {
 		if id, ok := identityCache.lookup(addr); ok && id != nil {
+			expectedNodeID = id.NodeID
 			break
 		}
 		if time.Now().After(deadline) {
@@ -102,6 +184,9 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 			t.Fatal("identity cache did not warm within 30s")
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	if expectedNodeID == "" {
+		t.Fatal("identity cache resolved the peer without a stable node ID")
 	}
 
 	type row struct {
@@ -114,7 +199,7 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 		cached = append(cached, row{
 			label:   fmt.Sprintf("cached/%d", workers),
 			workers: workers,
-			dist:    measureIdentityLatency(t, ip, workers),
+			dist:    measureIdentityLatency(t, ip, expectedNodeID, workers),
 		})
 	}
 
@@ -128,7 +213,7 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 		direct = append(direct, row{
 			label:   fmt.Sprintf("direct/%d", workers),
 			workers: workers,
-			dist:    measureIdentityLatency(t, ip, workers),
+			dist:    measureIdentityLatency(t, ip, expectedNodeID, workers),
 		})
 	}
 
@@ -184,8 +269,13 @@ func TestR8WarmMissFallsBackWhenCacheDeleted(t *testing.T) {
 	if os.Getenv("HEADSCALE_URL") == "" {
 		t.Skip("set HEADSCALE_URL and HEADSCALE_AUTH_KEY to run the live identity gate")
 	}
-	ip := startTestNode(t)
+	_ = startTestNode(t)
+	ip := startIdentityGatePeer(t)
 	addr := netip.MustParseAddr(ip)
+	identityCache.invalidate()
+	if id := lookupNodeIdentity(ip); id == nil {
+		t.Fatal("cold-cache live WhoIs did not resolve the peer; warm-miss characterization would be invalid")
+	}
 
 	// Simulate the window: warm the cache with an index that omits this peer.
 	identityCache.replace(map[netip.Addr]*nodeIdentity{})

@@ -168,17 +168,7 @@ func StartWatch() {
 			}
 
 			if n.State != nil {
-				suppress, bootstrap := runtime.publication.observeState(*n.State)
-				if bootstrap != nil {
-					go runPublicationBootstrap(runtime, run, bootstrap)
-				}
-				if !suppress {
-					postWatcherMessage(run, map[string]any{
-						"type":         "status",
-						"runtimeToken": run.runtimeToken,
-						"state":        n.State.String(),
-					})
-				}
+				handleWatcherState(run, *n.State)
 			}
 			if n.ErrMessage != nil {
 				postWatcherMessage(run, map[string]any{
@@ -208,6 +198,28 @@ func StartWatch() {
 	if previous != nil {
 		<-previous.done
 		previous.publishWG.Wait()
+	}
+}
+
+func handleWatcherState(run *watcherRun, state ipn.State) {
+	suppress, bootstrap := run.runtime.publication.observeState(state)
+	if bootstrap != nil {
+		// The watcher can attach after a fast reconnect has already reached
+		// Running. Publish the masked state before starting the bootstrap so
+		// Starting always precedes its synthetic Running completion.
+		postWatcherMessage(run, map[string]any{
+			"type":         "status",
+			"runtimeToken": run.runtimeToken,
+			"state":        ipn.Starting.String(),
+		})
+		go runPublicationBootstrap(run.runtime, run, bootstrap)
+	}
+	if !suppress {
+		postWatcherMessage(run, map[string]any{
+			"type":         "status",
+			"runtimeToken": run.runtimeToken,
+			"state":        state.String(),
+		})
 	}
 }
 

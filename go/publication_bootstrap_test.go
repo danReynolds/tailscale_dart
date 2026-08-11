@@ -98,11 +98,7 @@ func TestPublicationBootstrapFirstRunningStartsExactlyOneUp(t *testing.T) {
 		messagesMu.Unlock()
 	})
 
-	suppress, start := manager.observeState(ipn.Running)
-	if !suppress || start == nil {
-		t.Fatalf("first Running = suppress %v start %v, want true/non-nil", suppress, start)
-	}
-	go runPublicationBootstrap(runtime, run, start)
+	handleWatcherState(run, ipn.Running)
 	select {
 	case <-upStarted:
 	case <-time.After(time.Second):
@@ -120,12 +116,9 @@ func TestPublicationBootstrapFirstRunningStartsExactlyOneUp(t *testing.T) {
 	}
 
 	close(releaseUp)
-	select {
-	case <-start.done:
-	case <-time.After(time.Second):
-		t.Fatal("Up worker did not finish")
-	}
-	if err := manager.awaitDataPlaneReady(context.Background()); err != nil {
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReady()
+	if err := manager.awaitDataPlaneReady(readyCtx); err != nil {
 		t.Fatalf("awaitDataPlaneReady after Up = %v", err)
 	}
 	if got := upCalls.Load(); got != 1 {
@@ -134,8 +127,12 @@ func TestPublicationBootstrapFirstRunningStartsExactlyOneUp(t *testing.T) {
 
 	messagesMu.Lock()
 	defer messagesMu.Unlock()
-	if len(messages) != 1 || messages[0]["type"] != "status" || messages[0]["state"] != ipn.Running.String() {
-		t.Fatalf("bootstrap publications = %#v, want one synthetic Running status", messages)
+	if len(messages) != 2 ||
+		messages[0]["type"] != "status" ||
+		messages[0]["state"] != ipn.Starting.String() ||
+		messages[1]["type"] != "status" ||
+		messages[1]["state"] != ipn.Running.String() {
+		t.Fatalf("bootstrap publications = %#v, want Starting then Running", messages)
 	}
 }
 

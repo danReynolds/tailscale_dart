@@ -203,10 +203,10 @@ func TestClassifyLocalAPIError_HTTPStatusCodes(t *testing.T) {
 	}
 }
 
-func TestClassifyLocalAPIError_TypedServeFeatureUnavailable(t *testing.T) {
+func TestClassifyLocalAPIError_TypedFeatureUnavailable(t *testing.T) {
 	// The message deliberately contains no backstop phrasing, proving the
 	// classification comes from the typed sentinel, not prose.
-	err := fmt.Errorf("%w: capability xyz missing", errServeFeatureUnavailable)
+	err := fmt.Errorf("%w: capability xyz missing", errFeatureUnavailable)
 	code, status := classifyLocalAPIError(err)
 	if code != "featureDisabled" || status != 0 {
 		t.Fatalf("typed serve-feature error = (%q, %d), want (featureDisabled, 0)", code, status)
@@ -227,7 +227,7 @@ func TestApplyServeForwardFeatureErrorCodes(t *testing.T) {
 			Path:         "/",
 			HTTPS:        true,
 		})
-		if !errors.Is(err, errServeFeatureUnavailable) {
+		if !errors.Is(err, errFeatureUnavailable) {
 			t.Fatalf("HTTPS-capability failure must wrap the typed sentinel; got %v", err)
 		}
 		if code, _ := classifyLocalAPIError(err); code != "featureDisabled" {
@@ -255,7 +255,7 @@ func TestApplyServeForwardFeatureErrorCodes(t *testing.T) {
 		if err == nil {
 			t.Fatal("port 8080 must be refused for Funnel")
 		}
-		if errors.Is(err, errServeFeatureUnavailable) {
+		if errors.Is(err, errFeatureUnavailable) {
 			t.Fatalf("funnel port policy must not be typed featureDisabled; got %v", err)
 		}
 		if code, _ := classifyLocalAPIError(err); code != "forbidden" {
@@ -692,7 +692,7 @@ func TestClassifyLocalAPIError_KnownCodesAreStable(t *testing.T) {
 		case "preconditionFailed":
 			err = fakeHTTPErr{status: http.StatusPreconditionFailed, msg: "x"}
 		case "featureDisabled":
-			err = errServeFeatureUnavailable
+			err = errFeatureUnavailable
 		case "serveConfigConflict":
 			err = ErrServeConfigConflict
 		case "dataPlaneNotReady":

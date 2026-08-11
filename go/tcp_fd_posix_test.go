@@ -97,6 +97,12 @@ func TestListenTLSOnReadyServerRequiresHTTPSBeforeListening(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "enable HTTPS") {
 		t.Fatalf("listenTLSOnReadyServer error = %v, want HTTPS-disabled error", err)
 	}
+	if !errors.Is(err, errFeatureUnavailable) {
+		t.Fatalf("listenTLSOnReadyServer error = %v, want typed feature-unavailable error", err)
+	}
+	if code, _ := classifyLocalAPIError(err); code != "featureDisabled" {
+		t.Fatalf("listenTLSOnReadyServer code = %q, want featureDisabled", code)
+	}
 	if s.calls != 0 {
 		t.Fatalf("raw Listen calls = %d, want 0", s.calls)
 	}

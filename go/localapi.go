@@ -266,13 +266,12 @@ func isNotFound(err error) bool {
 	return errors.As(err, &herr) && herr.Status() == http.StatusNotFound
 }
 
-// errServeFeatureUnavailable marks a serve precondition this package checked
-// in-process and that is unambiguously "the tailnet has this feature off" —
-// currently the HTTPS capability check. Wrapping at the call site gives
-// classifyLocalAPIError a typed featureDisabled signal instead of matching
-// prose. It is deliberately NOT applied to errors whose upstream text encodes
-// more than one outcome; see the CheckFunnelAccess call site.
-var errServeFeatureUnavailable = errors.New("serve feature unavailable")
+// errFeatureUnavailable marks a feature precondition this package checked
+// in-process and that is unambiguously "the tailnet has this feature off".
+// Wrapping at the call site gives classifyLocalAPIError a typed featureDisabled
+// signal instead of matching prose. It is deliberately NOT applied to errors
+// whose upstream text encodes more than one outcome; see CheckFunnelAccess.
+var errFeatureUnavailable = errors.New("feature unavailable")
 
 // isTransientNoSuggestion reports whether err is one of upstream's transient
 // "node not ready yet" exit-node-suggestion errors (ErrNoPreferredDERP /
@@ -319,10 +318,10 @@ func classifyLocalAPIError(err error) (code string, status int) {
 	case http.StatusPreconditionFailed:
 		code = "preconditionFailed"
 	}
-	// Typed path first: this package's own in-process serve/funnel
-	// precondition checks wrap errServeFeatureUnavailable at the call site,
+	// Typed path first: this package's own in-process feature precondition
+	// checks wrap errFeatureUnavailable at the call site,
 	// so the live featureDisabled classification needs no prose.
-	if code == "" && errors.Is(err, errServeFeatureUnavailable) {
+	if code == "" && errors.Is(err, errFeatureUnavailable) {
 		code = "featureDisabled"
 	}
 	// RECORDED R9 DEVIATION — exact prose backstops for Funnel errors that
@@ -745,12 +744,12 @@ func applyServeForward(sc *ipn.ServeConfig, st *ipnstate.Status, payload serveFo
 	if payload.HTTPS && !st.Self.HasCap(tailcfg.CapabilityHTTPS) {
 		return servePublication{}, fmt.Errorf(
 			"%w: Serve not available; HTTPS must be enabled. See https://tailscale.com/s/https.",
-			errServeFeatureUnavailable,
+			errFeatureUnavailable,
 		)
 	}
 	if payload.Funnel {
 		if err := ipn.CheckFunnelAccess(port, st.Self); err != nil {
-			// Deliberately NOT wrapped in errServeFeatureUnavailable: upstream
+			// Deliberately NOT wrapped in errFeatureUnavailable: upstream
 			// conflates two outcomes in one untyped error — a disallowed port
 			// (forbidden) and a missing node attribute (featureDisabled) — and
 			// only its prose distinguishes them. Wrapping would collapse both

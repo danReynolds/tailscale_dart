@@ -171,7 +171,7 @@ func listenTLSOnReadyServer(
 	addr string,
 ) (net.Listener, error) {
 	if len(s.CertDomains()) == 0 {
-		return nil, errors.New("tsnet: you must enable HTTPS in the admin panel to proceed. See https://tailscale.com/s/https")
+		return nil, fmt.Errorf("%w: tsnet: you must enable HTTPS in the admin panel to proceed. See https://tailscale.com/s/https", errFeatureUnavailable)
 	}
 	ln, err := s.Listen(network, addr)
 	if err != nil {

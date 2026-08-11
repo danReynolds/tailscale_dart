@@ -364,6 +364,159 @@ offloadTcpDial({
   }
 }
 
+/// Offloaded `http.bind`. Listen/bind admission joins the runtime's one
+/// bounded first-`Up` bootstrap natively, so it must not run on the worker
+/// FIFO: a bind issued while that bootstrap is in flight would otherwise
+/// park the worker isolate and head-of-line block every queued RPC behind
+/// it, including `status()` and `down()`.
+Future<({int bindingId, TailscaleEndpoint tailnet})> offloadHttpBind({
+  required int runtimeToken,
+  required int tailnetPort,
+}) => runCappedNativeOffload(() => _execHttpBind(runtimeToken, tailnetPort));
+
+({int bindingId, TailscaleEndpoint tailnet}) _execHttpBind(
+  int runtimeToken,
+  int tailnetPort,
+) {
+  final result =
+      _callNativeJson(
+            () => native.duneHttpBind(runtimeToken, tailnetPort),
+            onError: TailscaleHttpException.new,
+          )
+          as Map<String, dynamic>;
+  final bindingId = result['bindingId'] as int?;
+  final resolvedPort = result['tailnetPort'] as int?;
+  if (bindingId == null ||
+      bindingId <= 0 ||
+      resolvedPort == null ||
+      resolvedPort <= 0) {
+    throw const TailscaleHttpException(
+      'Native runtime did not return a usable HTTP binding.',
+    );
+  }
+  return (
+    bindingId: bindingId,
+    tailnet: TailscaleEndpoint(
+      address: result['tailnetAddress'] as String? ?? '',
+      port: resolvedPort,
+    ),
+  );
+}
+
+/// Offloaded `tcp.bind`. See [offloadHttpBind] for why binds leave the FIFO.
+Future<({int listenerId, TailscaleEndpoint local})> offloadTcpListenFd({
+  required int runtimeToken,
+  required int tailnetPort,
+  required String tailnetHost,
+}) => runCappedNativeOffload(
+  () => _execListenFd(
+    runtimeToken,
+    tailnetPort,
+    tailnetHost,
+    tls: false,
+  ),
+);
+
+/// Offloaded `tls.bind`. See [offloadHttpBind] for why binds leave the FIFO.
+Future<({int listenerId, TailscaleEndpoint local})> offloadTlsListenFd({
+  required int runtimeToken,
+  required int tailnetPort,
+  required String tailnetHost,
+}) => runCappedNativeOffload(
+  () => _execListenFd(
+    runtimeToken,
+    tailnetPort,
+    tailnetHost,
+    tls: true,
+  ),
+);
+
+({int listenerId, TailscaleEndpoint local}) _execListenFd(
+  int runtimeToken,
+  int tailnetPort,
+  String tailnetHost, {
+  required bool tls,
+}) {
+  final hostPtr = tailnetHost.toNativeUtf8();
+  try {
+    final result =
+        _callNativeJson(
+              () => tls
+                  ? native.duneTlsListenFd(runtimeToken, tailnetPort, hostPtr)
+                  : native.duneTcpListenFd(runtimeToken, tailnetPort, hostPtr),
+              onError: tls
+                  ? TailscaleTlsException.new
+                  : TailscaleTcpException.new,
+            )
+            as Map<String, dynamic>;
+    final listenerId = result['listenerId'] as int?;
+    final localPort = result['localPort'] as int?;
+    if (listenerId == null || listenerId <= 0 || localPort == null) {
+      throw tls
+          ? const TailscaleTlsException(
+              'Native runtime did not return a usable TLS listener.',
+            )
+          : const TailscaleTcpException(
+              'Native runtime did not return a usable TCP listener.',
+            );
+    }
+    return (
+      listenerId: listenerId,
+      local: TailscaleEndpoint(
+        address: result['localAddress'] as String? ?? '',
+        port: localPort,
+      ),
+    );
+  } finally {
+    calloc.free(hostPtr);
+  }
+}
+
+/// Offloaded `udp.bind`. See [offloadHttpBind] for why binds leave the FIFO.
+Future<({int fd, int bindingId, TailscaleEndpoint local})> offloadUdpBindFd({
+  required int runtimeToken,
+  required String host,
+  required int port,
+}) => runCappedNativeOffload(() => _execUdpBindFd(runtimeToken, host, port));
+
+({int fd, int bindingId, TailscaleEndpoint local}) _execUdpBindFd(
+  int runtimeToken,
+  String host,
+  int port,
+) {
+  final hostPtr = host.toNativeUtf8();
+  try {
+    final result =
+        _callNativeJson(
+              () => native.duneUdpBindFd(runtimeToken, hostPtr, port),
+              onError: TailscaleUdpException.new,
+            )
+            as Map<String, dynamic>;
+    final fd = result['fd'] as int?;
+    final bindingId = result['bindingId'] as int?;
+    final localPort = result['localPort'] as int?;
+    if (fd == null ||
+        fd < 0 ||
+        bindingId == null ||
+        bindingId <= 0 ||
+        localPort == null) {
+      throw const TailscaleUdpException(
+        'Native runtime did not return a usable UDP binding.',
+      );
+    }
+    return (
+      fd: fd,
+      bindingId: bindingId,
+      local: TailscaleEndpoint(
+        address: result['localAddress'] as String? ?? '',
+        port: localPort,
+      ),
+    );
+  } finally {
+    calloc.free(hostPtr);
+  }
+}
+
 /// Offloaded `diag.ping`.
 Future<PingResult> offloadDiagPing({
   required int runtimeToken,

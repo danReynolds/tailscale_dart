@@ -2,12 +2,8 @@ part of 'worker.dart';
 
 enum _WorkerOperation {
   start,
-  httpBind,
   httpCloseBinding,
-  tcpListenFd,
   tcpCloseFdListener,
-  tlsListenFd,
-  udpBindFd,
   udpCloseBinding,
   whois,
   tlsDomains,
@@ -32,22 +28,22 @@ enum _WorkerOperation {
     int? statusCode,
   }) => switch (this) {
     start => TailscaleUpException(message, code: code, statusCode: statusCode),
-    httpBind || httpCloseBinding => TailscaleHttpException(
+    httpCloseBinding => TailscaleHttpException(
       message,
       code: code,
       statusCode: statusCode,
     ),
-    tcpListenFd || tcpCloseFdListener => TailscaleTcpException(
+    tcpCloseFdListener => TailscaleTcpException(
       message,
       code: code,
       statusCode: statusCode,
     ),
-    tlsListenFd || tlsDomains => TailscaleTlsException(
+    tlsDomains => TailscaleTlsException(
       message,
       code: code,
       statusCode: statusCode,
     ),
-    udpBindFd || udpCloseBinding => TailscaleUdpException(
+    udpCloseBinding => TailscaleUdpException(
       message,
       code: code,
       statusCode: statusCode,
@@ -119,13 +115,6 @@ final class _WorkerStartCommand extends _WorkerCommand {
   final int bootstrapBudgetMillis;
 }
 
-final class _WorkerHttpBindCommand extends _WorkerCommand {
-  const _WorkerHttpBindCommand({required this.tailnetPort})
-    : super(_WorkerOperation.httpBind);
-
-  final int tailnetPort;
-}
-
 final class _WorkerHttpCloseBindingCommand extends _WorkerCommand {
   const _WorkerHttpCloseBindingCommand({required this.bindingId})
     : super(_WorkerOperation.httpCloseBinding);
@@ -133,39 +122,11 @@ final class _WorkerHttpCloseBindingCommand extends _WorkerCommand {
   final int bindingId;
 }
 
-final class _WorkerTcpListenFdCommand extends _WorkerCommand {
-  const _WorkerTcpListenFdCommand({
-    required this.tailnetPort,
-    required this.tailnetHost,
-  }) : super(_WorkerOperation.tcpListenFd);
-
-  final int tailnetPort;
-  final String tailnetHost;
-}
-
 final class _WorkerTcpCloseFdListenerCommand extends _WorkerCommand {
   const _WorkerTcpCloseFdListenerCommand({required this.listenerId})
     : super(_WorkerOperation.tcpCloseFdListener);
 
   final int listenerId;
-}
-
-final class _WorkerTlsListenFdCommand extends _WorkerCommand {
-  const _WorkerTlsListenFdCommand({
-    required this.tailnetPort,
-    required this.tailnetHost,
-  }) : super(_WorkerOperation.tlsListenFd);
-
-  final int tailnetPort;
-  final String tailnetHost;
-}
-
-final class _WorkerUdpBindFdCommand extends _WorkerCommand {
-  const _WorkerUdpBindFdCommand({required this.host, required this.port})
-    : super(_WorkerOperation.udpBindFd);
-
-  final String host;
-  final int port;
 }
 
 final class _WorkerUdpCloseBindingCommand extends _WorkerCommand {
@@ -345,56 +306,6 @@ final class _WorkerStartResponse extends _WorkerResponse {
 
   final bool alreadyActive;
   final int runtimeToken;
-}
-
-final class _WorkerHttpBindResponse extends _WorkerResponse {
-  const _WorkerHttpBindResponse({
-    required this.bindingId,
-    required this.tailnetAddress,
-    required this.tailnetPort,
-  }) : super(_WorkerOperation.httpBind);
-
-  final int bindingId;
-  final String tailnetAddress;
-  final int tailnetPort;
-}
-
-final class _WorkerTcpListenFdResponse extends _WorkerResponse {
-  const _WorkerTcpListenFdResponse({
-    required this.listenerId,
-    required this.localAddress,
-    required this.localPort,
-  }) : super(_WorkerOperation.tcpListenFd);
-
-  final int listenerId;
-  final String localAddress;
-  final int localPort;
-}
-
-final class _WorkerTlsListenFdResponse extends _WorkerResponse {
-  const _WorkerTlsListenFdResponse({
-    required this.listenerId,
-    required this.localAddress,
-    required this.localPort,
-  }) : super(_WorkerOperation.tlsListenFd);
-
-  final int listenerId;
-  final String localAddress;
-  final int localPort;
-}
-
-final class _WorkerUdpBindFdResponse extends _WorkerResponse {
-  const _WorkerUdpBindFdResponse({
-    required this.fd,
-    required this.bindingId,
-    required this.localAddress,
-    required this.localPort,
-  }) : super(_WorkerOperation.udpBindFd);
-
-  final int fd;
-  final int bindingId;
-  final String localAddress;
-  final int localPort;
 }
 
 final class _WorkerStatusResponse extends _WorkerResponse {

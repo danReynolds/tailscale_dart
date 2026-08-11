@@ -412,7 +412,7 @@ func TestJsonError_SpecialCharacters(t *testing.T) {
 }
 
 func TestHttpBind_RejectsInvalidTailnetPort(t *testing.T) {
-	if _, err := HttpBind(-1); err == nil {
+	if _, err := HttpBind(0, -1); err == nil {
 		t.Fatal("HttpBind with invalid tailnet port succeeded, want error")
 	}
 }

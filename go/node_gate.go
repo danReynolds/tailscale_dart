@@ -128,17 +128,6 @@ func gateForRuntimeToken(op string, runtimeToken uint64) (nodeGate, error) {
 	)
 }
 
-// gateForCurrentRuntime admits worker-FIFO work that carries no runtime token
-// against whatever runtime is current, with the one standard typed
-// before-Start error.
-func gateForCurrentRuntime(op string) (nodeGate, error) {
-	gate, ok := acquireNodeGate()
-	if !ok {
-		return nodeGate{}, fmt.Errorf("%w: %s called before Start", ErrRuntimeStale, op)
-	}
-	return gate, nil
-}
-
 // stillCurrent reports whether the gated lifecycle is still the live one. Safe
 // to call under any registry lock (lock-free atomic load; never touches mu).
 // Callers must hold the destination registry's lock from this check through
@@ -161,6 +150,17 @@ func (g nodeGate) awaitDataPlaneReady(ctx context.Context) error {
 		return ErrRuntimeStale
 	}
 	return nil
+}
+
+// awaitDataPlaneReadyForCall applies the standard native-call timeout and
+// runtime cancellation to a data-plane readiness wait.
+func (g nodeGate) awaitDataPlaneReadyForCall() error {
+	if g.runtime == nil {
+		return ErrRuntimeStale
+	}
+	ctx, cancel := boundedCallCtxFrom(g.runtime.ctx, 0)
+	defer cancel()
+	return g.awaitDataPlaneReady(ctx)
 }
 
 // DataPlaneReady reports whether [runtimeToken] still identifies the current

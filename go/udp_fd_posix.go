@@ -3,7 +3,6 @@
 package tailscale
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -82,9 +81,11 @@ func UdpCloseBinding(id int64) {
 	}
 }
 
-// UdpBindFd opens a tailnet UDP packet listener and returns a POSIX datagram fd
-// for the Dart side.
-func UdpBindFd(host string, port int) (*UdpFdBinding, error) {
+// UdpBindFd opens a tailnet UDP packet listener for the exact captured runtime
+// token and returns a POSIX datagram fd for the Dart side. Offloaded like
+// TcpListenFd — see that function's comment for why this must never execute on
+// the worker FIFO.
+func UdpBindFd(runtimeToken uint64, host string, port int) (*UdpFdBinding, error) {
 	if host == "" {
 		return nil, errors.New("host is required")
 	}
@@ -95,11 +96,11 @@ func UdpBindFd(host string, port int) (*UdpFdBinding, error) {
 		return nil, fmt.Errorf("invalid port %d", port)
 	}
 
-	gate, err := gateForCurrentRuntime("UdpBindFd")
+	gate, err := gateForRuntimeToken("UdpBindFd", runtimeToken)
 	if err != nil {
 		return nil, err
 	}
-	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+	if err := gate.awaitDataPlaneReadyForCall(); err != nil {
 		return nil, fmt.Errorf("udp bind data plane: %w", err)
 	}
 

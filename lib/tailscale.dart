@@ -181,6 +181,10 @@ class Tailscale implements TailscaleClient {
   pkg_http.Client? _http;
   List<TailscaleNode>? _latestNodes;
   bool _nativeStartInFlight = false;
+  // Completes when an in-flight public start settles. Captured synchronously
+  // by identity-bound calls that found no runtime, so they can join that
+  // start instead of failing stale. Never completes with an error.
+  Future<void>? _nativeStartPending;
   Worker? _workerInstance;
   Future<void>? _workerRecovery;
   TailscaleOperationException? _workerRecoveryFailure;
@@ -310,9 +314,20 @@ class Tailscale implements TailscaleClient {
     final runtimeToken = worker != null && !worker.isDisposed
         ? worker.runtimeToken ?? 0
         : 0;
+    // A zero token means no runtime existed at capture time, so there is no
+    // earlier generation this call could be rebound away from. If a start is
+    // settling, join it and re-capture: the worker FIFO used to queue these
+    // calls behind that start, and failing them stale instead would break
+    // the gate-phase error contract for anything issued during up().
+    final pendingStart = runtimeToken == 0 ? _nativeStartPending : null;
     return () async {
       await _awaitWorkerRecovery();
-      return await operation(runtimeToken);
+      if (pendingStart == null) return await operation(runtimeToken);
+      await pendingStart;
+      final started = _workerInstance;
+      return await operation(
+        started != null && !started.isDisposed ? started.runtimeToken ?? 0 : 0,
+      );
     }();
   }
 
@@ -826,8 +841,11 @@ class Tailscale implements TailscaleClient {
         timeout: timeout,
       ),
     ),
-    listenFn: (tailnetPort, tailnetHost) => _withWorker(
-      (worker) => worker.tcpListenFd(
+    // Offloaded like dial: bind admission joins the native first-`Up`
+    // bootstrap, which must not park the worker FIFO.
+    listenFn: (tailnetPort, tailnetHost) => _withNativeRuntime(
+      (runtimeToken) => offloadTcpListenFd(
+        runtimeToken: runtimeToken,
         tailnetPort: tailnetPort,
         tailnetHost: tailnetHost,
       ),
@@ -837,8 +855,9 @@ class Tailscale implements TailscaleClient {
   );
   @override
   late final Tls tls = createTls(
-    listenFn: (tailnetPort, tailnetHost) => _withWorker(
-      (worker) => worker.tlsListenFd(
+    listenFn: (tailnetPort, tailnetHost) => _withNativeRuntime(
+      (runtimeToken) => offloadTlsListenFd(
+        runtimeToken: runtimeToken,
         tailnetPort: tailnetPort,
         tailnetHost: tailnetHost,
       ),
@@ -849,8 +868,10 @@ class Tailscale implements TailscaleClient {
   );
   @override
   late final Udp udp = createUdp(
-    bindFn: (host, port) =>
-        _withWorker((worker) => worker.udpBindFd(host: host, port: port)),
+    bindFn: (host, port) => _withNativeRuntime(
+      (runtimeToken) =>
+          offloadUdpBindFd(runtimeToken: runtimeToken, host: host, port: port),
+    ),
     defaultAddressFn: () async => (await status()).ipv4,
     closeFn: (bindingId) =>
         _withWorker((worker) => worker.udpCloseBinding(bindingId: bindingId)),
@@ -914,8 +935,10 @@ class Tailscale implements TailscaleClient {
   @override
   late final Http http = createHttp(
     clientGetter: () => _http,
-    bindFn: (port) =>
-        _withWorker((worker) => worker.httpBind(tailnetPort: port)),
+    bindFn: (port) => _withNativeRuntime(
+      (runtimeToken) =>
+          offloadHttpBind(runtimeToken: runtimeToken, tailnetPort: port),
+    ),
     closeBindingFn: (bindingId) =>
         _withWorker((worker) => worker.httpCloseBinding(bindingId: bindingId)),
   );
@@ -1254,6 +1277,8 @@ class Tailscale implements TailscaleClient {
     // native construction, stable-state observation, and Dart capability
     // setup. Teardown operations share this supervisor queue.
     _nativeStartInFlight = true;
+    final startSettled = Completer<void>();
+    _nativeStartPending = startSettled.future;
     final elapsed = Stopwatch()..start();
     try {
       return await _supervisorLifecycle.run(
@@ -1268,6 +1293,8 @@ class Tailscale implements TailscaleClient {
       );
     } finally {
       _nativeStartInFlight = false;
+      _nativeStartPending = null;
+      startSettled.complete();
     }
   }
 

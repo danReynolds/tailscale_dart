@@ -220,8 +220,8 @@ func DuneHttpStart(runtimeToken C.ulonglong, method *C.char, url *C.char, header
 }
 
 //export DuneHttpBind
-func DuneHttpBind(tailnetPort C.int) *C.char {
-	binding, err := tailscale.HttpBind(int(tailnetPort))
+func DuneHttpBind(runtimeToken C.ulonglong, tailnetPort C.int) *C.char {
+	binding, err := tailscale.HttpBind(uint64(runtimeToken), int(tailnetPort))
 	if err != nil {
 		return C.CString(tailscale.ErrorJSON(err))
 	}
@@ -294,9 +294,9 @@ func DuneTcpDialFd(runtimeToken C.ulonglong, host *C.char, port C.int, timeoutMi
 }
 
 //export DuneTcpListenFd
-func DuneTcpListenFd(tailnetPort C.int, tailnetHost *C.char) *C.char {
+func DuneTcpListenFd(runtimeToken C.ulonglong, tailnetPort C.int, tailnetHost *C.char) *C.char {
 	host := C.GoString(tailnetHost)
-	listener, err := tailscale.TcpListenFd(int(tailnetPort), host)
+	listener, err := tailscale.TcpListenFd(uint64(runtimeToken), int(tailnetPort), host)
 	if err != nil {
 		return C.CString(tailscale.ErrorJSON(err))
 	}
@@ -309,9 +309,9 @@ func DuneTcpListenFd(tailnetPort C.int, tailnetHost *C.char) *C.char {
 }
 
 //export DuneTlsListenFd
-func DuneTlsListenFd(tailnetPort C.int, tailnetHost *C.char) *C.char {
+func DuneTlsListenFd(runtimeToken C.ulonglong, tailnetPort C.int, tailnetHost *C.char) *C.char {
 	host := C.GoString(tailnetHost)
-	listener, err := tailscale.TlsListenFd(int(tailnetPort), host)
+	listener, err := tailscale.TlsListenFd(uint64(runtimeToken), int(tailnetPort), host)
 	if err != nil {
 		return C.CString(tailscale.ErrorJSON(err))
 	}
@@ -354,9 +354,9 @@ func DuneTcpCloseFdListener(listenerID C.longlong) {
 }
 
 //export DuneUdpBindFd
-func DuneUdpBindFd(host *C.char, port C.int) *C.char {
+func DuneUdpBindFd(runtimeToken C.ulonglong, host *C.char, port C.int) *C.char {
 	h := C.GoString(host)
-	binding, err := tailscale.UdpBindFd(h, int(port))
+	binding, err := tailscale.UdpBindFd(uint64(runtimeToken), h, int(port))
 	if err != nil {
 		return C.CString(tailscale.ErrorJSON(err))
 	}

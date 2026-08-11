@@ -20,11 +20,11 @@ func TcpDialFd(runtimeToken uint64, host string, port int, timeout time.Duration
 	return nil, errors.New("TcpDialFd is not supported on Windows")
 }
 
-func TcpListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
+func TcpListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 	return nil, errors.New("TcpListenFd is not supported on Windows")
 }
 
-func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
+func TlsListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 	return nil, errors.New("TlsListenFd is not supported on Windows")
 }
 

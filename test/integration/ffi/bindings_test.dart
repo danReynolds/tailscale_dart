@@ -228,7 +228,7 @@ void main() {
 
   group('duneHttpBind validation', () {
     test('rejects invalid tailnet port before server startup', () {
-      final resultPtr = native.duneHttpBind(-1);
+      final resultPtr = native.duneHttpBind(0, -1);
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
 
@@ -304,41 +304,44 @@ void main() {
   });
 
   group('duneTcpListenFd validation', () {
-    test('returns JSON error before server startup', () {
+    test('rejects an unowned runtime token before server startup', () {
       final host = ''.toNativeUtf8();
-      final resultPtr = native.duneTcpListenFd(12345, host);
+      final resultPtr = native.duneTcpListenFd(999999, 12345, host);
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
       calloc.free(host);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
-      expect(parsed['error'], contains('TcpListenFd called before Start'));
+      expect(parsed['error'], contains('TcpListenFd captured runtime 999999'));
+      expect(parsed['code'], 'staleRuntime');
     });
   });
 
   group('duneTlsListenFd validation', () {
-    test('returns JSON error before server startup', () {
+    test('rejects an unowned runtime token before server startup', () {
       final host = ''.toNativeUtf8();
-      final resultPtr = native.duneTlsListenFd(443, host);
+      final resultPtr = native.duneTlsListenFd(999999, 443, host);
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
       calloc.free(host);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
-      expect(parsed['error'], contains('TlsListenFd called before Start'));
+      expect(parsed['error'], contains('TlsListenFd captured runtime 999999'));
+      expect(parsed['code'], 'staleRuntime');
     });
   });
 
   group('duneUdpBindFd validation', () {
-    test('returns JSON error before server startup', () {
+    test('rejects an unowned runtime token before server startup', () {
       final host = '100.64.0.5'.toNativeUtf8();
-      final resultPtr = native.duneUdpBindFd(host, 12345);
+      final resultPtr = native.duneUdpBindFd(999999, host, 12345);
       final resultJson = resultPtr.toDartString();
       native.duneFree(resultPtr);
       calloc.free(host);
 
       final parsed = jsonDecode(resultJson) as Map<String, dynamic>;
-      expect(parsed['error'], contains('UdpBindFd called before Start'));
+      expect(parsed['error'], contains('UdpBindFd captured runtime 999999'));
+      expect(parsed['code'], 'staleRuntime');
     });
   });
 

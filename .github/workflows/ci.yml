@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
+          cache-dependency-path: go/go.sum
       - name: Vet
         working-directory: go
         run: go vet ./...
@@ -51,6 +52,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
+          cache-dependency-path: go/go.sum
       # Pin NDK 28.2 because its clang target triples are part of this matrix.
       - uses: nttld/setup-ndk@v1
         id: ndk
@@ -88,6 +90,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
+          cache-dependency-path: go/go.sum
       - run: dart pub get
       - name: Analyze
         run: dart analyze lib/ test/ hook/
@@ -109,6 +112,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
+          cache-dependency-path: go/go.sum
       - run: dart pub get
       - name: Run Headscale E2E and R8 receipts
         run: test/e2e/run_e2e.sh

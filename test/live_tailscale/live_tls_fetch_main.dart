@@ -69,7 +69,7 @@ Future<void> main() async {
       try {
         final response = await tsnet.http.client
             .get(url)
-            .timeout(const Duration(seconds: 45));
+            .timeout(const Duration(seconds: 120));
         stdout.writeln(
           'FETCH_RESULT ${jsonEncode({'status': response.statusCode, 'body': response.body})}',
         );

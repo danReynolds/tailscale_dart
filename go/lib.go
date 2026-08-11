@@ -444,7 +444,7 @@ func startRuntimeWithDependenciesForTokenAndDeadline(requestToken uint64, hostna
 	if runtimes.isAbandoned(candidate) {
 		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
 	}
-	if err := applyHostNetworkSnapshot(hostNetworkSnapshot, dependencies); err != nil {
+	if err := runtimes.applyHostNetworkSnapshot(hostNetworkSnapshot, dependencies); err != nil {
 		return false, 0, err
 	}
 	if runtimes.isAbandoned(candidate) {

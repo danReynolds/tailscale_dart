@@ -594,10 +594,9 @@ Future<PosixFdReactorSnapshot?> debugPosixFdReactorSnapshot() async {
   return PosixFdReactorSnapshot.combine(snapshots);
 }
 
-/// Per-shard registered-transport counts, keyed by shard index. Lets tests
-/// assert that concurrent adoptions distribute across shards rather than
-/// pinning to one.
-@visibleForTesting
+/// Per-shard registered-transport counts, keyed by shard index. Lets tests and
+/// audit benchmarks verify that concurrent adoptions distribute across shards
+/// rather than pinning to one.
 Future<Map<int, int>> debugPosixFdReactorShardLoad() async {
   final proxies = _SharedFdReactorProxy.activeProxies;
   final load = <int, int>{};

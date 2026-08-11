@@ -203,10 +203,10 @@ func TestClassifyLocalAPIError_HTTPStatusCodes(t *testing.T) {
 	}
 }
 
-func TestClassifyLocalAPIError_TypedServeFeatureUnavailable(t *testing.T) {
+func TestClassifyLocalAPIError_TypedFeatureUnavailable(t *testing.T) {
 	// The message deliberately contains no backstop phrasing, proving the
 	// classification comes from the typed sentinel, not prose.
-	err := fmt.Errorf("%w: capability xyz missing", errServeFeatureUnavailable)
+	err := fmt.Errorf("%w: capability xyz missing", errFeatureUnavailable)
 	code, status := classifyLocalAPIError(err)
 	if code != "featureDisabled" || status != 0 {
 		t.Fatalf("typed serve-feature error = (%q, %d), want (featureDisabled, 0)", code, status)
@@ -227,7 +227,7 @@ func TestApplyServeForwardFeatureErrorCodes(t *testing.T) {
 			Path:         "/",
 			HTTPS:        true,
 		})
-		if !errors.Is(err, errServeFeatureUnavailable) {
+		if !errors.Is(err, errFeatureUnavailable) {
 			t.Fatalf("HTTPS-capability failure must wrap the typed sentinel; got %v", err)
 		}
 		if code, _ := classifyLocalAPIError(err); code != "featureDisabled" {
@@ -255,7 +255,7 @@ func TestApplyServeForwardFeatureErrorCodes(t *testing.T) {
 		if err == nil {
 			t.Fatal("port 8080 must be refused for Funnel")
 		}
-		if errors.Is(err, errServeFeatureUnavailable) {
+		if errors.Is(err, errFeatureUnavailable) {
 			t.Fatalf("funnel port policy must not be typed featureDisabled; got %v", err)
 		}
 		if code, _ := classifyLocalAPIError(err); code != "forbidden" {
@@ -265,26 +265,36 @@ func TestApplyServeForwardFeatureErrorCodes(t *testing.T) {
 }
 
 func TestClassifyLocalAPIError_FeatureDisabledFromMessage(t *testing.T) {
-	// The live path: the exact strings tailscale.com's ipn/serve.go
-	// NodeCanFunnel returns (both variants). If upstream rewords these, this
-	// test fails — which is the point, since classification hinges on the text.
+	// Exact strings from tailscale.com's ipn/serve.go NodeCanFunnel and
+	// ipn/ipnlocal/serve.go. If upstream rewords these, this test fails — which
+	// is the point, since classification hinges on the text.
 	realUpstream := []string{
 		`Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.`,
 		`Funnel not available; "funnel" node attribute not set. See https://tailscale.com/s/no-funnel.`,
-	}
-	// Speculative backstop phrasings (not tied to a specific current upstream
-	// error — classifyLocalAPIError documents them as such).
-	speculative := []string{
 		"Unable to turn on Funnel while shields-up is enabled",
+	}
+	for _, msg := range realUpstream {
+		t.Run(msg, func(t *testing.T) {
+			for _, err := range []error{errors.New(msg), notAppliedError(errors.New(msg))} {
+				code, _ := classifyLocalAPIError(err)
+				if code != "featureDisabled" {
+					t.Errorf("code = %q, want %q for %q", code, "featureDisabled", err)
+				}
+			}
+		})
+	}
+}
+
+func TestClassifyLocalAPIError_UnrelatedAvailabilityProseStaysUnknown(t *testing.T) {
+	for _, msg := range []string{
+		"network map not available",
 		"feature not enabled for this node",
 		"you must enable this in the admin panel",
 		"this capability is disabled by the operator",
-	}
-	for _, msg := range append(realUpstream, speculative...) {
+	} {
 		t.Run(msg, func(t *testing.T) {
-			code, _ := classifyLocalAPIError(errors.New(msg))
-			if code != "featureDisabled" {
-				t.Errorf("code = %q, want %q", code, "featureDisabled")
+			if code, _ := classifyLocalAPIError(errors.New(msg)); code != "" {
+				t.Fatalf("unrelated error code = %q, want unknown", code)
 			}
 		})
 	}
@@ -682,7 +692,7 @@ func TestClassifyLocalAPIError_KnownCodesAreStable(t *testing.T) {
 		case "preconditionFailed":
 			err = fakeHTTPErr{status: http.StatusPreconditionFailed, msg: "x"}
 		case "featureDisabled":
-			err = errors.New("feature is disabled")
+			err = errFeatureUnavailable
 		case "serveConfigConflict":
 			err = ErrServeConfigConflict
 		case "dataPlaneNotReady":

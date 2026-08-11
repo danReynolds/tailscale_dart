@@ -237,16 +237,6 @@ void main() {
     });
   });
 
-  group('duneDataPlaneReady', () {
-    test('reports not ready for unowned runtime tokens', () {
-      // The leaf readiness probe behind the HTTP send fast path: before any
-      // server startup no token can resolve to a bootstrapped runtime, so the
-      // direct-call path must stay closed.
-      expect(native.duneDataPlaneReady(0), 0);
-      expect(native.duneDataPlaneReady(999999), 0);
-    });
-  });
-
   group('duneHttpStart validation', () {
     test('returns JSON error before server startup', () {
       final method = 'GET'.toNativeUtf8();

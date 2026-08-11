@@ -27,10 +27,10 @@ func LifecycleErrorCode(err error) string {
 	switch {
 	case errors.Is(err, ErrLogoutIndeterminate):
 		return "logoutIndeterminate"
-	case errors.Is(err, ErrLifecycleBusy):
-		return "lifecycleBusy"
 	case errors.Is(err, ErrRuntimeCleanupFailed):
 		return "runtimeCleanupFailed"
+	case errors.Is(err, ErrLifecycleBusy):
+		return "lifecycleBusy"
 	case errors.Is(err, ErrConfigurationMismatch):
 		return "configurationMismatch"
 	case errors.Is(err, ErrServeConfigConflict):

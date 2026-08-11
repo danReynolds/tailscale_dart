@@ -1,14 +1,9 @@
-// Empirical demonstration of worker-isolate head-of-line blocking (audit T1-c).
+// Regression benchmark for worker-isolate head-of-line blocking (audit T1-c).
 //
-// The Dart control plane routes every native call through ONE worker isolate
-// that processes commands synchronously in FIFO order (lib/src/worker/worker.dart
-// :94). A blocking native call (tcp.dial / diag.ping / start) therefore blocks
-// the isolate's event loop, so every other in-flight command — and the state/
-// peer events forwarded by the same isolate — waits behind it.
-//
-// This joins a Headscale-controlled node, then fires a tcp.dial to an
-// unreachable tailnet IP with a long timeout and measures status() latency
-// while that dial is blocking the worker, versus an idle baseline.
+// Long-running TCP dials are offloaded from the worker isolate. This joins a
+// Headscale-controlled node, dials an unreachable tailnet IP with a long
+// timeout, and verifies that status() remains responsive while the dial is in
+// flight.
 //
 // Run via benchmark/audit/run_head_of_line.sh (starts Headscale + env).
 import 'dart:async';
@@ -57,7 +52,7 @@ Future<void> main() async {
     base.sort();
     final baselineMs = base[base.length ~/ 2] / 1000.0;
     stdout.writeln(
-      'baseline status() p50 (idle worker): ${baselineMs.toStringAsFixed(2)} ms',
+      'baseline status() p50: ${baselineMs.toStringAsFixed(2)} ms',
     );
 
     // Fire a dial to an unreachable tailnet IP; it blocks the worker for the
@@ -65,8 +60,7 @@ Future<void> main() async {
     // with no peer behind it, so the dial cannot connect and waits.
     const blockSeconds = 8;
     stdout.writeln(
-      'firing tcp.dial(100.100.100.100:80, ${blockSeconds}s timeout) — '
-      'blocks the worker isolate…',
+      'firing tcp.dial(100.100.100.100:80, ${blockSeconds}s timeout)…',
     );
     final dial = tsnet.tcp
         .dial(
@@ -79,11 +73,10 @@ Future<void> main() async {
           return 'connected(!?)';
         }, onError: (Object e) => 'failed as expected');
 
-    // Let the worker enter the blocking native call.
+    // Let the helper isolate enter the blocking native call.
     await Future<void>.delayed(const Duration(milliseconds: 250));
 
-    // status() issued now must queue behind the in-flight dial on the single
-    // worker isolate.
+    // status() must not queue behind the in-flight dial.
     final sw = Stopwatch()..start();
     await tsnet.status();
     sw.stop();
@@ -93,13 +86,15 @@ Future<void> main() async {
     stdout.writeln('dial result: $dialResult');
     stdout.writeln('');
     stdout.writeln(
-      '=== status() latency while worker blocked in dial: ${blockedMs} ms '
+      '=== status() latency while dial is in flight: $blockedMs ms '
       '(baseline ${baselineMs.toStringAsFixed(2)} ms) ===',
     );
-    final verdict = blockedMs > (blockSeconds * 1000 * 0.5)
-        ? 'CONFIRMED head-of-line blocking: status() stalled ~the dial timeout.'
-        : 'not reproduced (status returned promptly).';
+    final responsive = blockedMs < 2000;
+    final verdict = responsive
+        ? 'PASS: worker remained responsive.'
+        : 'FAIL: status() stalled behind the dial.';
     stdout.writeln(verdict);
+    if (!responsive) exitCode = 1;
   } finally {
     try {
       await tsnet.down();

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs the head-of-line-blocking demo (benchmark/audit/head_of_line.dart)
+# Runs the head-of-line regression benchmark (benchmark/audit/head_of_line.dart)
 # against a throwaway local Headscale, mirroring test/e2e/run_e2e.sh.
 set -euo pipefail
 
@@ -29,7 +29,7 @@ AUTH_KEY=$(docker compose -f "$COMPOSE_FILE" exec headscale \
   headscale preauthkeys create --user dune-hol --reusable --ephemeral --expiration 10m 2>/dev/null | tail -1)
 [ -z "$AUTH_KEY" ] && { echo "failed to create auth key"; exit 1; }
 
-echo "=== Running head-of-line demo ==="
+echo "=== Running head-of-line regression benchmark ==="
 cd "$PKG_DIR"
 HEADSCALE_URL="http://localhost:$HEADSCALE_PORT" \
 HEADSCALE_AUTH_KEY="$AUTH_KEY" \

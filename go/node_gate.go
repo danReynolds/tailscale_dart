@@ -163,22 +163,9 @@ func (g nodeGate) awaitDataPlaneReadyForCall() error {
 	return g.awaitDataPlaneReady(ctx)
 }
 
-// DataPlaneReady reports whether [runtimeToken] still identifies the current
-// runtime and that runtime's one first-Up publication bootstrap has succeeded.
-// It never blocks or joins the bootstrap: Dart's HTTP send path probes it to
-// run the native admission call directly on the caller isolate instead of a
-// helper isolate. Readiness is resolved through the exact token, so a
-// replacement runtime's un-bootstrapped generation can never inherit a stale
-// ready answer; HttpStart still re-checks token and readiness under its own
-// gate, making this probe an optimization, never the authority.
-func DataPlaneReady(runtimeToken uint64) bool {
-	gate, ok := acquireNodeGateForRuntimeToken(runtimeToken)
-	return ok && gate.runtime.publication.bootstrapReady()
-}
-
-// nodeStateSnapshot is a point-in-time census of every process-global registry,
-// for tests and leak diagnostics. The JSON tags are the FFI contract with
-// `Diag.nodeState()` on the Dart side.
+// nodeStateSnapshot is a point-in-time census of the current runtime's owned
+// registries, for tests and leak diagnostics. The JSON tags are the FFI
+// contract with `Diag.nodeState()` on the Dart side.
 type nodeStateSnapshot struct {
 	// Funnel is an AllowFunnel bit on the same ServeConfig entry, so there is
 	// no separate funnelForwarders registry or diagnostic count.

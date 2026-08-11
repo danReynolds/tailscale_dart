@@ -56,8 +56,8 @@ type runtimeConfig struct {
 
 // nodeRuntime owns everything whose lifetime is exactly one tsnet.Server
 // generation. Its publication manager is the sole Serve/Funnel authority for
-// that generation; remaining process-global transport registries are migrated
-// separately and still have their teardown centralized in close.
+// that generation; its transport pool, fd registries, and state watcher are
+// likewise runtime-owned and have their teardown centralized in close.
 type nodeRuntime struct {
 	generation uint64
 	token      uint64
@@ -284,8 +284,9 @@ type runtimeCleanupFailure struct {
 // runtimeController is the single owner of candidate/current/draining runtime
 // state and immutable package configuration.
 type runtimeController struct {
-	mu          sync.Mutex
-	configureMu sync.Mutex
+	mu            sync.Mutex
+	configureMu   sync.Mutex
+	hostNetworkMu sync.Mutex
 
 	candidate             *nodeRuntime
 	current               *nodeRuntime
@@ -593,12 +594,21 @@ func (c *runtimeController) reserve(token uint64, config runtimeConfig) (*nodeRu
 // require new custody: an idempotent call against the already-active runtime.
 // The admission decision runs under the controller lock; the refresh callback
 // feeds the process-global host-network bridge, not runtime state, and runs
-// after release per the ADR lock policy (no network work under c.mu).
+// after release per the ADR lock policy (no network work under c.mu). A
+// separate host-network lock orders that process-global write with replacement
+// starts, and the final admission check rejects a runtime detached meanwhile.
 func (c *runtimeController) refreshActiveRuntime(
 	token uint64,
 	config runtimeConfig,
 	refresh func() error,
 ) (*nodeRuntime, error) {
+	// Serialize every host-network snapshot application without holding the
+	// lifecycle mutex. A replacement start takes the same lock before applying
+	// its snapshot, so an old active-runtime refresh can never overwrite the
+	// replacement's newer process-global netmon state.
+	c.hostNetworkMu.Lock()
+	defer c.hostNetworkMu.Unlock()
+
 	runtime, err := c.activeRuntimeForConfig(token, config)
 	if err != nil || runtime == nil {
 		return runtime, err
@@ -608,7 +618,23 @@ func (c *runtimeController) refreshActiveRuntime(
 			return nil, err
 		}
 	}
+	confirmed, err := c.activeRuntimeForConfig(token, config)
+	if err != nil {
+		return nil, err
+	}
+	if confirmed != runtime {
+		return nil, fmt.Errorf("%w: active runtime changed during host-network refresh", ErrRuntimeStale)
+	}
 	return runtime, nil
+}
+
+func (c *runtimeController) applyHostNetworkSnapshot(
+	snapshot string,
+	dependencies runtimeStartDependencies,
+) error {
+	c.hostNetworkMu.Lock()
+	defer c.hostNetworkMu.Unlock()
+	return applyHostNetworkSnapshot(snapshot, dependencies)
 }
 
 func (c *runtimeController) activeRuntimeForConfig(

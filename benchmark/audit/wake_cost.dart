@@ -2,9 +2,6 @@
 // the main isolate). Every PosixFdTransport.write()/command send pays exactly
 // one of these; the benchmark README names "wake coalescing" as a likely
 // optimization, so measure what a wake actually costs before designing one.
-import 'dart:ffi';
-
-import 'package:ffi/ffi.dart';
 import 'package:tailscale/src/ffi_bindings.dart';
 import 'package:tailscale/src/fd_transport.dart';
 

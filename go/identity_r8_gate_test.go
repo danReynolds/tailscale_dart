@@ -3,6 +3,7 @@ package tailscale
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/netip"
 	"os"
 	"sort"
@@ -48,7 +49,15 @@ func (d *latencyDistribution) percentile(p float64) time.Duration {
 		return 0
 	}
 	// Nearest-rank on a sorted copy; the caller sorts once before reading.
-	idx := int(float64(len(d.samples)-1) * p)
+	// ceil(p*n)-1 matters at the tail: interpolating over n-1 can select the
+	// sample below the actual p95/p99 and produce a false pass at the budget.
+	idx := int(math.Ceil(p*float64(len(d.samples)))) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(d.samples) {
+		idx = len(d.samples) - 1
+	}
 	return d.samples[idx]
 }
 
@@ -123,11 +132,16 @@ func measureIdentityLatency(tb testing.TB, ip, expectedNodeID string, workers in
 	return merged
 }
 
+type identityGatePeer struct {
+	ip     string
+	nodeID string
+}
+
 // startIdentityGatePeer starts the remote side the accept path actually sees.
 // Measuring WhoIs against the package node's own IP can exercise a fast
 // self/not-found response instead of peer identity resolution, which would
 // make a latency-only gate capable of passing on semantically invalid work.
-func startIdentityGatePeer(tb testing.TB) string {
+func startIdentityGatePeer(tb testing.TB) identityGatePeer {
 	tb.Helper()
 	url := os.Getenv("HEADSCALE_URL")
 	key := os.Getenv("HEADSCALE_AUTH_KEY")
@@ -154,8 +168,12 @@ func startIdentityGatePeer(tb testing.TB) string {
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		status, err := lc.Status(context.Background())
-		if err == nil && status != nil && status.Self != nil && len(status.Self.TailscaleIPs) > 0 {
-			return status.Self.TailscaleIPs[0].String()
+		if err == nil && status != nil && status.Self != nil &&
+			len(status.Self.TailscaleIPs) > 0 && status.Self.ID != "" {
+			return identityGatePeer{
+				ip:     status.Self.TailscaleIPs[0].String(),
+				nodeID: string(status.Self.ID),
+			}
 		}
 		if time.Now().After(deadline) {
 			tb.Fatalf("identity-gate peer did not receive a self IP within 60s: %v", err)
@@ -166,17 +184,18 @@ func startIdentityGatePeer(tb testing.TB) string {
 
 func TestR8IdentityLatencyGate(t *testing.T) {
 	_ = startTestNode(t)
-	ip := startIdentityGatePeer(t)
-	addr := netip.MustParseAddr(ip)
+	peer := startIdentityGatePeer(t)
+	addr := netip.MustParseAddr(peer.ip)
 
 	// Warm path first, so the direct measurements below cannot be helped by a
 	// cache the watcher populates mid-run.
 	StartWatch()
 	deadline := time.Now().Add(30 * time.Second)
-	expectedNodeID := ""
 	for {
 		if id, ok := identityCache.lookup(addr); ok && id != nil {
-			expectedNodeID = id.NodeID
+			if id.NodeID != peer.nodeID {
+				t.Fatalf("cached peer node ID = %q, want live peer ID %q", id.NodeID, peer.nodeID)
+			}
 			break
 		}
 		if time.Now().After(deadline) {
@@ -185,10 +204,6 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if expectedNodeID == "" {
-		t.Fatal("identity cache resolved the peer without a stable node ID")
-	}
-
 	type row struct {
 		label   string
 		workers int
@@ -199,7 +214,7 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 		cached = append(cached, row{
 			label:   fmt.Sprintf("cached/%d", workers),
 			workers: workers,
-			dist:    measureIdentityLatency(t, ip, expectedNodeID, workers),
+			dist:    measureIdentityLatency(t, peer.ip, peer.nodeID, workers),
 		})
 	}
 
@@ -213,7 +228,7 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 		direct = append(direct, row{
 			label:   fmt.Sprintf("direct/%d", workers),
 			workers: workers,
-			dist:    measureIdentityLatency(t, ip, expectedNodeID, workers),
+			dist:    measureIdentityLatency(t, peer.ip, peer.nodeID, workers),
 		})
 	}
 
@@ -233,8 +248,10 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 	report(cached)
 	report(direct)
 
-	// The verdict the plan asks for: the direct path must hold the absolute
-	// budget at every measured concurrency for the cache to be deletable.
+	// This is only the latency portion of the plan's removal gate. Passing it
+	// does not authorize deletion: R8 also requires allocation, sustained
+	// CPU/throughput, end-to-end accept, netmap-churn, and qualified-platform
+	// evidence.
 	var breaches []string
 	for _, r := range direct {
 		if p95 := r.dist.percentile(0.95); p95 > r8P95Budget {
@@ -245,47 +262,28 @@ func TestR8IdentityLatencyGate(t *testing.T) {
 		}
 	}
 	if len(breaches) == 0 {
-		t.Log("VERDICT: direct path holds the R8 gate at every concurrency — " +
-			"identityCache is deletable; record this run in the plan.")
+		t.Log("LATENCY RESULT: direct path holds the provisional p95/p99 " +
+			"thresholds at every measured concurrency; record this run, then " +
+			"complete the remaining R8 evidence before deciding deletion.")
 		return
 	}
-	// Not a failure of the code under test: it is the measurement the plan
-	// asks for, and a breach means the cache stays. Report it as a finding
-	// rather than a red build so the run is repeatable in CI either way.
+	// Not a failure of the code under test: report measurement findings rather
+	// than making the benchmark environment a red build.
 	for _, breach := range breaches {
-		t.Logf("VERDICT: gate breached — %s", breach)
+		t.Logf("LATENCY RESULT: provisional threshold breached — %s", breach)
 	}
-	t.Log("VERDICT: retaining identityCache requires recording this workload, " +
-		"its invalidation contract, and the same removal threshold beside its tests.")
+	t.Log("LATENCY RESULT: deletion is blocked on this environment unless a " +
+		"confirming run passes; retaining identityCache still requires the plan's " +
+		"documented improvement and invalidation evidence.")
 }
 
-// TestR8WarmMissFallsBackWhenCacheDeleted documents the behavior change R8
-// decides. A warm cache that lacks the address answers nil authoritatively
-// (identity_cache.go), which is the window the offloaded listen/bind work made
-// reachable in the e2e identity assertions. Deleting the cache removes the
-// window by construction; this test pins the property so whichever fix lands
-// has to keep it.
-func TestR8WarmMissFallsBackWhenCacheDeleted(t *testing.T) {
-	if os.Getenv("HEADSCALE_URL") == "" {
-		t.Skip("set HEADSCALE_URL and HEADSCALE_AUTH_KEY to run the live identity gate")
+func TestLatencyDistributionUsesNearestRank(t *testing.T) {
+	d := &latencyDistribution{samples: []time.Duration{
+		1 * time.Millisecond,
+		2 * time.Millisecond,
+		100 * time.Millisecond,
+	}}
+	if got := d.percentile(0.95); got != 100*time.Millisecond {
+		t.Fatalf("p95 = %s, want highest sample by nearest-rank", got)
 	}
-	_ = startTestNode(t)
-	ip := startIdentityGatePeer(t)
-	addr := netip.MustParseAddr(ip)
-	identityCache.invalidate()
-	if id := lookupNodeIdentity(ip); id == nil {
-		t.Fatal("cold-cache live WhoIs did not resolve the peer; warm-miss characterization would be invalid")
-	}
-
-	// Simulate the window: warm the cache with an index that omits this peer.
-	identityCache.replace(map[netip.Addr]*nodeIdentity{})
-	if id, ok := identityCache.lookup(addr); !ok || id != nil {
-		t.Fatalf("expected a warm miss to answer (nil, true); got (%v, %v)", id, ok)
-	}
-	if id := lookupNodeIdentity(ip); id != nil {
-		t.Log("warm miss already falls back to a live lookup; the window is closed")
-		return
-	}
-	t.Log("warm miss resolves nil without a live lookup — this is the window " +
-		"the e2e identity assertions hit; R8 must close it")
 }

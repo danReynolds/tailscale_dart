@@ -23,6 +23,7 @@ dart run --enable-experiment=native-assets \
 Before committing it, confirm that:
 
 - `current.commit` identifies the measured source and `current.dirty` is false;
+- `current.version` matches the directory name;
 - the run used the default five trials and full iteration count;
 - no credentials, state paths, or developer-specific absolute paths remain;
 - the matching version directory summarizes material and inconclusive results.

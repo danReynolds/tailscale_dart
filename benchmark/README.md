@@ -14,11 +14,11 @@ not run or duplicate the functional test suite.
 dart run --enable-experiment=native-assets benchmark/release_compare.dart
 ```
 
-The full profile alternates five trials per version and covers lifecycle,
-control calls, HTTP, TCP, UDP, persistent enrollment/restart, event-loop lag,
-throughput, and RSS. Raw samples and the aggregate comparison are written to a
-temporary JSON report. A one-trial development pass is available while editing
-the harness:
+The full profile alternates five trials per version, takes 50 steady-state
+samples and one 1 MiB transfer per trial, and covers lifecycle, control calls,
+HTTP, TCP, UDP, persistent enrollment/restart, event-loop lag, throughput, and
+RSS. Raw samples and the aggregate comparison are written to a temporary JSON
+report. A one-trial development pass is available while editing the harness:
 
 ```sh
 dart run --enable-experiment=native-assets \
@@ -63,7 +63,7 @@ the shared-reactor implementation.
 Run the same command on both branches:
 
 ```sh
-/Users/dan/Coding/flutter_arm64/bin/dart run \
+dart run \
   --enable-experiment=native-assets \
   benchmark/fd_transport.dart \
   --pairs=1,10,50,100 \
@@ -113,7 +113,7 @@ backend can still finish. Use these knobs to scale targeted scenarios:
 For a quick smoke run while iterating:
 
 ```sh
-/Users/dan/Coding/flutter_arm64/bin/dart run \
+dart run \
   --enable-experiment=native-assets \
   benchmark/fd_transport.dart \
   --pairs=1,10 \

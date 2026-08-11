@@ -3,9 +3,12 @@ import 'package:test/test.dart';
 import '../../benchmark/profile/result_analysis.dart';
 
 void main() {
-  test('perfPercentile uses the sorted nearest sample', () {
+  test('perfPercentile uses the nearest-rank sample', () {
     expect(perfPercentile(<double>[9, 1, 5, 3, 7], 0.50), 5);
     expect(perfPercentile(<double>[9, 1, 5, 3, 7], 0.95), 9);
+    expect(perfPercentile(<double>[6, 1, 5, 2, 4, 3], 0.50), 3);
+    expect(perfPercentile(<double>[6, 1, 5, 2, 4, 3], 0), 1);
+    expect(perfPercentile(<double>[6, 1, 5, 2, 4, 3], 1), 6);
   });
 
   test('summarizes samples across trials', () {
@@ -29,8 +32,8 @@ void main() {
       1250,
     ]);
     expect(result.currentSamples, <double>[700, 800, 750, 850, 725, 825]);
-    expect(result.baselineP50, 1200);
-    expect(result.currentP50, 800);
+    expect(result.baselineP50, 1100);
+    expect(result.currentP50, 750);
     expect(result.pairedTrials, 3);
     expect(result.currentWins, 3);
     expect(result.currentLosses, 0);
@@ -151,6 +154,28 @@ void main() {
     expect(comparison.advisoryOnly, isFalse);
     expect(comparison.pairedTrials, 1);
     expect(comparison.verdict, 'advisory');
+  });
+
+  test('rejects a metric contract mismatch between targets', () {
+    expect(
+      () => summarizePerfRecords(<Map<String, Object?>>[
+        _metric('release', 'control.status', <num>[1000]),
+        _metric('current', 'control.status', <num>[1000], unit: 'bytes'),
+      ]),
+      throwsFormatException,
+    );
+  });
+
+  test('rejects missing paired trials', () {
+    expect(
+      () => summarizePerfRecords(<Map<String, Object?>>[
+        for (var trial = 1; trial <= 3; trial++)
+          _metric('release', 'control.status', <num>[1000], trial: trial),
+        for (var trial = 1; trial <= 2; trial++)
+          _metric('current', 'control.status', <num>[1000], trial: trial),
+      ]),
+      throwsFormatException,
+    );
   });
 }
 

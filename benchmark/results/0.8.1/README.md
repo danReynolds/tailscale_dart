@@ -12,7 +12,7 @@ Canonical report: [`macos-arm64-vs-0.8.0.json`](macos-arm64-vs-0.8.0.json)
 
 | Scenario | 0.8.0 p50 | 0.8.1 p50 | Delta | Verdict |
 | --- | ---: | ---: | ---: | --- |
-| Steady HTTP GET | 1.383 ms | 1.510 ms | +9.2% | parity |
+| Steady HTTP GET | 1.381 ms | 1.489 ms | +7.8% | parity |
 | Persistent restart | 49.476 ms | 110.088 ms | +122.5% | regression |
 | Ephemeral down | 10.998 ms | 160.787 ms | +1362.0% | regression |
 | First UDP round trip | 2.034 ms | 1.702 ms | -16.3% | inconclusive |

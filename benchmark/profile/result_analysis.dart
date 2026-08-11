@@ -66,7 +66,7 @@ double perfPercentile(List<double> values, double percentile) {
     throw RangeError.range(percentile, 0, 1, 'percentile');
   }
   final sorted = List<double>.of(values)..sort();
-  final index = ((sorted.length - 1) * percentile).round();
+  final index = percentile == 0 ? 0 : (sorted.length * percentile).ceil() - 1;
   return sorted[index];
 }
 
@@ -92,12 +92,14 @@ List<PerfComparison> summarizePerfRecords(
         higherIsBetter is! bool ||
         advisoryOnly is! bool ||
         trial is! int ||
-        rawSamples is! List) {
+        trial <= 0 ||
+        rawSamples is! List ||
+        rawSamples.isEmpty ||
+        rawSamples.any((value) => value is! num || !value.isFinite)) {
       throw FormatException('invalid metric record: $record');
     }
-    final key = '$scenario\u0000$unit\u0000$higherIsBetter\u0000$advisoryOnly';
     final group = groups.putIfAbsent(
-      key,
+      scenario,
       () => _MetricGroup(
         scenario: scenario,
         unit: unit,
@@ -105,6 +107,11 @@ List<PerfComparison> summarizePerfRecords(
         advisoryOnly: advisoryOnly,
       ),
     );
+    if (group.unit != unit ||
+        group.higherIsBetter != higherIsBetter ||
+        group.advisoryOnly != advisoryOnly) {
+      throw FormatException('metric contract changed for $scenario');
+    }
     group.samplesByTarget
         .putIfAbsent(target, () => <double>[])
         .addAll(rawSamples.map((value) => (value as num).toDouble()));
@@ -122,7 +129,9 @@ List<PerfComparison> summarizePerfRecords(
         baseline.isEmpty ||
         current == null ||
         current.isEmpty) {
-      continue;
+      throw FormatException(
+        '${group.scenario} is missing $baselineTarget or $currentTarget data',
+      );
     }
     final baselineP50 = perfPercentile(baseline, 0.50);
     final baselineP95 = perfPercentile(baseline, 0.95);
@@ -154,8 +163,11 @@ List<PerfComparison> summarizePerfRecords(
     final currentTrials =
         group.samplesByTargetAndTrial[currentTarget] ??
         const <int, List<double>>{};
-    final pairedTrialIds =
-        baselineTrials.keys.where(currentTrials.containsKey).toList()..sort();
+    if (baselineTrials.length != currentTrials.length ||
+        baselineTrials.keys.any((trial) => !currentTrials.containsKey(trial))) {
+      throw FormatException('${group.scenario} has unpaired trials');
+    }
+    final pairedTrialIds = baselineTrials.keys.toList()..sort();
     var currentWins = 0;
     var currentLosses = 0;
     for (final trial in pairedTrialIds) {

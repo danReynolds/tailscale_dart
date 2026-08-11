@@ -501,9 +501,9 @@ final class _ProbeOptions {
       peerIp: peerIp,
       peerResponse: Platform.environment['PERF_PEER_RESPONSE'] ?? 'perf-peer',
       expectedIpv4: Platform.environment['PERF_EXPECTED_IPV4'],
-      iterations: int.parse(Platform.environment['PERF_ITERATIONS'] ?? '20'),
+      iterations: int.parse(Platform.environment['PERF_ITERATIONS'] ?? '50'),
       bulkIterations: int.parse(
-        Platform.environment['PERF_BULK_ITERATIONS'] ?? '3',
+        Platform.environment['PERF_BULK_ITERATIONS'] ?? '1',
       ),
     );
   }

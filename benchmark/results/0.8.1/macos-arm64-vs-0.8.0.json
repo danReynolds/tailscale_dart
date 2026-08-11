@@ -7,6 +7,8 @@
     "version": "0.8.0"
   },
   "current": {
+    "package": "tailscale",
+    "version": "0.8.1",
     "path": ".",
     "commit": "4b80282bd3f7aa16f97999c9bc35a6795591c615",
     "dirty": false
@@ -16074,7 +16076,7 @@
         ]
       },
       "current": {
-        "p50": 288.0,
+        "p50": 287.0,
         "p95": 611.0,
         "samples": [
           3272.0,
@@ -16329,7 +16331,7 @@
           235.0
         ]
       },
-      "currentDeltaPercent": 13.38582677165354,
+      "currentDeltaPercent": 12.992125984251967,
       "advisoryOnly": false,
       "pairedTrials": 5,
       "currentWins": 2,
@@ -16341,7 +16343,7 @@
       "unit": "microseconds",
       "higherIsBetter": false,
       "baseline": {
-        "p50": 550.0,
+        "p50": 545.0,
         "p95": 1314.0,
         "samples": [
           3655.0,
@@ -16597,7 +16599,7 @@
         ]
       },
       "current": {
-        "p50": 643.0,
+        "p50": 639.0,
         "p95": 1327.0,
         "samples": [
           5894.0,
@@ -16852,7 +16854,7 @@
           638.0
         ]
       },
-      "currentDeltaPercent": 16.909090909090917,
+      "currentDeltaPercent": 17.24770642201834,
       "advisoryOnly": false,
       "pairedTrials": 5,
       "currentWins": 2,
@@ -18166,7 +18168,7 @@
         ]
       },
       "current": {
-        "p50": 285.0,
+        "p50": 283.0,
         "p95": 633.0,
         "samples": [
           723.0,
@@ -18421,7 +18423,7 @@
           348.0
         ]
       },
-      "currentDeltaPercent": -4.36241610738255,
+      "currentDeltaPercent": -5.033557046979864,
       "advisoryOnly": false,
       "pairedTrials": 5,
       "currentWins": 3,
@@ -18433,7 +18435,7 @@
       "unit": "microseconds",
       "higherIsBetter": false,
       "baseline": {
-        "p50": 277.0,
+        "p50": 276.0,
         "p95": 580.0,
         "samples": [
           580.0,
@@ -18689,7 +18691,7 @@
         ]
       },
       "current": {
-        "p50": 297.0,
+        "p50": 296.0,
         "p95": 635.0,
         "samples": [
           661.0,
@@ -18944,7 +18946,7 @@
           185.0
         ]
       },
-      "currentDeltaPercent": 7.2202166064981865,
+      "currentDeltaPercent": 7.246376811594213,
       "advisoryOnly": false,
       "pairedTrials": 5,
       "currentWins": 2,
@@ -21114,7 +21116,7 @@
       "unit": "microseconds",
       "higherIsBetter": false,
       "baseline": {
-        "p50": 1383.0,
+        "p50": 1381.0,
         "p95": 1999.0,
         "samples": [
           2943.0,
@@ -21370,7 +21372,7 @@
         ]
       },
       "current": {
-        "p50": 1510.0,
+        "p50": 1489.0,
         "p95": 19203.0,
         "samples": [
           3425.0,
@@ -21625,7 +21627,7 @@
           1255.0
         ]
       },
-      "currentDeltaPercent": 9.182935647143896,
+      "currentDeltaPercent": 7.820419985517746,
       "advisoryOnly": false,
       "pairedTrials": 5,
       "currentWins": 1,
@@ -21893,7 +21895,7 @@
         ]
       },
       "current": {
-        "p50": 282.0,
+        "p50": 261.0,
         "p95": 1692.0,
         "samples": [
           1280.0,
@@ -22293,7 +22295,7 @@
       "higherIsBetter": false,
       "baseline": {
         "p50": 408535.0,
-        "p95": 475011.0,
+        "p95": 622441.0,
         "samples": [
           435812.0,
           403422.0,
@@ -22314,7 +22316,7 @@
       },
       "current": {
         "p50": 399295.0,
-        "p95": 523785.0,
+        "p95": 532385.0,
         "samples": [
           523785.0,
           378940.0,
@@ -22346,7 +22348,7 @@
       "higherIsBetter": false,
       "baseline": {
         "p50": 408535.0,
-        "p95": 475011.0,
+        "p95": 622441.0,
         "samples": [
           435812.0,
           403422.0,
@@ -22367,7 +22369,7 @@
       },
       "current": {
         "p50": 399295.0,
-        "p95": 523785.0,
+        "p95": 532385.0,
         "samples": [
           523785.0,
           378940.0,
@@ -22386,7 +22388,7 @@
           385583.0
         ]
       },
-      "currentDeltaPercent": 10.267972741683874,
+      "currentDeltaPercent": -14.468198592316384,
       "advisoryOnly": true,
       "pairedTrials": 5,
       "currentWins": 3,
@@ -22729,7 +22731,7 @@
       "higherIsBetter": false,
       "baseline": {
         "p50": 269647872.0,
-        "p95": 270155776.0,
+        "p95": 270385152.0,
         "samples": [
           261799936.0,
           269402112.0,
@@ -22750,7 +22752,7 @@
       },
       "current": {
         "p50": 291733504.0,
-        "p95": 292847616.0,
+        "p95": 292864000.0,
         "samples": [
           282247168.0,
           292847616.0,
@@ -23078,7 +23080,7 @@
       "unit": "microseconds",
       "higherIsBetter": false,
       "baseline": {
-        "p50": 1547.0,
+        "p50": 1546.0,
         "p95": 2083.0,
         "samples": [
           1915.0,
@@ -23334,7 +23336,7 @@
         ]
       },
       "current": {
-        "p50": 1587.0,
+        "p50": 1582.0,
         "p95": 33787.0,
         "samples": [
           2160.0,
@@ -23589,7 +23591,7 @@
           1450.0
         ]
       },
-      "currentDeltaPercent": 2.5856496444731647,
+      "currentDeltaPercent": 2.3285899094437346,
       "advisoryOnly": false,
       "pairedTrials": 5,
       "currentWins": 4,
@@ -23857,7 +23859,7 @@
         ]
       },
       "current": {
-        "p50": 446.0,
+        "p50": 440.0,
         "p95": 1364.0,
         "samples": [
           1184.0,
@@ -24256,7 +24258,7 @@
       "unit": "microseconds",
       "higherIsBetter": false,
       "baseline": {
-        "p50": 477.0,
+        "p50": 473.0,
         "p95": 691.0,
         "samples": [
           848.0,
@@ -24512,7 +24514,7 @@
         ]
       },
       "current": {
-        "p50": 420.0,
+        "p50": 419.0,
         "p95": 16415.0,
         "samples": [
           764.0,
@@ -24767,7 +24769,7 @@
           529.0
         ]
       },
-      "currentDeltaPercent": -11.949685534591193,
+      "currentDeltaPercent": -11.416490486257924,
       "advisoryOnly": false,
       "pairedTrials": 5,
       "currentWins": 4,

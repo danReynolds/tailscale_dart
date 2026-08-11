@@ -176,6 +176,9 @@ Future<void> main(List<String> args) async {
     }
 
     final comparisons = summarizePerfRecords(records);
+    if (comparisons.isEmpty) {
+      throw StateError('comparison produced no metrics');
+    }
     _printComparisons(comparisons, baselineVersion);
 
     final output = options.outputPath == null
@@ -183,6 +186,7 @@ Future<void> main(List<String> args) async {
               '${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-')}.json'
         : File(options.outputPath!).absolute.path;
     final currentCommit = await _gitHead(repo);
+    final currentVersion = _readPackageVersion(repo);
     final report = <String, Object?>{
       'schema': 1,
       'generatedAt': DateTime.now().toUtc().toIso8601String(),
@@ -192,6 +196,8 @@ Future<void> main(List<String> args) async {
         'version': baselineVersion,
       },
       'current': <String, Object?>{
+        'package': 'tailscale',
+        'version': currentVersion,
         // The commit identifies the measured checkout. Keeping reports
         // relocatable avoids leaking a developer-specific absolute path when
         // canonical evidence is checked in under benchmark/results.
@@ -248,6 +254,18 @@ Future<void> main(List<String> args) async {
       }
     }
   }
+}
+
+String _readPackageVersion(Directory repo) {
+  final contents = File('${repo.path}/pubspec.yaml').readAsStringSync();
+  final match = RegExp(
+    r'^version:\s*(\S+)\s*$',
+    multiLine: true,
+  ).firstMatch(contents);
+  if (match == null) {
+    throw const FormatException('pubspec.yaml is missing a package version');
+  }
+  return match.group(1)!;
 }
 
 String _readBaseline(Directory repo) {
@@ -705,10 +723,8 @@ final class _RunnerOptions {
     }
 
     final trials = int.parse(value('--trials') ?? (quick ? '1' : '5'));
-    final iterations = int.parse(value('--iterations') ?? (quick ? '5' : '20'));
-    final bulkIterations = int.parse(
-      value('--bulk-iterations') ?? (quick ? '1' : '3'),
-    );
+    final iterations = int.parse(value('--iterations') ?? (quick ? '5' : '50'));
+    final bulkIterations = int.parse(value('--bulk-iterations') ?? '1');
     if (trials <= 0 || iterations <= 0 || bulkIterations <= 0) {
       throw ArgumentError('trial and iteration counts must be positive');
     }

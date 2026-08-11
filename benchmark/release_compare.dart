@@ -192,7 +192,10 @@ Future<void> main(List<String> args) async {
         'version': baselineVersion,
       },
       'current': <String, Object?>{
-        'path': repo.path,
+        // The commit identifies the measured checkout. Keeping reports
+        // relocatable avoids leaking a developer-specific absolute path when
+        // canonical evidence is checked in under benchmark/results.
+        'path': '.',
         'commit': currentCommit,
         'dirty': await _gitDirty(repo),
       },

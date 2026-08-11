@@ -28,6 +28,10 @@ dart run --enable-experiment=native-assets \
 Useful overrides are `--trials=N`, `--iterations=N`,
 `--bulk-iterations=N`, `--baseline=VERSION`, and `--output=PATH`.
 
+Canonical full-profile evidence is checked into [`results/`](results/), grouped
+by the package version being measured. Keep only clean, default full runs there;
+quick and diagnostic reports remain temporary.
+
 The runner deliberately uses the same public-API probe for both versions. A
 small generated adapter is the only version-specific part: the published
 `0.8.0` baseline uses its native persistence, while current uses the existing

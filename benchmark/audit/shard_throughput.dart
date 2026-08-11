@@ -24,7 +24,6 @@ typedef _OptD = int Function(int, int, int, Pointer<Int32>, int);
 
 final _lib = DynamicLibrary.process();
 final _socketpair = _lib.lookupFunction<_SPC, _SPD>('socketpair');
-final _writeSy = _lib.lookupFunction<_RwC, _RwD>('write');
 final _readSy = _lib.lookupFunction<_RwC, _RwD>('read');
 final _setsockopt = _lib.lookupFunction<_OptC, _OptD>('setsockopt');
 
@@ -67,7 +66,9 @@ Future<void> _writeWindowed(PosixFdTransport t, int total) async {
   var out = 0, remaining = total;
   while (remaining > 0) {
     final n = remaining < _chunk ? remaining : _chunk;
-    inflight.add(t.write(n == _chunk ? chunk : Uint8List.sublistView(chunk, 0, n)));
+    inflight.add(
+      t.write(n == _chunk ? chunk : Uint8List.sublistView(chunk, 0, n)),
+    );
     out += n;
     remaining -= n;
     if (out >= window) {
@@ -88,8 +89,11 @@ Future<double> _measureOutbound(int pairs, int bytesPer) async {
   }
   final transports = [
     for (final l in lefts)
-      await PosixFdTransport.adopt(l,
-          maxReadChunkSize: _chunk, maxPendingWriteBytes: 16 * 1024 * 1024),
+      await PosixFdTransport.adopt(
+        l,
+        maxReadChunkSize: _chunk,
+        maxPendingWriteBytes: 16 * 1024 * 1024,
+      ),
   ];
   final done = ReceivePort();
   for (final r in rights) {
@@ -123,7 +127,11 @@ Future<void> main(List<String> args) async {
   }
   samples.sort();
   final active = await debugPosixFdReactorShardLoad();
-  print('pairs=$pairs outbound MiB/s samples=${samples.map((s) => s.toStringAsFixed(0)).toList()}');
-  print('median=${samples[2].toStringAsFixed(0)} MiB/s  '
-      'shardLoad(initial=$load, active=$active)');
+  print(
+    'pairs=$pairs outbound MiB/s samples=${samples.map((s) => s.toStringAsFixed(0)).toList()}',
+  );
+  print(
+    'median=${samples[2].toStringAsFixed(0)} MiB/s  '
+    'shardLoad(initial=$load, active=$active)',
+  );
 }

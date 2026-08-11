@@ -684,11 +684,12 @@ worker FIFO removed the accidental delay that had kept accepts outside that
 window, and the two e2e accept-identity assertions failed as a result (see the
 parked listen/bind PR).
 
-**macOS arm64 latency receipt, 2026-08-11:** five independent valid Headscale
-runs, spanning harness commit `1ecbc0b` and correctness follow-up `89e07f7`,
-produced the following direct-path ranges. Every timed result matched the stable
-node ID reported independently by the peer; cached p99 remained at or below 4
-microseconds.
+**macOS latency receipt, 2026-08-11:** five independent valid Headscale runs on
+an Apple-silicon host using the installed `darwin/amd64` Go toolchain, spanning
+harness commit `1ecbc0b` and correctness follow-up `89e07f7`, produced the
+following direct-path ranges. Every timed result matched the stable node ID
+reported independently by the peer; cached p99 remained at or below 4
+microseconds. This is not an arm64 Go receipt.
 
 | Concurrent callers | Direct p95 | Direct p99 | Provisional gate |
 | --- | ---: | ---: | --- |
@@ -702,6 +703,23 @@ authoritative WhoIs, closing the correctness window without adding a second
 cache or invalidation protocol. Full R8 remains open for allocations,
 sustained CPU/throughput, end-to-end accept, netmap-churn, and other
 qualified-platform evidence.
+
+**macOS allocation receipt, 2026-08-11:** three independent Headscale runs of
+the corrected live-peer benchmark at commit `3929aa5`, each with 500 measured
+lookups, produced these ranges on the same Apple-silicon host and
+`darwin/amd64` Go toolchain:
+
+| Path | Time/op | Bytes/op | Allocations/op |
+| --- | ---: | ---: | ---: |
+| Direct authoritative WhoIs | 109,162–208,608 ns | 22,539–43,864 B | 211–454 |
+| Cached hit | 54.33–72.83 ns | 0 B | 0 |
+
+The benchmark uses a separate peer and verifies its independently reported
+stable node ID on every measured lookup. It also shares one live fixture across
+sub-benchmarks because package configuration is intentionally process-once.
+This is far beyond the plan's 20% cache-benefit threshold and reinforces the
+macOS retention decision. Sustained CPU/throughput, end-to-end TCP/HTTP accept,
+netmap churn, and other qualified-platform receipts remain open.
 
 Measure direct `LocalClient.WhoIs` through the exact in-process client with
 `OmitAuth` on macOS, Linux, iOS, and Android where practical. Record p50/p95/p99,

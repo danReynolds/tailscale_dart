@@ -664,30 +664,28 @@ the authoritative in-process LocalAPI; the watcher is not a universal mirror.
 
 ### R8 — benchmark-governed cache deletion
 
-**Status 2026-08-10:** the gate harness is implemented in
+**Status 2026-08-11:** the gate harness is implemented in
 `go/identity_r8_gate_test.go` — p50/p95/p99 for the direct and cached paths at
 1, 8, and 32 concurrent acceptors against a separate live peer, with a verdict
 against the provisional latency thresholds below. Every timed lookup must
 resolve the stable node ID reported independently by that peer, so a fast
-nil/error/wrong-peer path cannot produce a false pass. This harness covers only
-the latency portion of the removal gate; allocations, sustained CPU and
-throughput, end-to-end TCP/HTTP accepts, netmap churn, and qualified-platform
-receipts remain required before a final retention design is accepted. It is
-Headscale-gated like the identity benchmarks; the first macOS receipt is
-recorded below.
+nil/error/wrong-peer path cannot produce a false pass. The allocation benchmark
+uses the same live-peer validation. Sustained CPU and throughput, end-to-end
+TCP/HTTP accepts, netmap churn, and qualified-platform receipts remain required
+before a final retention design is accepted. Both gates are Headscale-gated;
+the first macOS receipts are recorded below.
 
 R8 also owns a correctness question, not only a cost one. Before this
 correction, a warm `identityCache` that lacked an address answered `(nil, true)`
 and was treated as authoritative, so `lookupNodeIdentity` skipped its live
 fallback (`go/identity_cache.go`, `go/localapi.go`). Moving listen/bind off the
 worker FIFO removed the accidental delay that had kept accepts outside that
-window, and the two e2e accept-identity assertions failed as a result (see the
-parked listen/bind PR).
+window, and the two e2e accept-identity assertions failed as a result. PR #106
+closed that window before merging the listen/bind offload.
 
 **macOS latency receipt, 2026-08-11:** five independent valid Headscale runs on
-an Apple-silicon host using the installed `darwin/amd64` Go toolchain, spanning
-harness commit `1ecbc0b` and correctness follow-up `89e07f7`, produced the
-following direct-path ranges. Every timed result matched the stable node ID
+an Apple-silicon host using the installed `darwin/amd64` Go toolchain produced
+the following direct-path ranges. Every timed result matched the stable node ID
 reported independently by the peer; cached p99 remained at or below 4
 microseconds. This is not an arm64 Go receipt.
 
@@ -700,14 +698,13 @@ microseconds. This is not an arm64 Go receipt.
 This rejects deletion on this environment. The cache remains a performance
 fast path, but a miss — cold or warm — now falls through to bounded
 authoritative WhoIs, closing the correctness window without adding a second
-cache or invalidation protocol. Full R8 remains open for allocations,
-sustained CPU/throughput, end-to-end accept, netmap-churn, and other
-qualified-platform evidence.
+cache or invalidation protocol. Full R8 remains open for sustained
+CPU/throughput, end-to-end accept, netmap-churn, and other qualified-platform
+evidence.
 
 **macOS allocation receipt, 2026-08-11:** three independent Headscale runs of
-the corrected live-peer benchmark at commit `3929aa5`, each with 500 measured
-lookups, produced these ranges on the same Apple-silicon host and
-`darwin/amd64` Go toolchain:
+the corrected live-peer benchmark, each with 500 measured lookups, produced
+these ranges on the same Apple-silicon host and `darwin/amd64` Go toolchain:
 
 | Path | Time/op | Bytes/op | Allocations/op |
 | --- | ---: | ---: | ---: |

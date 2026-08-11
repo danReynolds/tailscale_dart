@@ -1,0 +1,54 @@
+name: Release performance comparison
+
+# This is report-only until repeated hosted-runner receipts establish stable
+# variance. Harness failures fail the job; metric labels do not yet gate merges.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release-performance.yml'
+      - 'benchmark/**'
+      - 'go/**'
+      - 'hook/**'
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'test/e2e/**'
+      - 'test/unit/perf_result_analysis_test.dart'
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: pub.dev release vs current
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache-dependency-path: go/go.sum
+      - run: dart pub get
+      - name: Run full paired comparison
+        run: >-
+          dart run --enable-experiment=native-assets
+          benchmark/release_compare.dart
+          --output=release-performance.json
+      - name: Upload raw samples and aggregate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-performance-${{ github.run_id }}
+          path: release-performance.json
+          if-no-files-found: warn

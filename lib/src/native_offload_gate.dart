@@ -7,9 +7,11 @@ import 'package:meta/meta.dart';
 /// Shared bound, within the supported caller/controller isolate, for
 /// short-lived helper isolates that block in synchronous FFI.
 ///
-/// HTTP request admission shares this gate with dial, ping, and publication
-/// calls. Only the native admission call holds a permit; fd-backed HTTP body
-/// streaming remains independently concurrent after admission returns.
+/// A client's first HTTP request admission shares this gate with dial, ping,
+/// and publication calls. After that admission proves its exact runtime ready,
+/// later HTTP requests take the bounded direct path. Only native admission
+/// holds a permit; fd-backed HTTP body streaming remains independently
+/// concurrent after admission returns.
 const int maxConcurrentNativeOffloads = 32;
 
 final _nativeOffloadGate = _NativeOffloadSemaphore(maxConcurrentNativeOffloads);

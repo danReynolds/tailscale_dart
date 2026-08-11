@@ -3,6 +3,56 @@
 This directory contains local benchmarks for changes that need before/after
 numbers.
 
+## Published-release comparison
+
+`release_compare.dart` measures the public performance paths against both the
+pinned pub.dev release in `profile/baseline.json` and the current checkout. It
+reuses the Headscale Docker environment and fixed E2E echo peer, but it does
+not run or duplicate the functional test suite.
+
+```sh
+dart run --enable-experiment=native-assets benchmark/release_compare.dart
+```
+
+The full profile alternates five trials per version, takes 50 steady-state
+samples and one 1 MiB transfer per trial, and covers lifecycle, control calls,
+HTTP, TCP, UDP, persistent enrollment/restart, event-loop lag, throughput, and
+RSS. Raw samples and the aggregate comparison are written to a temporary JSON
+report. A one-trial development pass is available while editing the harness:
+
+```sh
+dart run --enable-experiment=native-assets \
+  benchmark/release_compare.dart --quick
+```
+
+Useful overrides are `--trials=N`, `--iterations=N`,
+`--bulk-iterations=N`, `--baseline=VERSION`, and `--output=PATH`.
+
+Canonical full-profile evidence is checked into [`results/`](results/), grouped
+by the package version being measured. Keep only clean, default full runs there;
+quick and diagnostic reports remain temporary.
+
+The runner deliberately uses the same public-API probe for both versions. A
+small generated adapter is the only version-specific part: the published
+`0.8.0` baseline uses its native persistence, while current uses the existing
+deterministic E2E custody backend so the comparison never touches a developer's
+production Keychain or Secret Service. Production custody latency remains a
+separate platform/device receipt.
+
+The 15% verdict is an initial materiality label, not a CI gate. Establish the
+runner's variance across repeated jobs before making it blocking. Verdicts also
+require an absolute change of at least 0.1 ms (1 ms for event-loop p95) so tiny
+percentage changes are not mislabeled, plus the same direction in at least 80%
+of three or more paired trials. One-trial quick runs cannot emit regression or
+improvement verdicts, and material results without a consistent direction are
+reported as inconclusive rather than parity. Initial enrollment, first-path
+setup, host event-loop lag, and process RSS remain explicitly advisory because
+control-plane behavior, path selection, host scheduling, and VM allocation
+state dominate them. RSS still records every checkpoint and paired direction;
+it needs repeat evidence rather than a single threshold crossing. If a
+repeatable scenario regresses, use a profiler or targeted instrumentation to
+find the cause; do not add tracing to this comparison harness.
+
 ## POSIX fd transport
 
 `fd_transport.dart` measures the fd data-plane primitive used underneath the
@@ -13,7 +63,7 @@ the shared-reactor implementation.
 Run the same command on both branches:
 
 ```sh
-/Users/dan/Coding/flutter_arm64/bin/dart run \
+dart run \
   --enable-experiment=native-assets \
   benchmark/fd_transport.dart \
   --pairs=1,10,50,100 \
@@ -63,7 +113,7 @@ backend can still finish. Use these knobs to scale targeted scenarios:
 For a quick smoke run while iterating:
 
 ```sh
-/Users/dan/Coding/flutter_arm64/bin/dart run \
+dart run \
   --enable-experiment=native-assets \
   benchmark/fd_transport.dart \
   --pairs=1,10 \

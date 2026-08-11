@@ -126,9 +126,11 @@ gate remain before release.
   validates and acknowledges its exact handle. Malformed or lost delivery
   quarantines that runtime, with a bounded native timer covering helper/caller
   isolate loss so committed ingress cannot silently lose its owner.
-- HTTP admission, `tcp.dial`, `diag.ping`, Serve, and Funnel share a 32-call
-  caller-isolate helper cap. Each captures an exact runtime token before it can
-  queue, so delayed work from an old runtime cannot execute as its replacement.
+- Each HTTP client's first admission, `tcp.dial`, `diag.ping`, Serve, and
+  Funnel share a 32-call caller-isolate helper cap. Successful HTTP admission
+  proves that exact runtime ready, so later requests avoid helper-isolate churn.
+  Every path retains an exact runtime token, so stale work cannot execute as a
+  replacement.
 - Added opt-in hosted-Tailscale tests for Funnel's tailnet reachability and
   Serve -> Funnel -> Serve replacement/exact-handle behavior. Both passed
   serially against hosted Tailscale on 2026-08-10; they also compile and skip

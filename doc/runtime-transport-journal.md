@@ -19,10 +19,12 @@ still needs a decision.
   quarantines the generation.
 - Added exact generation/mapping-token publication handles so a stale close or
   finalizer cannot remove a replacement.
-- Added one caller-isolate 32-call native-admission cap shared by HTTP,
-  `tcp.dial`, `diag.ping`, Serve, and Funnel. Each operation presents the exact
-  runtime token it captured before queueing, and native refuses stale work
-  before touching a replacement runtime.
+- Added one caller-isolate 32-call native-admission cap shared by each HTTP
+  client's first request, `tcp.dial`, `diag.ping`, Serve, and Funnel. A
+  successful HTTP admission proves the exact runtime's monotonic bootstrap
+  ready, so later requests use bounded direct admission. Every operation
+  presents its captured runtime token, and native refuses stale work before
+  touching a replacement runtime.
 - Kept a committed publication in native delivery custody until its validated
   exact metadata reaches the supervised caller isolate. Active compensation
   handles malformed/lost results; a bounded native timer is the fallback.

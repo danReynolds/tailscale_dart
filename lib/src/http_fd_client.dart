@@ -26,6 +26,7 @@ final class TailscaleHttpClient extends http.BaseClient {
   /// Exact native runtime capability captured when this client was created.
   final int runtimeToken;
   bool _closed = false;
+  bool _nativeAdmissionReady = false;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -39,11 +40,18 @@ final class TailscaleHttpClient extends http.BaseClient {
       throw const TailscaleHttpException('Windows is not supported.');
     }
     final nativeRequest = _NativeHttpRequest.fromRequest(request);
-    // The native readiness gate can join the one bounded first-Up bootstrap.
-    // Keep that synchronous FFI wait off the caller's event-loop isolate.
-    final start = await runCappedNativeOffload(
-      () => _startNativeRequest(runtimeToken, nativeRequest),
-    );
+    // The first admission can join the runtime's bounded first-Up bootstrap,
+    // so keep it off the caller isolate. A successful admission proves that
+    // this exact runtime's monotonic bootstrap is ready. Later admissions do
+    // only bounded local work before Go starts the network request in a
+    // goroutine, so avoid paying a fresh helper-isolate round trip on every
+    // steady request.
+    final start = _nativeAdmissionReady
+        ? _startNativeRequest(runtimeToken, nativeRequest)
+        : await runCappedNativeOffload(
+            () => _startNativeRequest(runtimeToken, nativeRequest),
+          );
+    _nativeAdmissionReady = true;
     if (_closed) {
       closePosixFdForCleanup(start.requestBodyFd);
       closePosixFdForCleanup(start.responseBodyFd);

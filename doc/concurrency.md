@@ -27,10 +27,12 @@ Every native call enters the Go layer from one of two places:
    retaining method tear-offs from a dead isolate.
 2. **Helper isolates (concurrent).** The long, contended calls — `tcp.dial`,
    `diag.ping`, `serve.forward`, `funnel.forward`, the `tcp`/`tls`/`udp`/`http`
-   listen and bind entry points, plus every HTTP client request admission — run
-   on short-lived `Isolate.run` helpers. Data-plane offloads are capped at 32 by
-   the shared gate in the supported caller isolate; see
-   `lib/src/native_offload_gate.dart`. Native
+   listen and bind entry points, plus each HTTP client's first request
+   admission — run on short-lived `Isolate.run` helpers. A successful first
+   admission proves that exact runtime's monotonic bootstrap ready, so later
+   requests perform only bounded local native admission directly. Data-plane
+   offloads are capped at 32 by the shared gate in the supported caller
+   isolate; see `lib/src/native_offload_gate.dart`. Native
    secure-state preparation, probe, reset, quarantine, and quiescence calls also
    use helper isolates. Rescue and lifecycle custody calls deliberately bypass
    the data-plane gate so a saturated connection workload cannot block cleanup.

@@ -3,7 +3,6 @@
 package tailscale
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -90,16 +89,23 @@ func TcpDialFd(runtimeToken uint64, host string, port int, timeout time.Duration
 	}, nil
 }
 
-func TcpListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
+// TcpListenFd starts a tailnet TCP listener for the exact captured runtime
+// token and registers it in that runtime's listener registry.
+//
+// Like TcpDialFd, this runs as a capped caller-isolate offload, never on the
+// worker FIFO: the readiness wait below may park for the remainder of the
+// bounded first-Up publication bootstrap, and that park must not head-of-line
+// block worker RPCs queued behind it.
+func TcpListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 	if tailnetPort < 0 || tailnetPort > 65535 {
 		return nil, fmt.Errorf("invalid port %d", tailnetPort)
 	}
 
-	gate, err := gateForCurrentRuntime("TcpListenFd")
+	gate, err := gateForRuntimeToken("TcpListenFd", runtimeToken)
 	if err != nil {
 		return nil, err
 	}
-	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+	if err := gate.awaitDataPlaneReadyForCall(); err != nil {
 		return nil, fmt.Errorf("tcp listen data plane: %w", err)
 	}
 
@@ -112,16 +118,19 @@ func TcpListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 	return registerTcpFdListener(gate, ln, tailnetHost)
 }
 
-func TlsListenFd(tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
+// TlsListenFd starts a TLS-terminated tailnet listener for the exact captured
+// runtime token. Offloaded like TcpListenFd — see that function's comment for
+// why this must never execute on the worker FIFO.
+func TlsListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*TcpFdListener, error) {
 	if tailnetPort < 0 || tailnetPort > 65535 {
 		return nil, fmt.Errorf("invalid port %d", tailnetPort)
 	}
 
-	gate, err := gateForCurrentRuntime("TlsListenFd")
+	gate, err := gateForRuntimeToken("TlsListenFd", runtimeToken)
 	if err != nil {
 		return nil, err
 	}
-	if err := gate.awaitDataPlaneReady(context.Background()); err != nil {
+	if err := gate.awaitDataPlaneReadyForCall(); err != nil {
 		return nil, fmt.Errorf("tls listen data plane: %w", err)
 	}
 	if gate.runtime.localClient == nil {

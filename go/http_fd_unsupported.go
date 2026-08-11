@@ -44,7 +44,7 @@ func HttpStart(
 	return nil, fmt.Errorf("HTTP fd transport is not supported on this platform")
 }
 
-func HttpBind(tailnetPort int) (*HttpBinding, error) {
+func HttpBind(runtimeToken uint64, tailnetPort int) (*HttpBinding, error) {
 	return nil, fmt.Errorf("HTTP fd transport is not supported on this platform")
 }
 

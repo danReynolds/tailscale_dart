@@ -81,25 +81,26 @@ func TestIdentityIndexLookupSemantics(t *testing.T) {
 	var c identityIndex
 	addr := netip.MustParseAddr("100.64.0.2")
 
-	// Cold: signals fall-back-to-live (second return false).
-	if id, ok := c.lookup(addr); ok || id != nil {
-		t.Errorf("cold lookup = (%v, %v), want (nil, false)", id, ok)
+	// Cold: a miss tells the caller to fall back to live WhoIs.
+	if id := c.lookup(addr); id != nil {
+		t.Errorf("cold lookup = %v, want nil", id)
 	}
 
 	c.replace(buildIdentityIndex(testNetmap()))
 
 	// Warm hit.
-	if id, ok := c.lookup(addr); !ok || id == nil || id.NodeID != "nPEER" {
-		t.Errorf("warm hit = (%v, %v), want (nPEER, true)", id, ok)
+	if id := c.lookup(addr); id == nil || id.NodeID != "nPEER" {
+		t.Errorf("warm hit = %v, want nPEER", id)
 	}
-	// Warm miss: authoritative not-found, NOT a fall-back (second return true).
-	if id, ok := c.lookup(netip.MustParseAddr("100.127.255.254")); !ok || id != nil {
-		t.Errorf("warm miss = (%v, %v), want (nil, true)", id, ok)
+	// Warm miss: nil makes the caller fall back to authoritative WhoIs rather
+	// than treating a temporarily stale mirror as authoritative not-found.
+	if id := c.lookup(netip.MustParseAddr("100.127.255.254")); id != nil {
+		t.Errorf("warm miss = %v, want nil", id)
 	}
 
-	// Invalidate returns to cold/fall-back.
+	// Invalidate returns to cold/fallback.
 	c.invalidate()
-	if id, ok := c.lookup(addr); ok || id != nil {
-		t.Errorf("post-invalidate lookup = (%v, %v), want (nil, false)", id, ok)
+	if id := c.lookup(addr); id != nil {
+		t.Errorf("post-invalidate lookup = %v, want nil", id)
 	}
 }

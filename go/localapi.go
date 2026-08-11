@@ -201,23 +201,23 @@ const identityLookupTimeout = 2 * time.Second
 // lookupNodeIdentity resolves the identity of a remote tailnet IP at accept
 // time. It reads the in-memory identity cache (mirrored from the netmap by the
 // state watcher) for a near-constant-time lookup off the accept hot path. When
-// the cache is cold — before the watcher has delivered the first netmap, or
-// after it was torn down — it falls back to an authoritative LocalAPI WhoIs so
-// early accepts still resolve. Best-effort and non-fatal: any failure returns
-// nil and the connection is delivered with IP-only metadata. Callers that
-// require a hard identity guarantee should still gate on the returned value.
+// the cache is cold or does not yet contain an admitted peer, it falls back to
+// authoritative LocalAPI WhoIs so early accepts still resolve. Best-effort and
+// non-fatal: any failure returns nil and the connection is delivered with
+// IP-only metadata. Callers that require a hard identity guarantee should still
+// gate on the returned value.
 func lookupNodeIdentity(ip string) *nodeIdentity {
 	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
 	if err != nil {
 		return nil
 	}
-	if id, ok := identityCache.lookup(addr); ok {
+	if id := identityCache.lookup(addr); id != nil {
 		return id
 	}
 	return lookupNodeIdentityViaLocalAPI(addr)
 }
 
-// lookupNodeIdentityViaLocalAPI is the cold-cache fallback: a live WhoIs over
+// lookupNodeIdentityViaLocalAPI is the cache-miss fallback: a live WhoIs over
 // the LocalAPI loopback. Takes an already-parsed addr (the caller validated it)
 // and is bounded by identityLookupTimeout so a stuck LocalAPI never stalls an
 // accept.

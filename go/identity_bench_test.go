@@ -50,7 +50,7 @@ func BenchmarkLookupNodeIdentityCached(b *testing.B) {
 	addr := netip.MustParseAddr(ip)
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		if id, ok := identityCache.lookup(addr); ok && id != nil {
+		if id := identityCache.lookup(addr); id != nil {
 			b.Logf("cache warm: self nodeId=%s", id.NodeID)
 			break
 		}

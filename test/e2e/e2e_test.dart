@@ -629,6 +629,22 @@ void main() {
       }
     });
 
+    test('bind issued during a pending up() joins that runtime', () async {
+      late final TailscaleListener listener;
+      await recordUntil(tsnet, NodeState.running, () async {
+        final starting = bringUp();
+        listener = await tsnet.tcp.bind(port: 0);
+        await starting;
+      });
+      addTearDown(listener.close);
+
+      expect(
+        listener.local.port,
+        greaterThan(0),
+        reason: 'the bind must resolve against the runtime up() produced',
+      );
+    });
+
     test('up with auth key emits Starting → Running', () async {
       final sequence = await recordUntil(tsnet, NodeState.running, bringUp);
 

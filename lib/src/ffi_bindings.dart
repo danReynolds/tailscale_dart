@@ -193,8 +193,12 @@ external ffi.Pointer<Utf8> duneHttpStart(
 /// Returns JSON:
 ///   {"bindingId": N, "tailnetAddress": "...", "tailnetPort": N} on success
 ///   {"error": "..."} on failure.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32)>(symbol: 'DuneHttpBind')
-external ffi.Pointer<Utf8> duneHttpBind(int tailnetPort);
+///
+/// [runtimeToken] must identify the runtime captured before helper admission.
+@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Int32)>(
+  symbol: 'DuneHttpBind',
+)
+external ffi.Pointer<Utf8> duneHttpBind(int runtimeToken, int tailnetPort);
 
 /// Blocks until an inbound HTTP binding accepts one request or closes.
 ///
@@ -238,10 +242,13 @@ external ffi.Pointer<Utf8> duneTcpDialFd(
 /// Returns JSON:
 ///   {"listenerId": N, "localAddress": "...", "localPort": N} on success.
 ///   {"error": "..."} on failure.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Pointer<Utf8>)>(
-  symbol: 'DuneTcpListenFd',
-)
+///
+/// [runtimeToken] must identify the runtime captured before helper admission.
+@ffi.Native<
+  ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Int32, ffi.Pointer<Utf8>)
+>(symbol: 'DuneTcpListenFd')
 external ffi.Pointer<Utf8> duneTcpListenFd(
+  int runtimeToken,
   int tailnetPort,
   ffi.Pointer<Utf8> tailnetHost,
 );
@@ -255,10 +262,13 @@ external ffi.Pointer<Utf8> duneTcpListenFd(
 /// Accepted connections are still retrieved through [duneTcpAcceptFd] because
 /// the native runtime terminates TLS and exposes the resulting plaintext stream
 /// as the same local fd capability used by TCP listeners.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Int32, ffi.Pointer<Utf8>)>(
-  symbol: 'DuneTlsListenFd',
-)
+///
+/// [runtimeToken] must identify the runtime captured before helper admission.
+@ffi.Native<
+  ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Int32, ffi.Pointer<Utf8>)
+>(symbol: 'DuneTlsListenFd')
 external ffi.Pointer<Utf8> duneTlsListenFd(
+  int runtimeToken,
   int tailnetPort,
   ffi.Pointer<Utf8> tailnetHost,
 );
@@ -282,10 +292,16 @@ external void duneTcpCloseFdListener(int listenerId);
 /// Returns JSON:
 ///   {"fd": N, "bindingId": N, "localAddress": "...", "localPort": N} on
 ///   success. {"error": "..."} on failure.
-@ffi.Native<ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Int32)>(
-  symbol: 'DuneUdpBindFd',
-)
-external ffi.Pointer<Utf8> duneUdpBindFd(ffi.Pointer<Utf8> host, int port);
+///
+/// [runtimeToken] must identify the runtime captured before helper admission.
+@ffi.Native<
+  ffi.Pointer<Utf8> Function(ffi.Uint64, ffi.Pointer<Utf8>, ffi.Int32)
+>(symbol: 'DuneUdpBindFd')
+external ffi.Pointer<Utf8> duneUdpBindFd(
+  int runtimeToken,
+  ffi.Pointer<Utf8> host,
+  int port,
+);
 
 /// Tears down the UDP bridge for [bindingId] (closes the tsnet PacketConn,
 /// wakes and exits both bridge goroutines). Keyed by the opaque monotonic id

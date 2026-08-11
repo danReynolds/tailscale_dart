@@ -11,7 +11,7 @@ type UdpFdBinding struct {
 	LocalPort    int
 }
 
-func UdpBindFd(host string, port int) (*UdpFdBinding, error) {
+func UdpBindFd(runtimeToken uint64, host string, port int) (*UdpFdBinding, error) {
 	return nil, errors.New("UdpBindFd is not supported on Windows")
 }
 

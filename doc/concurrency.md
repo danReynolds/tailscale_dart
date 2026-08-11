@@ -15,8 +15,8 @@ new offloaded call.
 
 Every native call enters the Go layer from one of two places:
 
-1. **The supervised worker isolate (serial FIFO).** Fast local calls (`status`, `prefs`,
-   listener setup, …) and the lifecycle calls (`start`, `stop`, `logout`,
+1. **The supervised worker isolate (serial FIFO).** Fast local calls (`status`,
+   `prefs`, …) and the lifecycle calls (`start`, `stop`, `logout`,
    `up`, `down`) run one-at-a-time on a single Dart isolate. Two worker calls
    can never race each other. Lifecycle intent is also reserved in a
    supervisor-side FIFO before Android's asynchronous network snapshot, so an
@@ -25,15 +25,16 @@ Every native call enters the Go layer from one of two places:
    instance; public calls resolve that instance at call time rather than
    retaining method tear-offs from a dead isolate.
 2. **Helper isolates (concurrent).** The long, contended calls — `tcp.dial`,
-   `diag.ping`, `serve.forward`, `funnel.forward`, plus HTTP client request
-   admission while its runtime's data plane is not yet ready — run on
-   short-lived `Isolate.run` helpers (data-plane offloads are capped at 32 by
-   the shared gate in the supported caller isolate; see
-   `lib/src/native_offload_gate.dart`). Once the one-time publication bootstrap
-   succeeds, HTTP admission probes readiness per runtime token (a non-blocking
-   leaf FFI call) and starts the request directly on the caller isolate — the
-   native call can no longer block for that generation, and native still
-   re-checks token and readiness as the authority. Native
+   `diag.ping`, `serve.forward`, `funnel.forward`, the `tcp`/`tls`/`udp`/`http`
+   listen and bind entry points, plus HTTP client request admission while its
+   runtime's data plane is not yet ready — run on short-lived `Isolate.run`
+   helpers. Data-plane offloads are capped at 32 by the shared gate in the
+   supported caller isolate; see `lib/src/native_offload_gate.dart`. Once the
+   one-time publication bootstrap succeeds, HTTP admission probes readiness per
+   runtime token (a non-blocking leaf FFI call) and starts the request directly
+   on the caller isolate — the native call can no longer block for that
+   generation, and native still re-checks token and readiness as the authority.
+   Native
    secure-state preparation, probe, reset, quarantine, and quiescence calls also
    use helper isolates. Rescue and lifecycle custody calls deliberately bypass
    the data-plane gate so a saturated connection workload cannot block cleanup.
@@ -41,12 +42,16 @@ Every native call enters the Go layer from one of two places:
    token admission and the state lease provide their ordering.
 
 Before yielding to recovery or the shared helper gate, the caller isolate
-captures the current runtime token for `tcp.dial`, `diag.ping`, Serve, and
-Funnel. `TailscaleHttpClient` retains the token from its construction. Native
+captures the current runtime token for `tcp.dial`, `diag.ping`, the four
+listen/bind entry points, Serve, and Funnel. `TailscaleHttpClient` retains the
+token from its construction. Native
 rejects a zero or superseded token before touching a replacement runtime's
-Server or LocalClient. Listener and binding commands still enter through the
-worker FIFO and use the worker's current runtime at native entry; R7b moves
-their registries and returned handles onto explicit runtime capabilities.
+Server or LocalClient. Listener and binding commands capture the same
+exact token: `tcp.bind`, `tls.bind`, `udp.bind`, and `http.bind` are offloaded
+like dial, because their native admission joins the runtime's one bounded
+first-`Up` bootstrap and would otherwise park the serial worker isolate for
+that whole window. Their close/teardown commands stay on the worker FIFO,
+keyed by ids only a completed bind produces.
 
 The consequence: **any offloaded call can race a lifecycle call.** A
 `serve.forward` can be mid-flight while `stop()` tears the node down. Code on

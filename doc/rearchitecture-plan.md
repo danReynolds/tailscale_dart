@@ -664,6 +664,22 @@ the authoritative in-process LocalAPI; the watcher is not a universal mirror.
 
 ### R8 — benchmark-governed cache deletion
 
+**Status 2026-08-10:** the gate harness is implemented in
+`go/identity_r8_gate_test.go` — p50/p95/p99 for the direct and cached paths at
+1, 8, and 32 concurrent acceptors, with a verdict against the thresholds
+below. It is Headscale-gated like the identity benchmarks and still needs a
+run; record its output and commit here when it lands.
+
+R8 also now owns a correctness question, not only a cost one. A warm
+`identityCache` that lacks an address answers `(nil, true)` and is treated as
+authoritative, so `lookupNodeIdentity` skips its live fallback
+(`go/identity_cache.go`, `go/localapi.go`). Moving listen/bind off the worker
+FIFO removes the accidental delay that used to keep accepts outside that
+window, and the two e2e accept-identity assertions fail as a result (see the
+parked listen/bind PR). Deleting the cache closes the window by construction;
+retaining it requires closing the window some other way.
+
+
 Measure direct `LocalClient.WhoIs` through the exact in-process client with
 `OmitAuth` on macOS, Linux, iOS, and Android where practical. Record p50/p95/p99,
 allocations/op, sustained CPU and throughput for 1, 8, and 32 concurrent TCP/HTTP

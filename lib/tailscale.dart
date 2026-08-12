@@ -1478,7 +1478,7 @@ class Tailscale implements TailscaleClient {
           startFuture,
         ).timeout(remainingBudget());
       } on TimeoutException {
-        return timeoutAfterQuarantine(
+        return await timeoutAfterQuarantine(
           message:
               'Node did not start within $timeout. The matching native '
               'generation was quarantined.',
@@ -1509,7 +1509,7 @@ class Tailscale implements TailscaleClient {
           worker.status(),
         ).timeout(remainingBudget());
       } on TimeoutException {
-        return timeoutAfterQuarantine(
+        return await timeoutAfterQuarantine(
           message: 'Node status did not respond within $timeout after startup.',
           worker: worker,
           token: startResult.runtimeToken,
@@ -1532,7 +1532,7 @@ class Tailscale implements TailscaleClient {
       try {
         await failOnWorkerExit(stable.future).timeout(remainingBudget());
       } on TimeoutException {
-        return timeoutAfterQuarantine(
+        return await timeoutAfterQuarantine(
           message:
               'Node did not reach a stable state within $timeout '
               '(last observed: ${lastObservedState?.name ?? 'unknown'}). '
@@ -1548,7 +1548,7 @@ class Tailscale implements TailscaleClient {
           worker.status(),
         ).timeout(remainingBudget());
       } on TimeoutException {
-        return timeoutAfterQuarantine(
+        return await timeoutAfterQuarantine(
           message:
               'Node reached a stable state but its final status did not '
               'respond within $timeout.',

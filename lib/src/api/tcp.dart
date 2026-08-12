@@ -70,7 +70,11 @@ final class _Tcp implements Tcp {
     }
     try {
       final (:fd, :local, :remote) = await _dial(host, port, timeout);
-      return createFdTailscaleConnection(fd: fd, local: local, remote: remote);
+      return await createFdTailscaleConnection(
+        fd: fd,
+        local: local,
+        remote: remote,
+      );
     } catch (e) {
       if (e is TailscaleTcpException) rethrow;
       throw TailscaleTcpException('tcp.dial failed for $host:$port', cause: e);

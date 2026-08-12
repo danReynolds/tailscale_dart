@@ -402,7 +402,7 @@ Future<TailscaleStatus> _upAndWaitRunning(
         'Observer never reached package Running; states=$states.',
       ),
     );
-    return tsnet.status();
+    return await tsnet.status();
   } finally {
     await subscription.cancel();
   }

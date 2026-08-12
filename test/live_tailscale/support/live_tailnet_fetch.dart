@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../../e2e/support/native_asset_warmup.dart';
+
 typedef LiveTailnetFetchOutcome = ({
   int? statusCode,
   String body,
@@ -21,6 +23,7 @@ Future<LiveTailnetFetchOutcome> runLiveTailnetFetch({
   Duration fetchBudget = const Duration(seconds: 150),
   Duration timeout = const Duration(minutes: 5),
 }) async {
+  await detachLoadedNativeAssetForPeerSubprocesses();
   final stateRoot = Directory.systemTemp.createTempSync('tailscale_live_peer_');
   final appSuffix = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
   final process = await Process.start(

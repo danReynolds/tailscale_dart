@@ -274,6 +274,7 @@ Future<({int? statusCode, String body, String? error})> _runClientFetchOutcome({
   required Uri url,
   Duration fetchBudget = const Duration(seconds: 150),
 }) async {
+  await detachLoadedNativeAssetForPeerSubprocesses();
   final process = await Process.start(
     Platform.resolvedExecutable,
     [

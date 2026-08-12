@@ -180,6 +180,7 @@ Future<void> _setUpLiveTailnet({
       timeout: const Duration(seconds: 120),
     ),
   );
+  await detachLoadedNativeAssetForPeerSubprocesses();
 
   final exitPeer = await PeerProcess.spawn(
     stateDir: exitStateDir,

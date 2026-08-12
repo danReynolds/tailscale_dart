@@ -11,6 +11,18 @@ gate remain before release.
 
 **Conformance and performance closeout:**
 
+- Removed unsupported auto-update mutation and lifecycle-breaking
+  `PrefsUpdate.wantRunning` / `PrefsUpdate.hostname` controls. Hostname remains
+  an `up()` configuration, while current hostname and running intent remain
+  available in the read-only preferences snapshot.
+- Removed the exported Taildrop and Profiles stubs, their placeholder value
+  types, and unused exceptions. These features remain roadmap-only until an
+  implementation can satisfy their upstream semantics.
+- Unknown upstream backend states now parse as `NodeState.unknown` instead of
+  being misreported as unauthenticated `noState`.
+- Corrected the embedded-runtime update, default-hostname, ephemeral-logout,
+  and exit-node stream documentation. Linked the hosted Serve/Funnel swap
+  receipt directly to issue #87.
 - Fixed the raw-disco compatibility pin to use upstream `envknob.Setenv`;
   `os.Setenv` did not update magicsock's already-registered knob. A pinned
   v1.102.2 source contract now proves raw-socket creation remains opt-in. The

@@ -14,7 +14,6 @@ void main() {
         shieldsUp: false,
         advertisedTags: ['tag:server'],
         wantRunning: true,
-        autoUpdate: false,
         hostname: 'app',
         autoExitNode: true,
         exitNodeId: 'n123',
@@ -25,7 +24,6 @@ void main() {
         shieldsUp: false,
         advertisedTags: ['tag:server'],
         wantRunning: true,
-        autoUpdate: false,
         hostname: 'app',
         autoExitNode: true,
         exitNodeId: 'n123',
@@ -36,7 +34,6 @@ void main() {
         shieldsUp: false,
         advertisedTags: ['tag:server'],
         wantRunning: true,
-        autoUpdate: false,
         hostname: 'app',
         autoExitNode: true,
         exitNodeId: 'n123',
@@ -54,13 +51,12 @@ void main() {
         'shieldsUp': false,
         'advertisedTags': ['tag:server'],
         'wantRunning': true,
-        'autoUpdate': true,
         'hostname': 'router',
       });
 
       expect(prefs.advertisedRoutes, ['10.0.0.0/24']);
       expect(prefs.acceptRoutes, isTrue);
-      expect(prefs.autoUpdate, isTrue);
+      expect(prefs.wantRunning, isTrue);
       expect(prefs.hostname, 'router');
       expect(prefs.autoExitNode, isFalse);
       expect(prefs.exitNodeId, isNull);
@@ -81,7 +77,6 @@ void main() {
         'shieldsUp': false,
         'advertisedTags': <String>[],
         'wantRunning': true,
-        'autoUpdate': false,
         'hostname': 'router',
         'autoExitNode': true,
         'exitNodeId': 'n123',
@@ -143,7 +138,6 @@ void main() {
           shieldsUp: false,
           advertisedTags: [],
           wantRunning: true,
-          autoUpdate: false,
           hostname: 'node',
         ),
         updateFn: (update) async {
@@ -154,7 +148,6 @@ void main() {
             shieldsUp: false,
             advertisedTags: [],
             wantRunning: true,
-            autoUpdate: false,
             hostname: 'node',
           );
         },
@@ -163,13 +156,11 @@ void main() {
       await prefs.setAcceptRoutes(true);
       await prefs.setAdvertisedRoutes(['10.0.0.0/24']);
       await prefs.setAdvertisedTags(['tag:server']);
-      await prefs.setHostname('router');
 
       expect(updates, [
         const PrefsUpdate(acceptRoutes: true),
         const PrefsUpdate(advertisedRoutes: ['10.0.0.0/24']),
         const PrefsUpdate(advertisedTags: ['tag:server']),
-        const PrefsUpdate(hostname: 'router'),
       ]);
     });
   });

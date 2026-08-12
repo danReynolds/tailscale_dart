@@ -20,13 +20,11 @@ example. For the forward-looking phase plan, see
 
 The **core mobile public path** is lifecycle + private HTTP/TCP/UDP, identity,
 diagnostics, prefs, and exit-node controls. Platform-qualified TLS and
-Serve/Funnel forwarding remain useful desktop/server surfaces. Optional
-namespaces remain tracked here, but they do not block a useful release for
-embedded Dart apps.
+Serve/Funnel forwarding remain useful desktop/server surfaces. Unimplemented
+ideas are tracked separately in `api-roadmap.md`, not exported as placeholders.
 
 **Legend:**
 - ✅ Working — callable today, tested, returns real values.
-- ⛔ Stub — typed + documented, throws `UnimplementedError`.
 
 **Convention:** all examples assume `final tsnet = Tailscale.instance;`
 and that [`Tailscale.init`](#lifecycle-top-level) has already been called.
@@ -46,8 +44,8 @@ which never accesses Keybay.
 `tsnet.Server` and upstream `local.Client`. HTTP, TCP, UDP, and raw listeners
 use `tsnet`; implemented node introspection, diagnostics, prefs, Serve/Funnel
 configuration, exit-node controls, and certificate lookup use LocalAPI via the
-runtime's cached `local.Client`. The planned Profiles and Taildrop namespaces
-would also wrap LocalAPI.
+runtime's cached `local.Client`. Profiles and Taildrop remain roadmap topics and
+are not exported until implemented.
 
 **Mobile publication qualification:** the current upstream v1.102.2 pin
 compiles the LocalAPI certificate endpoint used by TLS termination as a 404
@@ -71,13 +69,11 @@ upstream version skew visible when adding new wrappers.
 | [`tls`](#tls)           | Certificate-domain discovery and TLS-terminated listener           | Advanced  | domains ✅; bind ✅ desktop/server, unsupported mobile |
 | [`udp`](#udp)           | UDP datagram bindings on a tailnet IP                               | Advanced  | ✅        |
 | [`funnel`](#funnel)     | Public-internet HTTPS forwarding via Tailscale Funnel              | Optional  | ✅ desktop/server; mobile unqualified |
-| [`taildrop`](#taildrop) | Node-to-node file transfer                                          | Optional  | Planned          |
 | [`serve`](#serve)       | Tailnet publication for existing local HTTP services                | Optional  | ✅ desktop/server HTTPS; mobile HTTPS unqualified |
 | [`services`](#tailscale-services) | Tailscale Services hosts via upstream `ListenService`       | Optional  | Planned          |
 | [`exitNode`](#exitnode) | Route outbound traffic through another node                                | Advanced  | ✅        |
-| [`profiles`](#profiles) | Multi-account / multi-tailnet                                        | Optional  | Planned          |
-| [`prefs`](#prefs)       | Subnet routes, shields, tags, auto-update                           | Advanced  | ✅        |
-| [`diag`](#diag)         | Ping, metrics, DERP map, update check                                | Core      | ✅        |
+| [`prefs`](#prefs)       | Subnet routes, shields, tags, and exit-node state                    | Advanced  | ✅        |
+| [`diag`](#diag)         | Ping, metrics, DERP map, and advisory native-version check           | Core      | ✅        |
 | [`whois`](#whois-top-level) | Resolve a tailnet IP to node identity                             | Core      | ✅        |
 | [Errors](#errors)       | Structured exception taxonomy                                        | Core      | ✅        |
 
@@ -207,34 +203,6 @@ Funnel, so public ingress requires hosted Tailscale evidence.
 | `funnel.clear({publicPort, path})` | ✅ desktop/server; mobile unqualified | Coordinate clear: remove the shared handler and disable Funnel visibility for its host/port. | `await tsnet.funnel.clear();` |
 | `TailscalePublishedService.close()` | ✅ where publication is supported | Remove the publication created by `forward`. Idempotent per handle. | `await p.close();` |
 
-## `taildrop`
-
-Node-to-node file transfer ("Taildrop") over the tailnet. Sends go
-directly between nodes with no intermediary — good fit for
-mobile-to-desktop sync, collab tools, anywhere you'd otherwise stand up
-a file server. Byte streams use `Stream<Uint8List>` throughout so
-producer/consumer can pipe without intermediate buffering.
-
-This remains optional. Upstream Taildrop is still aimed at transfers
-between a user's own personal devices, so it is not a strong fit for
-generic tagged-node or service-to-service workflows.
-
-**Status:** planned. **Depends on:** the simplest stream-safe
-byte path available at the time, likely fd-backed transport or a
-LocalAPI-backed byte stream.
-
-| API | Status | Description | Example |
-| --- | ------ | ----------- | ------- |
-| `taildrop.targets()` → `Future<List<FileTarget>>` | ⛔ | Nodes eligible to receive files right now. | `final ts = await tsnet.taildrop.targets();` |
-| `taildrop.push({target, name, data, size?})` | ⛔ | Stream a file to a node. `size` enables receiver progress reporting. | `await tsnet.taildrop.push(target: t, name: 'x', data: bytes);` |
-| `taildrop.waitingFiles()` → `Future<List<WaitingFile>>` | ⛔ | Received files not yet picked up. | `final files = await tsnet.taildrop.waitingFiles();` |
-| `taildrop.awaitWaitingFiles({timeout})` | ⛔ | Block until at least one file arrives or timeout fires. | `await tsnet.taildrop.awaitWaitingFiles(timeout: ...);` |
-| `taildrop.openRead(name)` → `Stream<Uint8List>` | ⛔ | Byte-stream a received file. Caller owns persistence. | `tsnet.taildrop.openRead('x').pipe(sink);` |
-| `taildrop.delete(name)` | ⛔ | Discard a received file without reading. | `await tsnet.taildrop.delete('x');` |
-| `taildrop.onWaitingFile` → `Stream<WaitingFile>` | ⛔ | Reactive: emits each arriving file. | `tsnet.taildrop.onWaitingFile.listen(save);` |
-| `FileTarget` value type | ✅ | Node identity (nodeId, hostname, userLoginName). | `target.hostname == 'laptop'` |
-| `WaitingFile` value type | ✅ | Name + size of a received file. | `file.size > 0` |
-
 ## `serve`
 
 Programmatic access to what `tailscale serve` / `tailscale funnel` do
@@ -309,35 +277,13 @@ recommendation policy is control-plane-specific.
 | `exitNode.clear()` | ✅ | Stop routing through an exit node. | `await tsnet.exitNode.clear();` |
 | `exitNode.onCurrentChange` → `Stream<TailscaleNode?>` | ✅ | React to runtime exit-node selection changes. | `tsnet.exitNode.onCurrentChange.listen(update);` |
 
-## `profiles`
-
-Multi-account / multi-tailnet: one device, several identities. Useful
-for a single app operating in both a personal and a work tailnet, or
-dev vs prod. `switchTo` accepts a `LoginProfile` (type-safe) or use
-`switchToId` when you've persisted only the ID.
-
-Tracked as optional. If the package stays focused on "embed one node in
-one app", this may never be a common need.
-
-**Status:** planned.
-
-| API | Status | Description | Example |
-| --- | ------ | ----------- | ------- |
-| `profiles.current()` → `Future<LoginProfile?>` | ⛔ | Currently active profile, or null on a fresh install. | `final p = await tsnet.profiles.current();` |
-| `profiles.list()` → `Future<List<LoginProfile>>` | ⛔ | All profiles persisted on this node. | `final all = await tsnet.profiles.list();` |
-| `profiles.switchTo(LoginProfile)` | ⛔ | Disconnect + reconnect with the target profile. | `await tsnet.profiles.switchTo(work);` |
-| `profiles.switchToId(id)` | ⛔ | Escape hatch for a persisted ID. | `await tsnet.profiles.switchToId('p1');` |
-| `profiles.delete(LoginProfile)` | ⛔ | Remove profile + its persisted credentials. | `await tsnet.profiles.delete(old);` |
-| `profiles.deleteById(id)` | ⛔ | Escape hatch for delete by ID. | `await tsnet.profiles.deleteById('p1');` |
-| `profiles.newEmpty()` | ⛔ | Create an empty slot for the next `up()` with a fresh authkey. | `await tsnet.profiles.newEmpty();` |
-| `LoginProfile` value type | ✅ | `id`, `userLoginName`, `tailnetName`. | `profile.tailnetName == 'acme.com'` |
-
 ## `prefs`
 
-The long tail of node preferences — subnet routes, shields, advertised
-tags, auto-update opt-in. Common single-field changes have named
-setters (`set*` prefix for consistency); atomic multi-field edits use
-`updateMasked(PrefsUpdate)`.
+The supported long tail of node preferences — subnet routes, shields, and
+advertised tags. Current hostname and running intent are readable snapshots,
+but lifecycle authority stays with `up()` / `down()`. Common single-field
+changes have named setters (`set*` prefix for consistency); atomic multi-field
+edits use `updateMasked(PrefsUpdate)`.
 Advanced node-control surface rather than core day-one app plumbing.
 
 **Status:** implemented. Headscale covers LocalAPI prefs write/read behavior;
@@ -349,10 +295,8 @@ the on-demand live Tailscale suite covers exit-node recommendation policy.
 | `prefs.setAdvertisedRoutes(cidrs)` | ✅ | Replace advertised subnet routes. | `await tsnet.prefs.setAdvertisedRoutes(['10.0.0.0/24']);` |
 | `prefs.setAcceptRoutes(bool)` | ✅ | Accept subnet routes from other nodes. | `await tsnet.prefs.setAcceptRoutes(true);` |
 | `prefs.setShieldsUp(bool)` | ✅ | Block all inbound connections. | `await tsnet.prefs.setShieldsUp(true);` |
-| `prefs.setAutoUpdate(bool)` | ✅ | Opt in/out of tsnet auto-update. | `await tsnet.prefs.setAutoUpdate(true);` |
 | `prefs.setAdvertisedTags(tags)` | ✅ | Replace advertised ACL tags. | `await tsnet.prefs.setAdvertisedTags(['tag:prod']);` |
-| `prefs.setHostname(hostname)` | ✅ | Change this node's tailnet-visible hostname. | `await tsnet.prefs.setHostname('router');` |
-| `prefs.updateMasked(PrefsUpdate)` | ✅ | Atomic multi-field edit; unset fields stay as-is. | `await tsnet.prefs.updateMasked(PrefsUpdate(shieldsUp: true));` |
+| `prefs.updateMasked(PrefsUpdate)` | ✅ | Atomic routes, Shields Up, tags, and exit-node edit; unset fields stay as-is. | `await tsnet.prefs.updateMasked(PrefsUpdate(shieldsUp: true));` |
 
 ## `diag`
 
@@ -367,7 +311,7 @@ ICMP).
 | `diag.ping(ip, {timeout, type})` → `Future<PingResult>` | ✅ | RTT + route diagnostic. `PingResult.path` distinguishes `direct`, `derp`, and `unknown` when the chosen ping type does not expose enough metadata. `type` is one of `disco` (default, no privileges), `tsmp`, `icmp`. | `final r = await tsnet.diag.ping('100.64.0.5');` |
 | `diag.metrics()` → `Future<String>` | ✅ | Prometheus-format metrics snapshot from the embedded runtime. | `print(await tsnet.diag.metrics());` |
 | `diag.derpMap()` → `Future<DERPMap>` | ✅ | Current DERP relay map. | `final m = await tsnet.diag.derpMap();` |
-| `diag.checkUpdate()` → `Future<ClientVersion?>` | ✅ | Newer version if available, else null. Fields match `tailcfg.ClientVersion` (latestVersion, urgentSecurityUpdate, notifyText). | `final v = await tsnet.diag.checkUpdate();` |
+| `diag.checkUpdate()` → `Future<ClientVersion?>` | ✅ | Advisory newer native Tailscale version, else null. Upgrade the package or host app to apply it; the embedded runtime cannot replace itself. | `final v = await tsnet.diag.checkUpdate();` |
 | `PingResult`, `DERPMap`, `DERPRegion`, `DERPNode`, `ClientVersion` value types | ✅ | Immutable returns with `==` / `hashCode`. | `switch (ping.path) { ... }` |
 
 ## `whois` (top-level)
@@ -404,10 +348,8 @@ surface `featureDisabled`, rethrow otherwise).
 | `TailscaleStatusException` | ✅ | `status()`. | `on TailscaleStatusException catch (_) { ... }` |
 | `TailscaleLogoutException` | ✅ | `logout()`. | `on TailscaleLogoutException catch (_) { ... }` |
 | `TailscaleForgetLocalIdentityException` | ✅ | `forgetLocalIdentity()`. | `on TailscaleForgetLocalIdentityException catch (_) { ... }` |
-| `TailscaleTaildropException` | ✅ | `taildrop.*`. | `on TailscaleTaildropException catch (_) { ... }` |
 | `TailscaleServeException` | ✅ | `serve.*` incl. ETag conflicts. | `on TailscaleServeException catch (e) { ... }` |
 | `TailscalePrefsException` | ✅ | `prefs.*`. | `on TailscalePrefsException catch (_) { ... }` |
-| `TailscaleProfilesException` | ✅ | `profiles.*`. | `on TailscaleProfilesException catch (_) { ... }` |
 | `TailscaleExitNodeException` | ✅ | `exitNode.*`. | `on TailscaleExitNodeException catch (_) { ... }` |
 | `TailscaleDiagException` | ✅ | `diag.*`. | `on TailscaleDiagException catch (_) { ... }` |
 | `TailscaleRuntimeError` (not `Exception`) | ✅ | Async errors pushed from Go via `onError`. | `tsnet.onError.listen((e) => report(e));` |

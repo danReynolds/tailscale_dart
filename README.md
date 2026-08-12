@@ -186,10 +186,8 @@ TLS discovery | `tls.domains` | Supported read-only API | Reads the runtime's ad
 Serve | `serve.forward`, `serve.clear` | Desktop/server qualified | Tailnet publication through the runtime-owned ServeConfig manager. The R5 replacement/exact-handle and macOS persisted process-crash/restart receipts passed 2026-08-10; mobile HTTPS qualification remains pending.
 Funnel | `funnel.forward`, `funnel.clear` | Desktop/server qualified | The public-visibility mode of the same ServeConfig mapping used by Serve. Public ingress, tailnet reach, and the R5 swap receipt have passed hosted Tailscale; all mobile receipts remain pending.
 Tailscale Services | N/A | Planned | Upstream `tsnet.Server.ListenService` is available in the current pin; no Dart wrapper yet.
-Routing controls | `prefs`, `exitNode` | Supported | Subnet routes, Shields Up, tags, hostname, auto-update, and exit nodes.
-Diagnostics | `diag` | Supported | Ping, metrics, DERP map, and update checks.
-Taildrop | `taildrop` | Planned | Exported as a stub; not implemented in this release.
-Profiles | `profiles` | Planned | Exported as a stub; not implemented in this release.
+Routing controls | `prefs`, `exitNode` | Supported | Subnet routes, Shields Up, tags, and exit nodes. Hostname is configured through `up()` so lifecycle state stays coherent.
+Diagnostics | `diag` | Supported | Ping, metrics, DERP map, and advisory native-version checks. Embedded Tailscale is upgraded with the package or host application, not in place.
 Windows | N/A | Unsupported | v1 is POSIX-only while the Windows data-plane backend is designed.
 
 See [doc/api-status.md](https://github.com/danReynolds/tailscale_dart/blob/main/doc/api-status.md) for the full namespace-by-namespace API map.

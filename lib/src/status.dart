@@ -40,17 +40,22 @@ enum NodeState {
   ///
   /// This does not prove that control-plane credentials are still valid. Call
   /// [Tailscale.up] to determine the current upstream state.
-  stopped;
+  stopped,
+
+  /// A lifecycle state added by a newer upstream Tailscale runtime that this
+  /// package does not yet recognize.
+  unknown;
 
   /// Parses a Go `ipn.State` string into a [NodeState].
   static NodeState parse(String? s) => switch (s) {
+    null || '' => NodeState.noState,
     'NoState' => NodeState.noState,
     'NeedsLogin' => NodeState.needsLogin,
     'NeedsMachineAuth' => NodeState.needsMachineAuth,
     'Starting' => NodeState.starting,
     'Running' => NodeState.running,
     'Stopped' => NodeState.stopped,
-    _ => NodeState.noState,
+    _ => NodeState.unknown,
   };
 }
 
@@ -116,9 +121,10 @@ class TailscaleStatus {
   /// Parses a status snapshot from the JSON shape produced by Go's
   /// `ipnstate.Status`.
   ///
-  /// Missing or malformed fields fall back to safe defaults (empty lists,
-  /// [NodeState.noState]) rather than throwing — callers should treat the
-  /// result as a best-effort view of the engine's reported state.
+  /// Missing fields fall back to safe defaults (empty lists and
+  /// [NodeState.noState]); a non-empty unrecognized upstream state becomes
+  /// [NodeState.unknown]. Callers should treat the result as a best-effort view
+  /// of the engine's reported state.
   factory TailscaleStatus.fromJson(Map<String, dynamic> json) {
     final self = json['Self'] as Map<String, dynamic>?;
 

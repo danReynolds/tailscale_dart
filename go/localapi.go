@@ -6,8 +6,7 @@
 //   3. Marshal the typed response into the shape Dart expects.
 //
 // Kept separate from lib.go so the LocalAPI surface grows in one
-// place as later phases layer more of it on (prefs, exit nodes,
-// profiles, serve, taildrop).
+// place as the typed surface grows (prefs, exit nodes, serve).
 
 package tailscale
 
@@ -30,7 +29,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/opt"
 )
 
 type runtimeLocalClient struct {
@@ -414,9 +412,6 @@ type prefsUpdatePayload struct {
 	AcceptRoutes     *bool     `json:"acceptRoutes"`
 	ShieldsUp        *bool     `json:"shieldsUp"`
 	AdvertisedTags   *[]string `json:"advertisedTags"`
-	WantRunning      *bool     `json:"wantRunning"`
-	AutoUpdate       *bool     `json:"autoUpdate"`
-	Hostname         *string   `json:"hostname"`
 	ExitNodeID       *string   `json:"exitNodeId"`
 }
 
@@ -940,11 +935,6 @@ func prefsToJSON(prefs *ipn.Prefs) string {
 		advertisedTags = []string{}
 	}
 
-	autoUpdate := false
-	if apply, ok := prefs.AutoUpdate.Apply.Get(); ok {
-		autoUpdate = apply
-	}
-
 	var exitNodeID *string
 	if !prefs.ExitNodeID.IsZero() {
 		id := string(prefs.ExitNodeID)
@@ -957,7 +947,6 @@ func prefsToJSON(prefs *ipn.Prefs) string {
 		"shieldsUp":        prefs.ShieldsUp,
 		"advertisedTags":   advertisedTags,
 		"wantRunning":      prefs.WantRunning,
-		"autoUpdate":       autoUpdate,
 		"hostname":         prefs.Hostname,
 		"exitNodeId":       exitNodeID,
 		"autoExitNode":     prefs.AutoExitNode.IsSet(),
@@ -990,27 +979,6 @@ func maskedPrefsFromPayload(payload prefsUpdatePayload) (*ipn.MaskedPrefs, error
 	if payload.AdvertisedTags != nil {
 		masked.AdvertiseTags = append([]string(nil), (*payload.AdvertisedTags)...)
 		masked.AdvertiseTagsSet = true
-	}
-	if payload.WantRunning != nil {
-		masked.WantRunning = *payload.WantRunning
-		masked.WantRunningSet = true
-	}
-	if payload.AutoUpdate != nil {
-		// Dart intentionally exposes auto-update as one bool even though
-		// upstream tracks Check and Apply separately. The package-level
-		// control is "auto-update on/off", matching the CLI-level behavior.
-		masked.AutoUpdate = ipn.AutoUpdatePrefs{
-			Check: *payload.AutoUpdate,
-			Apply: opt.NewBool(*payload.AutoUpdate),
-		}
-		masked.AutoUpdateSet = ipn.AutoUpdatePrefsMask{
-			CheckSet: true,
-			ApplySet: true,
-		}
-	}
-	if payload.Hostname != nil {
-		masked.Hostname = strings.TrimSpace(*payload.Hostname)
-		masked.HostnameSet = true
 	}
 	if payload.ExitNodeID != nil {
 		masked.ClearExitNode()

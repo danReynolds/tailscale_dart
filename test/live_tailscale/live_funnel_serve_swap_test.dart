@@ -1,5 +1,9 @@
 /// Hosted-Tailscale receipt for Serve/Funnel replacement on one coordinate.
 ///
+/// Regression coverage for <https://github.com/danReynolds/tailscale_dart/issues/87>:
+/// switching a working private Serve publication to Funnel must make the same
+/// port publicly reachable instead of leaving it blocked.
+///
 /// Serve and Funnel now mutate one upstream ServeConfig authority. A later
 /// call for the same port and path replaces the handler and visibility mode;
 /// its exact handle cannot be cleared by an older handle.
@@ -84,7 +88,7 @@ void main() {
   });
 
   test(
-    'Serve -> Funnel -> Serve uses one mapping and exact handles',
+    'issue #87: Serve -> Funnel -> Serve uses one mapping and exact handles',
     () async {
       await warmUpNativeAssetForPeerSubprocesses();
 

@@ -56,11 +56,9 @@ void main() {
         TailscaleTcpException('_'),
         TailscaleUdpException('_'),
         TailscaleTlsException('_'),
-        TailscaleTaildropException('_'),
         TailscaleServeException('_'),
         TailscaleFunnelException('_'),
         TailscalePrefsException('_'),
-        TailscaleProfilesException('_'),
         TailscaleExitNodeException('_'),
         TailscaleDiagException('_'),
       ];

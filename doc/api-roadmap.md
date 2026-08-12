@@ -34,8 +34,8 @@ Older Android and headless Linux use explicit ephemeral mode.
 | P0 | Serve/Funnel and mobile truth | Serve and Funnel share upstream state, while TLS certificate lookup is disabled on iOS/Android. | R5 implements one first-Up/config authority, ServeConfig Funnel, bounded ETag writes, and exact handles. Hosted tailnet/swap and macOS persisted process-crash/restart receipts passed 2026-08-10. Keep `tls.bind` explicitly unsupported in conformance with upstream and ServeConfig Funnel unqualified until separate device/sidecar receipts pass. |
 | P0 | Publishing readiness | Users need accurate README, changelog, platform metadata, package contents, and repeatable validation commands before public release. | Historical `0.3.x` gate completed; R10 in the rearchitecture plan is the next launch gate. |
 | P1 | Windows backend decision | Windows is the only major platform gap. Supporting it likely requires either a Windows-native handle/reactor backend or a separate fallback carrier. | Deferred intentionally; do not expose as supported until designed. |
-| P2 | Taildrop | Useful for app-to-app file transfer, but upstream semantics are user-device-oriented and the byte-path decision should stay stream-safe. | Declared API, not implemented. |
-| P2 | Profiles | Useful when one app needs multiple tailnet identities, but most embedded apps only need one node identity. | Declared API, not implemented. |
+| P2 | Taildrop | Useful for app-to-app file transfer, but upstream semantics are user-device-oriented and the byte-path decision should stay stream-safe. | Roadmap only; not exported until implemented. |
+| P2 | Profiles | Useful when one app needs multiple tailnet identities, but most embedded apps only need one node identity. | Roadmap only; not exported until implemented. |
 | P2 | Tailscale Services | Useful for tagged service hosts and stable service names; upstream `ListenService` is now available in the current `tailscale.com` pin. | Design the Dart listener shape before exposing it. |
 | P3 | Generic LocalAPI escape hatch | Helps advanced users reach endpoints before a typed wrapper exists, but it can freeze an awkward low-level API if added too early. | Wait until the typed surface settles. |
 | P3 | Advanced Serve/Funnel config | Raw config get/set, directory serving, richer policy inspection, and persistent background publications could be useful for operator tools. | Keep `forward/clear` small until real users need more. |
@@ -60,10 +60,10 @@ Strongest use cases:
 - receive files into an app-managed inbox where the app owns persistence,
   validation, and user approval
 
-The API is already stream-shaped (`Stream<Uint8List>`) so callers can avoid
-loading whole files into memory. The unresolved implementation choice is whether
-to use fd-backed streaming, LocalAPI streaming, or a thin wrapper around
-upstream Taildrop internals.
+Any future API should be stream-shaped so callers can avoid loading whole files
+into memory. The unresolved implementation choice is whether to use fd-backed
+streaming, LocalAPI streaming, or a thin wrapper around upstream Taildrop
+internals.
 
 ### Profiles
 

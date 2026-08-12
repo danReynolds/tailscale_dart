@@ -158,11 +158,12 @@ void main() {
       }
     });
 
-    test('unknown value falls back to noState', () {
+    test('unknown value remains distinguishable from noState', () {
       final status = TailscaleStatus.fromJson({
         'BackendState': 'SomeFutureState',
       });
-      expect(status.state, NodeState.noState);
+      expect(status.state, NodeState.unknown);
+      expect(TailscaleStatus.fromJson(const {}).state, NodeState.noState);
     });
   });
 

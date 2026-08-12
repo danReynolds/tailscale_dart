@@ -11,6 +11,27 @@ gate remain before release.
 
 **Conformance and performance closeout:**
 
+- Removed unsupported auto-update mutation and lifecycle-breaking
+  `PrefsUpdate.wantRunning` / `PrefsUpdate.hostname` controls. Hostname remains
+  an `up()` configuration, while current hostname and running intent remain
+  available in the read-only preferences snapshot.
+- Removed the exported Taildrop and Profiles stubs, their placeholder value
+  types, and unused exceptions. These features remain roadmap-only until an
+  implementation can satisfy their upstream semantics.
+- Unknown upstream backend states now parse as `NodeState.unknown` instead of
+  being misreported as unauthenticated `noState`.
+- Corrected the embedded-runtime update, default-hostname, ephemeral-logout,
+  and exit-node stream documentation. Linked the hosted Serve/Funnel swap
+  receipt directly to issue #87.
+- Fixed the raw-disco compatibility pin to use upstream `envknob.Setenv`;
+  `os.Setenv` did not update magicsock's already-registered knob. A pinned
+  v1.102.2 source contract now proves raw-socket creation remains opt-in. The
+  pin stays in place until the physical Android launch receipt passes.
+- Removed the obsolete Linux native-asset detach workaround now that stable
+  Dart includes the delete-before-copy dylib fix, while retaining the small
+  subprocess warmup that avoids duplicate native builds.
+- Widened the Keybay constraint to the semver-compatible `^0.1.0` range so the
+  package passes dependency-constraint publication validation.
 - Default `udp.bind()` now asks the initialized upstream server for
   `TailscaleIPs()` directly instead of materializing the public full-status
   model in Dart solely to recover the node's IPv4 address.

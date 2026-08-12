@@ -210,8 +210,10 @@ Future<double> _measureInbound({
   required int bytesPerPair,
 }) async {
   final setup = _createPairs(pairs, spread: spread);
-  print('  inbound ${spread ? "spread" : "pinned"}: '
-      '${_shardReport(setup.lefts)}');
+  print(
+    '  inbound ${spread ? "spread" : "pinned"}: '
+    '${_shardReport(setup.lefts)}',
+  );
   final transports = <PosixFdTransport>[];
   for (final left in setup.lefts) {
     transports.add(
@@ -257,8 +259,10 @@ Future<double> _measureOutbound({
   required int bytesPerPair,
 }) async {
   final setup = _createPairs(pairs, spread: spread);
-  print('  outbound ${spread ? "spread" : "pinned"}: '
-      '${_shardReport(setup.lefts)}');
+  print(
+    '  outbound ${spread ? "spread" : "pinned"}: '
+    '${_shardReport(setup.lefts)}',
+  );
   final transports = <PosixFdTransport>[];
   for (final left in setup.lefts) {
     transports.add(
@@ -301,8 +305,10 @@ Future<void> main(List<String> args) async {
   final pairs = args.isNotEmpty ? int.parse(args[0]) : 4;
   final mib = args.length > 1 ? int.parse(args[1]) : 128;
   final bytesPerPair = mib * 1024 * 1024;
-  print('shardCount=$_shardCount pairs=$pairs payload=${mib}MiB/pair '
-      'sockbuf=${_sockBufBytes ~/ 1024}KiB chunk=${_chunkBytes ~/ 1024}KiB');
+  print(
+    'shardCount=$_shardCount pairs=$pairs payload=${mib}MiB/pair '
+    'sockbuf=${_sockBufBytes ~/ 1024}KiB chunk=${_chunkBytes ~/ 1024}KiB',
+  );
 
   for (final direction in ['inbound', 'outbound']) {
     for (final spread in [false, true]) {
@@ -321,8 +327,10 @@ Future<void> main(List<String> args) async {
               );
         if (mibs > best) best = mibs;
       }
-      print('$direction ${spread ? "spread" : "pinned"}: '
-          '${best.toStringAsFixed(0)} MiB/s');
+      print(
+        '$direction ${spread ? "spread" : "pinned"}: '
+        '${best.toStringAsFixed(0)} MiB/s',
+      );
       // Let idle shards exit between conditions for a clean slate.
       await Future<void>.delayed(const Duration(milliseconds: 400));
     }

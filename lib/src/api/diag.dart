@@ -239,11 +239,13 @@ class DERPNode {
   String toString() => 'DERPNode(name: $name, hostName: $hostName)';
 }
 
-/// An available client-version update (result of [Diag.checkUpdate]).
+/// An advisory upstream client-version update (result of [Diag.checkUpdate]).
 ///
 /// Mirrors `tailcfg.ClientVersion`. [Diag.checkUpdate] returns null
 /// when the node is already on the latest version, so the fields
-/// here always describe a concrete update to apply.
+/// here describe a newer native Tailscale version. The embedded runtime cannot
+/// replace itself; callers update it by upgrading this Dart package or the host
+/// application version that bundles it.
 @immutable
 class ClientVersion {
   const ClientVersion({
@@ -255,7 +257,8 @@ class ClientVersion {
   /// The newer version available for this platform (e.g. `1.94.1`).
   final String latestVersion;
 
-  /// When true, the update includes a security fix — apply promptly.
+  /// When true, the newer upstream version includes a security fix. Upgrade
+  /// the package or host application promptly.
   final bool urgentSecurityUpdate;
 
   /// Optional human-readable notification text from the control
@@ -370,8 +373,11 @@ abstract class Diag {
   /// map for this node.
   Future<DERPMap> derpMap();
 
-  /// Checks whether a newer version of the embedded tsnet runtime is
-  /// available. Returns null when already on the latest.
+  /// Checks whether upstream reports a newer native Tailscale version.
+  ///
+  /// Returns null when already on the latest. This is advisory: the embedded
+  /// runtime cannot self-update, so callers must upgrade the Dart package or
+  /// host application that bundles it.
   Future<ClientVersion?> checkUpdate();
 
   /// Census of the native runtime's internal registries — live listener,

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import '../../e2e/support/native_asset_workaround.dart';
+import '../../e2e/support/native_asset_warmup.dart';
 
 typedef LiveTailnetFetchOutcome = ({
   int? statusCode,

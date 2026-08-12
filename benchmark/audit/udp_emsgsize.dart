@@ -47,10 +47,14 @@ final _socketpair = _lib.lookupFunction<_SocketPairC, _SocketPairD>(
 Future<void> main() async {
   ensurePosixFdTransportAvailable();
   print('platform: ${Platform.operatingSystem}');
-  print('Sending datagrams of increasing size through the reactor write path '
-      'over an UNTUNED datagram socketpair (production config).');
-  print('EMSGSIZE fires on the reactor write(2) into the socketpair, before '
-      'the peer ever reads, so no reader is needed:');
+  print(
+    'Sending datagrams of increasing size through the reactor write path '
+    'over an UNTUNED datagram socketpair (production config).',
+  );
+  print(
+    'EMSGSIZE fires on the reactor write(2) into the socketpair, before '
+    'the peer ever reads, so no reader is needed:',
+  );
 
   for (final size in [1024, 2048, 4096, 8192, 16384, 32768, 60 * 1024]) {
     final (dartSide, peerSide) = _dgramPairUntuned();
@@ -58,7 +62,9 @@ Future<void> main() async {
     // Observe done so its error (if the transport dies) is surfaced here and
     // not as an uncaught zone error.
     Object? doneError;
-    unawaited(transport.done.then((_) {}, onError: (Object e) => doneError = e));
+    unawaited(
+      transport.done.then((_) {}, onError: (Object e) => doneError = e),
+    );
     final datagram = Uint8List(size);
     var outcome = 'delivered (buffered in socketpair)';
     try {

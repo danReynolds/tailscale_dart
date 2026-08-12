@@ -20,7 +20,7 @@ import 'dart:io';
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
-import '../e2e/support/native_asset_workaround.dart';
+import '../e2e/support/native_asset_warmup.dart';
 import '../e2e/support/peer_process.dart';
 import '../e2e/support/state_waiters.dart';
 import '../integration/support/process_state_root.dart';
@@ -151,7 +151,6 @@ Future<void> _setUpLiveTailnet({
   required Set<String> deviceIdsToDelete,
 }) async {
   await warmUpNativeAssetForPeerSubprocesses();
-  await detachLoadedNativeAssetForPeerSubprocesses();
 
   final api = LiveTailscaleApi(apiKey: apiKey, tailnetId: tailnetId);
   onApi(api);
@@ -181,6 +180,7 @@ Future<void> _setUpLiveTailnet({
       timeout: const Duration(seconds: 120),
     ),
   );
+  await detachLoadedNativeAssetForPeerSubprocesses();
 
   final exitPeer = await PeerProcess.spawn(
     stateDir: exitStateDir,

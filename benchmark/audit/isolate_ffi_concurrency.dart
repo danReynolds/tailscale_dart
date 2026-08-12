@@ -46,14 +46,18 @@ Future<int> _spawnBlocking(int micros) async {
 }
 
 Future<void> main() async {
-  print('=== A1: N isolates each usleep(500ms) — concurrent or serialized? ===');
+  print(
+    '=== A1: N isolates each usleep(500ms) — concurrent or serialized? ===',
+  );
   for (final n in [1, 4, 8]) {
     final sw = Stopwatch()..start();
     await Future.wait([for (var i = 0; i < n; i++) _spawnBlocking(500 * 1000)]);
     sw.stop();
     final wall = sw.elapsedMilliseconds;
-    print('  n=$n: wall=${wall}ms '
-        '(${wall < 500 * 2 ? "CONCURRENT" : "SERIALIZED (~${wall ~/ 500}x)"})');
+    print(
+      '  n=$n: wall=${wall}ms '
+      '(${wall < 500 * 2 ? "CONCURRENT" : "SERIALIZED (~${wall ~/ 500}x)"})',
+    );
   }
 
   print('');
@@ -71,8 +75,10 @@ Future<void> main() async {
     if (h >= 0) native.duneReactorClose(h);
     return h;
   });
-  print('  duneReactorCreate() in Isolate.run -> $handle '
-      '(${handle >= 0 ? "WORKS: @Native resolves in a helper isolate" : "FAILED"})');
+  print(
+    '  duneReactorCreate() in Isolate.run -> $handle '
+    '(${handle >= 0 ? "WORKS: @Native resolves in a helper isolate" : "FAILED"})',
+  );
 
   print('');
   print('=== A2b: Isolate.run spawn overhead (per blocking call) ===');
@@ -86,12 +92,16 @@ Future<void> main() async {
     spawn.add(sw.elapsedMicroseconds);
   }
   spawn.sort();
-  print('  Isolate.run round-trip: p50=${(spawn[10] / 1000).toStringAsFixed(2)}ms '
-      'p95=${(spawn[19] / 1000).toStringAsFixed(2)}ms (overhead per blocking call)');
+  print(
+    '  Isolate.run round-trip: p50=${(spawn[10] / 1000).toStringAsFixed(2)}ms '
+    'p95=${(spawn[19] / 1000).toStringAsFixed(2)}ms (overhead per blocking call)',
+  );
 
   print('');
-  print('=== A3: one slow isolate (usleep 2s) must not delay fast calls '
-      'on another isolate ===');
+  print(
+    '=== A3: one slow isolate (usleep 2s) must not delay fast calls '
+    'on another isolate ===',
+  );
   final slow = _spawnBlocking(2 * 1000 * 1000); // 2s on its own isolate
   await Future<void>.delayed(const Duration(milliseconds: 50));
   // Fire many fast blocking calls on their own isolates while the slow one runs.
@@ -102,8 +112,12 @@ Future<void> main() async {
   }
   fastWall.stop();
   final slowElapsed = await slow;
-  print('  10 fast (1ms) calls completed in ${fastWall.elapsedMilliseconds}ms '
-      'while a 2s call ran concurrently (slow took ${slowElapsed ~/ 1000}ms)');
-  print('  => fast calls were ${fastWall.elapsedMilliseconds < 1500 ? "NOT blocked" : "BLOCKED"} '
-      'by the slow one.');
+  print(
+    '  10 fast (1ms) calls completed in ${fastWall.elapsedMilliseconds}ms '
+    'while a 2s call ran concurrently (slow took ${slowElapsed ~/ 1000}ms)',
+  );
+  print(
+    '  => fast calls were ${fastWall.elapsedMilliseconds < 1500 ? "NOT blocked" : "BLOCKED"} '
+    'by the slow one.',
+  );
 }

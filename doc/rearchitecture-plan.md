@@ -25,8 +25,11 @@ NeedsLogin with zero SIGSYS, raw-disco pin as shipped, no tailnet traffic)
 passed the same day after fixing ephemeral scratch to use the Dart-supplied
 platform temp directory; the matching iOS-simulator runtime receipt (iPhone 17
 Pro, two generations to NeedsLogin, tsnet netstack boot logged, no crash)
-passed the same day. The non-device R6 inventory/backup work and the R8/R9
-audits closed on 2026-08-11. Real-device custody, backup-policy readback,
+passed the same day. Fresh exact-main app-process smoke on 2026-08-11 then
+joined both the Android arm64 emulator and iOS simulator to local Headscale and
+passed WhoIs, HTTP GET/POST, TCP, UDP, and down/restart probes. The non-device
+R6 inventory/backup work and the R8/R9 audits closed on 2026-08-11. Real-device
+custody, backup-policy readback,
 private-data-plane/publication receipts, and the R10 integrated physical gate
 remain authoritative requirements below.
 
@@ -334,7 +337,7 @@ authoritative, `nodeRuntime` becomes the ownership boundary, the epoch remains
 the stale-commit guard, caches require current measurements, and the fd reactor
 stays as the justified Dart/mobile data-plane adaptation.
 
-## Live work disposition
+## Historical work disposition
 
 Snapshot: 2026-08-10.
 
@@ -344,7 +347,7 @@ Snapshot: 2026-08-10.
 | PR [#89](https://github.com/danReynolds/tailscale_dart/pull/89) | Closed unmerged 2026-08-10; its useful convergence behavior and hosted tests were adapted into merged R5 replacement #99, without its temporary process-global ownership design. | Complete. The separate macOS crash/restart receipt passed; mobile/platform receipts remain evidence gates. |
 | PR [#86](https://github.com/danReynolds/tailscale_dart/pull/86) | Closed unmerged 2026-08-10; superseded by the encrypted-state cutover. | Complete: SQLite was removed rather than upgraded. |
 | Issue [#81](https://github.com/danReynolds/tailscale_dart/issues/81) | Closed 2026-08-10 by merged #90. | Complete: the Android runtime receipt is recorded in #90. |
-| Issue [#87](https://github.com/danReynolds/tailscale_dart/issues/87) | Reopened after #99 because the in-process fix had landed but the persisted process-crash/restart receipt had not. That macOS production-Keybay receipt passed on 2026-08-10. | Close only after the receipt PR is reviewed and merged, linking both #99 and the exact hosted evidence. |
+| Issue [#87](https://github.com/danReynolds/tailscale_dart/issues/87) | Closed after #100 merged the macOS production-Keybay persisted process-crash/restart receipt on 2026-08-10. | Complete: #99 owns the in-process fix and #100 owns the hosted crash/restart evidence. |
 | Dirty SQLite contract worktree | Preserve only as test evidence. Do not merge its SQLite implementation. | Generalize nil-delete, exact-empty, reopen, and concurrency cases into the R4b StateStore suite; use non-opening legacy-file recognition in R2/R4d, then retire the worktree. |
 | Dirty Serve/Funnel worktree | Its useful semantic deletion and live-test intent are incorporated into R5; its ownership model is superseded. | Retire only after the R5 replacement is merged and linked. |
 
@@ -796,6 +799,14 @@ boundary in conformance with upstream's compiled-out certificate endpoint.
   into one generic operation error.
 
 ### R10 — launch gate and documentation truth
+
+**Status 2026-08-11:** the pinned v1.102.2 source contract now proves Linux raw
+disco is registered as a boolean opt-in and guards raw-socket creation before
+use. The compatibility setter now uses upstream `envknob.Setenv`, so it updates
+magicsock's already-registered value instead of changing only `os.Environ`.
+Android emulator and iOS simulator app-process smoke passed on exact main, but
+the compatibility pin remains until the required physical Android lifecycle
+receipt passes.
 
 - Run the complete verification matrix below from a clean checkout at the
   release commit.

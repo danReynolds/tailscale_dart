@@ -28,7 +28,7 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 | [pub.dev](https://pub.dev/packages/tailscale) | Install, versions |
 | [CHANGELOG](https://github.com/danReynolds/tailscale_dart/blob/main/CHANGELOG.md) | Release notes and breaking changes |
 | [`example/`](https://github.com/danReynolds/tailscale_dart/tree/main/example) | Runnable Dart snippets |
-| [Rearchitecture plan](https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md) | Implementation status, remaining architecture work, live PR disposition, and acceptance gates |
+| [Rearchitecture plan](https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md) | Implementation status, remaining gates, historical work disposition, and acceptance criteria |
 | [Runtime lifecycle ADR](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-runtime-ownership-and-lifecycle.md) | Per-lifecycle ownership, enrollment semantics, and automatic fail-safe teardown |
 | [Encrypted-state ADR](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md) | Direct Keybay custody binding, encrypted StateStore, failure matrix, and no-migration reset policy |
 | [`doc/`](https://github.com/danReynolds/tailscale_dart/tree/main/doc) | Status-labeled index of API docs, ADRs, RFCs, and current-architecture notes |
@@ -40,8 +40,9 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 > and macOS production-Keybay process-crash/restart receipts passed on
 > 2026-08-10. R8 retained the identity cache from measured evidence, R9's
 > conformance audit is complete, and non-device R6 inventory/backup integration
-> is present. Real-device custody, backup readback, data-plane/publication, and
-> final launch receipts remain.
+> is present. Exact-main Android arm64 emulator and iOS simulator Headscale
+> smoke passed on 2026-08-11. Real-device custody, backup readback,
+> data-plane/publication, and final launch receipts remain.
 
 ## What you can build
 
@@ -185,10 +186,8 @@ TLS discovery | `tls.domains` | Supported read-only API | Reads the runtime's ad
 Serve | `serve.forward`, `serve.clear` | Desktop/server qualified | Tailnet publication through the runtime-owned ServeConfig manager. The R5 replacement/exact-handle and macOS persisted process-crash/restart receipts passed 2026-08-10; mobile HTTPS qualification remains pending.
 Funnel | `funnel.forward`, `funnel.clear` | Desktop/server qualified | The public-visibility mode of the same ServeConfig mapping used by Serve. Public ingress, tailnet reach, and the R5 swap receipt have passed hosted Tailscale; all mobile receipts remain pending.
 Tailscale Services | N/A | Planned | Upstream `tsnet.Server.ListenService` is available in the current pin; no Dart wrapper yet.
-Routing controls | `prefs`, `exitNode` | Supported | Subnet routes, Shields Up, tags, hostname, auto-update, and exit nodes.
-Diagnostics | `diag` | Supported | Ping, metrics, DERP map, and update checks.
-Taildrop | `taildrop` | Planned | Exported as a stub; not implemented in this release.
-Profiles | `profiles` | Planned | Exported as a stub; not implemented in this release.
+Routing controls | `prefs`, `exitNode` | Supported | Subnet routes, Shields Up, tags, and exit nodes. Hostname is configured through `up()` so lifecycle state stays coherent.
+Diagnostics | `diag` | Supported | Ping, metrics, DERP map, and advisory native-version checks. Embedded Tailscale is upgraded with the package or host application, not in place.
 Windows | N/A | Unsupported | v1 is POSIX-only while the Windows data-plane backend is designed.
 
 See [doc/api-status.md](https://github.com/danReynolds/tailscale_dart/blob/main/doc/api-status.md) for the full namespace-by-namespace API map.

@@ -55,8 +55,8 @@ abstract class ExitNode {
   /// Stops routing through an exit node.
   Future<void> clear();
 
-  /// Emits whenever the exit-node selection changes (including external
-  /// changes from another device signed into the same account).
+  /// Emits whenever this node's exit-node selection changes, including local
+  /// API operations and upstream netmap updates observed by this runtime.
   Stream<TailscaleNode?> get onCurrentChange;
 }
 

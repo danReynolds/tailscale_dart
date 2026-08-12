@@ -55,8 +55,6 @@ void main(List<String> args) async {
       'GOOS': goos,
       'GOARCH': goarch,
       'CGO_ENABLED': '1',
-      // Disable raw disco to avoid permission errors on Android/Linux.
-      'TS_ENABLE_RAW_DISCO': 'false',
     };
 
     // Build flags
@@ -184,6 +182,9 @@ List<File> _goBuildInputs(String goDir) {
       .listSync(recursive: true)
       .whereType<File>()
       .where((f) => extensions.contains(p.extension(f.path)))
+      // Go test files do not affect the native library produced by `go build`.
+      // Excluding them avoids rebuilding that library after test-only edits.
+      .where((f) => !f.path.endsWith('_test.go'))
       .toList(growable: false);
 }
 

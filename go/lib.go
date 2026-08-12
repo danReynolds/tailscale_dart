@@ -438,9 +438,7 @@ func startRuntimeWithDependenciesForTokenAndDeadline(requestToken uint64, hostna
 		}
 	}
 
-	if err := setRawDiscoCompatibility(); err != nil {
-		return false, 0, err
-	}
+	setRawDiscoCompatibility()
 	if runtimes.isAbandoned(candidate) {
 		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
 	}

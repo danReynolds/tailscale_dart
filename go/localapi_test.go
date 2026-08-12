@@ -14,7 +14,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/opt"
 )
 
 func TestNodeIdentityFromWhoIsMapsFields(t *testing.T) {
@@ -420,10 +419,6 @@ func TestPrefsToJSONShape(t *testing.T) {
 		AdvertiseRoutes: []netip.Prefix{
 			netip.MustParsePrefix("10.0.0.0/24"),
 		},
-		AutoUpdate: ipn.AutoUpdatePrefs{
-			Check: true,
-			Apply: opt.NewBool(true),
-		},
 	}
 
 	var parsed map[string]any
@@ -433,8 +428,8 @@ func TestPrefsToJSONShape(t *testing.T) {
 	if got := parsed["acceptRoutes"]; got != true {
 		t.Errorf("acceptRoutes = %v, want true", got)
 	}
-	if got := parsed["autoUpdate"]; got != true {
-		t.Errorf("autoUpdate = %v, want true", got)
+	if _, ok := parsed["autoUpdate"]; ok {
+		t.Error("prefs snapshot exposed unsupported embedded-runtime autoUpdate")
 	}
 	if got := parsed["autoExitNode"]; got != true {
 		t.Errorf("autoExitNode = %v, want true", got)
@@ -447,8 +442,6 @@ func TestPrefsToJSONShape(t *testing.T) {
 func TestMaskedPrefsFromPayload(t *testing.T) {
 	acceptRoutes := true
 	shieldsUp := false
-	autoUpdate := true
-	hostname := " router "
 	exitNodeID := " n123 "
 	routes := []string{"10.0.0.7/24"}
 	tags := []string{"tag:server"}
@@ -458,8 +451,6 @@ func TestMaskedPrefsFromPayload(t *testing.T) {
 		AcceptRoutes:     &acceptRoutes,
 		ShieldsUp:        &shieldsUp,
 		AdvertisedTags:   &tags,
-		AutoUpdate:       &autoUpdate,
-		Hostname:         &hostname,
 		ExitNodeID:       &exitNodeID,
 	})
 	if err != nil {
@@ -478,14 +469,8 @@ func TestMaskedPrefsFromPayload(t *testing.T) {
 	if !masked.AdvertiseTagsSet || len(masked.AdvertiseTags) != 1 || masked.AdvertiseTags[0] != "tag:server" {
 		t.Fatalf("AdvertiseTags = %v, set=%v", masked.AdvertiseTags, masked.AdvertiseTagsSet)
 	}
-	if !masked.AutoUpdateSet.CheckSet || !masked.AutoUpdateSet.ApplySet || !masked.AutoUpdate.Check {
-		t.Fatalf("AutoUpdate = %+v, set=%+v", masked.AutoUpdate, masked.AutoUpdateSet)
-	}
-	if apply, ok := masked.AutoUpdate.Apply.Get(); !ok || !apply {
-		t.Fatalf("AutoUpdate.Apply = %v/%v, want true/true", apply, ok)
-	}
-	if !masked.HostnameSet || masked.Hostname != "router" {
-		t.Fatalf("Hostname = %q, set=%v", masked.Hostname, masked.HostnameSet)
+	if masked.WantRunningSet || masked.HostnameSet || masked.AutoUpdateSet.CheckSet || masked.AutoUpdateSet.ApplySet {
+		t.Fatalf("prefs update gained lifecycle authority: %+v", masked)
 	}
 	if !masked.ExitNodeIDSet || !masked.ExitNodeIPSet || !masked.AutoExitNodeSet || string(masked.ExitNodeID) != "n123" {
 		t.Fatalf("Exit node fields: id=%q idSet=%v ipSet=%v autoSet=%v", masked.ExitNodeID, masked.ExitNodeIDSet, masked.ExitNodeIPSet, masked.AutoExitNodeSet)

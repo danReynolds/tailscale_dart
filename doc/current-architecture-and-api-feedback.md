@@ -1,4 +1,4 @@
-# Current Architecture and API Feedback Draft
+# Current Architecture and API Feedback
 
 ## Status
 
@@ -490,10 +490,11 @@ Known remaining work:
   production Keybay and hosted Tailscale on 2026-08-10.
 - R10 integrated physical-device launch gate and raw-disco decision.
 - Windows support decision.
-- More HTTP fd server lifecycle/error tests.
-- More stress tests for backpressure and resource limits.
-- Decide whether a Shelf adapter should be public API or documentation-only.
-- Decide whether WebSocket/hijack support belongs in v1, later, or never.
+
+The generic HTTP lifecycle, backpressure, resource-limit, and teardown-stress
+items from the original spike are covered by the current unit, race, and
+Headscale suites. Shelf and WebSocket/hijack remain optional API roadmap
+decisions, not rearchitecture completion gates.
 
 ## Feedback Questions
 

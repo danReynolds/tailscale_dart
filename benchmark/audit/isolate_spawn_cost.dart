@@ -16,7 +16,8 @@ Future<void> _spawnKillRoundTrip() async {
 
 String _stats(List<int> micros) {
   micros.sort();
-  double at(double q) => micros[(micros.length * q).clamp(0, micros.length - 1).toInt()] / 1000.0;
+  double at(double q) =>
+      micros[(micros.length * q).clamp(0, micros.length - 1).toInt()] / 1000.0;
   final mean = micros.reduce((a, b) => a + b) / micros.length / 1000.0;
   return 'p50=${at(0.5).toStringAsFixed(2)} p95=${at(0.95).toStringAsFixed(2)} '
       'p99=${at(0.99).toStringAsFixed(2)} max=${(micros.last / 1000).toStringAsFixed(2)} '
@@ -30,7 +31,9 @@ Future<void> main() async {
   final cold = Stopwatch()..start();
   await Isolate.run(() => 0);
   cold.stop();
-  print('COLD first Isolate.run: ${(cold.elapsedMicroseconds / 1000).toStringAsFixed(2)} ms');
+  print(
+    'COLD first Isolate.run: ${(cold.elapsedMicroseconds / 1000).toStringAsFixed(2)} ms',
+  );
 
   // Isolate.run round-trip.
   final run = <int>[];
@@ -58,6 +61,8 @@ Future<void> main() async {
   final burst = Stopwatch()..start();
   await Future.wait([for (var i = 0; i < 200; i++) Isolate.run(() => 0)]);
   burst.stop();
-  print('200 concurrent Isolate.run: ${burst.elapsedMilliseconds} ms total '
-      '(${(burst.elapsedMilliseconds / 200).toStringAsFixed(2)} ms/each amortized)');
+  print(
+    '200 concurrent Isolate.run: ${burst.elapsedMilliseconds} ms total '
+    '(${(burst.elapsedMilliseconds / 200).toStringAsFixed(2)} ms/each amortized)',
+  );
 }

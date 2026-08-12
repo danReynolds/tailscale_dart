@@ -11,9 +11,7 @@ import 'src/api/funnel.dart';
 import 'src/api/http.dart';
 import 'src/api/identity.dart';
 import 'src/api/prefs.dart';
-import 'src/api/profiles.dart';
 import 'src/api/serve.dart';
-import 'src/api/taildrop.dart';
 import 'src/api/tcp.dart';
 import 'src/api/tls.dart';
 import 'src/api/udp.dart';
@@ -48,7 +46,6 @@ export 'src/api/funnel.dart' hide createFunnel;
 export 'src/api/http.dart' hide createHttp, createHttpRequestForTesting;
 export 'src/api/identity.dart';
 export 'src/api/prefs.dart' hide createPrefs, PrefsGetFn, PrefsUpdateFn;
-export 'src/api/profiles.dart';
 export 'src/api/serve.dart'
     hide
         createServe,
@@ -57,7 +54,6 @@ export 'src/api/serve.dart'
         ServeForwardFn,
         ServeCloseFn,
         ServeClearFn;
-export 'src/api/taildrop.dart';
 export 'src/api/tcp.dart'
     hide createTcp, TcpDialFn, TcpListenFn, TcpCloseListenerFn;
 export 'src/api/tls.dart'
@@ -126,10 +122,8 @@ abstract interface class TailscaleClient {
   Funnel get funnel;
   Http get http;
 
-  Taildrop get taildrop;
   Serve get serve;
   ExitNode get exitNode;
-  Profiles get profiles;
   Prefs get prefs;
   Diag get diag;
 
@@ -168,8 +162,7 @@ abstract interface class TailscaleClient {
 ///   [nodeByIp], [onStateChange], [onNodeChanges], [onError].
 /// - **Transport primitives** (namespaced): [tcp], [tls], [udp], [funnel],
 ///   [http]. Raw TCP uses package-native connection/listener types.
-/// - **Feature namespaces**: [taildrop], [serve], [exitNode], [profiles],
-///   [prefs].
+/// - **Feature namespaces**: [serve], [exitNode], [prefs].
 /// - **Diagnostics**: [diag].
 /// - **Identity**: [whois].
 class Tailscale implements TailscaleClient {
@@ -944,8 +937,6 @@ class Tailscale implements TailscaleClient {
 
   // ─── Feature namespaces ─────────────────────────────────────────────
   @override
-  final Taildrop taildrop = Taildrop.instance;
-  @override
   late final Serve serve = createServe(
     forwardFn: _publicationWiring.forward,
     clearFn: _publicationWiring.clear,
@@ -968,8 +959,6 @@ class Tailscale implements TailscaleClient {
     },
     nodeChanges: onNodeChanges,
   );
-  @override
-  final Profiles profiles = Profiles.instance;
   @override
   late final Prefs prefs = createPrefs(
     getFn: () => _withWorker((worker) => worker.prefsGet()),
@@ -1196,10 +1185,9 @@ class Tailscale implements TailscaleClient {
   ///
   /// Set [ephemeral] to register this process as a short-lived node. Ephemeral
   /// nodes are removed from the tailnet automatically after they go inactive
-  /// by control-plane cleanup. Calling [logout] stops the local node and asks
-  /// upstream Tailscale to remove the current profile, while preserving the
-  /// lower-level StateStore container. Tailnet removal still follows the
-  /// control plane's ephemeral-node cleanup behavior. Use this for CI jobs, preview
+  /// by control-plane cleanup. A successful [logout] removes an ephemeral node
+  /// from the tailnet immediately while preserving the lower-level StateStore
+  /// container. Use this for CI jobs, preview
   /// environments, disposable tests, and other nodes whose identity should not
   /// outlive the process. Ephemeral mode retains no local identity: every new
   /// [up] after [down] (or process restart) needs a valid auth key, and a
@@ -1208,8 +1196,9 @@ class Tailscale implements TailscaleClient {
   ///
   /// [hostname] sets the tailnet-visible hostname and the
   /// [MagicDNS](https://tailscale.com/kb/1081/magicdns) label, so the
-  /// node becomes reachable at `<hostname>.<tailnet>.ts.net`. Leave
-  /// unset to let the embedded runtime pick the OS default.
+  /// node becomes reachable at `<hostname>.<tailnet>.ts.net`. Leave it unset
+  /// to use upstream tsnet's default: the lowercased host program name (or
+  /// `tsnet` when the embedded runtime cannot resolve one).
   ///
   /// Resolves on the first **stable** state: `running`, `needsLogin`,
   /// or `needsMachineAuth`. This intentionally differs from Go's
@@ -1478,7 +1467,7 @@ class Tailscale implements TailscaleClient {
           startFuture,
         ).timeout(remainingBudget());
       } on TimeoutException {
-        return timeoutAfterQuarantine(
+        return await timeoutAfterQuarantine(
           message:
               'Node did not start within $timeout. The matching native '
               'generation was quarantined.',
@@ -1509,7 +1498,7 @@ class Tailscale implements TailscaleClient {
           worker.status(),
         ).timeout(remainingBudget());
       } on TimeoutException {
-        return timeoutAfterQuarantine(
+        return await timeoutAfterQuarantine(
           message: 'Node status did not respond within $timeout after startup.',
           worker: worker,
           token: startResult.runtimeToken,
@@ -1532,7 +1521,7 @@ class Tailscale implements TailscaleClient {
       try {
         await failOnWorkerExit(stable.future).timeout(remainingBudget());
       } on TimeoutException {
-        return timeoutAfterQuarantine(
+        return await timeoutAfterQuarantine(
           message:
               'Node did not reach a stable state within $timeout '
               '(last observed: ${lastObservedState?.name ?? 'unknown'}). '
@@ -1548,7 +1537,7 @@ class Tailscale implements TailscaleClient {
           worker.status(),
         ).timeout(remainingBudget());
       } on TimeoutException {
-        return timeoutAfterQuarantine(
+        return await timeoutAfterQuarantine(
           message:
               'Node reached a stable state but its final status did not '
               'respond within $timeout.',

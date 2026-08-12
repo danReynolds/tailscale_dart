@@ -19,7 +19,7 @@ import 'package:path/path.dart' as p;
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
-import 'support/native_asset_workaround.dart';
+import 'support/native_asset_warmup.dart';
 import 'support/peer_process.dart';
 import 'support/state_waiters.dart';
 import 'support/test_keybay_backend.dart';

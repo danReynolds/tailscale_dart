@@ -22,7 +22,7 @@ import 'dart:typed_data';
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
-import '../e2e/support/native_asset_workaround.dart';
+import '../e2e/support/native_asset_warmup.dart';
 import '../e2e/support/state_waiters.dart';
 import '../support/persistent_state_inventory.dart';
 import 'support/tailscale_api.dart';

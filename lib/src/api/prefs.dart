@@ -20,7 +20,6 @@ class TailscalePrefs {
     required this.shieldsUp,
     required this.advertisedTags,
     required this.wantRunning,
-    required this.autoUpdate,
     required this.hostname,
     this.autoExitNode = false,
     this.exitNodeId,
@@ -47,9 +46,6 @@ class TailscalePrefs {
   /// Whether the engine should be connected (i.e. not manually paused).
   final bool wantRunning;
 
-  /// Auto-update the underlying tsnet when a newer version is released.
-  final bool autoUpdate;
-
   /// The tailnet-visible hostname for this node.
   final String hostname;
 
@@ -74,7 +70,6 @@ class TailscalePrefs {
       (json['advertisedTags'] as List?)?.cast<String>() ?? const [],
     ),
     wantRunning: json['wantRunning'] as bool? ?? false,
-    autoUpdate: json['autoUpdate'] as bool? ?? false,
     hostname: json['hostname'] as String? ?? '',
     autoExitNode: json['autoExitNode'] as bool? ?? false,
     exitNodeId: json['exitNodeId'] as String?,
@@ -89,7 +84,6 @@ class TailscalePrefs {
           shieldsUp == other.shieldsUp &&
           listEquals(advertisedTags, other.advertisedTags) &&
           wantRunning == other.wantRunning &&
-          autoUpdate == other.autoUpdate &&
           hostname == other.hostname &&
           autoExitNode == other.autoExitNode &&
           exitNodeId == other.exitNodeId;
@@ -101,7 +95,6 @@ class TailscalePrefs {
     shieldsUp,
     Object.hashAll(advertisedTags),
     wantRunning,
-    autoUpdate,
     hostname,
     autoExitNode,
     exitNodeId,
@@ -112,7 +105,7 @@ class TailscalePrefs {
       'TailscalePrefs(advertisedRoutes: $advertisedRoutes, '
       'acceptRoutes: $acceptRoutes, shieldsUp: $shieldsUp, '
       'advertisedTags: $advertisedTags, wantRunning: $wantRunning, '
-      'autoUpdate: $autoUpdate, hostname: $hostname, '
+      'hostname: $hostname, '
       'autoExitNode: $autoExitNode, '
       'exitNodeId: $exitNodeId)';
 }
@@ -131,9 +124,6 @@ class PrefsUpdate {
     this.acceptRoutes,
     this.shieldsUp,
     this.advertisedTags,
-    this.wantRunning,
-    this.autoUpdate,
-    this.hostname,
     this.exitNodeId,
   });
 
@@ -141,11 +131,6 @@ class PrefsUpdate {
   final bool? acceptRoutes;
   final bool? shieldsUp;
   final List<String>? advertisedTags;
-  final bool? wantRunning;
-  final bool? autoUpdate;
-
-  /// Tailnet-visible hostname to publish for this node.
-  final String? hostname;
 
   /// Pass empty string to clear the current exit node; `null` leaves
   /// unchanged (Dart's single-null problem; use named setters on
@@ -162,9 +147,6 @@ class PrefsUpdate {
           acceptRoutes == other.acceptRoutes &&
           shieldsUp == other.shieldsUp &&
           listEquals(advertisedTags, other.advertisedTags) &&
-          wantRunning == other.wantRunning &&
-          autoUpdate == other.autoUpdate &&
-          hostname == other.hostname &&
           exitNodeId == other.exitNodeId;
 
   @override
@@ -173,9 +155,6 @@ class PrefsUpdate {
     acceptRoutes,
     shieldsUp,
     advertisedTags == null ? null : Object.hashAll(advertisedTags!),
-    wantRunning,
-    autoUpdate,
-    hostname,
     exitNodeId,
   );
 
@@ -183,8 +162,7 @@ class PrefsUpdate {
   String toString() =>
       'PrefsUpdate(advertisedRoutes: $advertisedRoutes, '
       'acceptRoutes: $acceptRoutes, shieldsUp: $shieldsUp, '
-      'advertisedTags: $advertisedTags, wantRunning: $wantRunning, '
-      'autoUpdate: $autoUpdate, hostname: $hostname, '
+      'advertisedTags: $advertisedTags, '
       'exitNodeId: $exitNodeId)';
 
   /// Encodes only fields that should be modified.
@@ -193,15 +171,12 @@ class PrefsUpdate {
     if (acceptRoutes != null) 'acceptRoutes': acceptRoutes,
     if (shieldsUp != null) 'shieldsUp': shieldsUp,
     if (advertisedTags != null) 'advertisedTags': advertisedTags,
-    if (wantRunning != null) 'wantRunning': wantRunning,
-    if (autoUpdate != null) 'autoUpdate': autoUpdate,
-    if (hostname != null) 'hostname': hostname,
     if (exitNodeId != null) 'exitNodeId': exitNodeId,
   };
 }
 
 /// Low-level escape hatch for preferences that don't have a dedicated
-/// namespace — subnet routes, Shields Up, auto-update opt-in, tags, etc.
+/// namespace — subnet routes, Shields Up, tags, etc.
 ///
 /// Reached via [Tailscale.prefs]. For common single-field changes prefer
 /// the named setters; for atomic multi-field edits use [updateMasked].
@@ -221,16 +196,9 @@ abstract class Prefs {
   /// <https://tailscale.com/kb/1072/client-preferences#block-incoming-connections>.
   Future<TailscalePrefs> setShieldsUp(bool enabled);
 
-  /// Opt in or out of automatic tsnet version updates from the control
-  /// plane.
-  Future<TailscalePrefs> setAutoUpdate(bool enabled);
-
   /// Replaces the set of [ACL tags](https://tailscale.com/kb/1068/tags)
   /// this node advertises when registering.
   Future<TailscalePrefs> setAdvertisedTags(List<String> tags);
-
-  /// Changes the tailnet-visible hostname for this node.
-  Future<TailscalePrefs> setHostname(String hostname);
 
   /// Applies a [PrefsUpdate] atomically. Fields set on the update are
   /// written; fields left null are unchanged.
@@ -268,16 +236,8 @@ final class _Prefs implements Prefs {
       updateMasked(PrefsUpdate(shieldsUp: enabled));
 
   @override
-  Future<TailscalePrefs> setAutoUpdate(bool enabled) =>
-      updateMasked(PrefsUpdate(autoUpdate: enabled));
-
-  @override
   Future<TailscalePrefs> setAdvertisedTags(List<String> tags) =>
       updateMasked(PrefsUpdate(advertisedTags: List.unmodifiable(tags)));
-
-  @override
-  Future<TailscalePrefs> setHostname(String hostname) =>
-      updateMasked(PrefsUpdate(hostname: hostname));
 
   @override
   Future<TailscalePrefs> updateMasked(PrefsUpdate update) => _update(update);

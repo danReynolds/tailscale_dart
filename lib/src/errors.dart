@@ -272,16 +272,6 @@ final class TailscaleForgetLocalIdentityException
   }) : super('forget local identity', message);
 }
 
-/// Thrown when a `taildrop.*` call fails.
-final class TailscaleTaildropException extends TailscaleOperationException {
-  const TailscaleTaildropException(
-    String message, {
-    super.code,
-    super.statusCode,
-    super.cause,
-  }) : super('taildrop', message);
-}
-
 /// Thrown when a `serve.*` call fails — most notably a conflicting
 /// Serve config write or unsupported tailnet publication.
 final class TailscaleServeException extends TailscaleOperationException {
@@ -312,16 +302,6 @@ final class TailscalePrefsException extends TailscaleOperationException {
     super.statusCode,
     super.cause,
   }) : super('prefs', message);
-}
-
-/// Thrown when a `profiles.*` call fails.
-final class TailscaleProfilesException extends TailscaleOperationException {
-  const TailscaleProfilesException(
-    String message, {
-    super.code,
-    super.statusCode,
-    super.cause,
-  }) : super('profiles', message);
 }
 
 /// Thrown when an `exitNode.*` call fails.

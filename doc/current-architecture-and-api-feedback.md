@@ -1,4 +1,4 @@
-# Current Architecture and API Feedback Draft
+# Current Architecture and API Feedback
 
 ## Status
 

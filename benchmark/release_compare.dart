@@ -390,9 +390,9 @@ Future<List<Map<String, Object?>>> _runProbe(
       'PERF_PEER_RESPONSE': _peerResponse,
       'PERF_ITERATIONS': '$iterations',
       'PERF_BULK_ITERATIONS': '$bulkIterations',
-      if (authKey != null) 'PERF_AUTH_KEY': authKey,
-      if (peerIp != null) 'PERF_PEER_IP': peerIp,
-      if (expectedIpv4 != null) 'PERF_EXPECTED_IPV4': expectedIpv4,
+      'PERF_AUTH_KEY': ?authKey,
+      'PERF_PEER_IP': ?peerIp,
+      'PERF_EXPECTED_IPV4': ?expectedIpv4,
     },
   );
   final records = <Map<String, Object?>>[];

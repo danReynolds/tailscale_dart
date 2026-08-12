@@ -6,7 +6,7 @@ packages/
 tool/
 .github/
 .claude/
+tasks/
 doc/current-architecture-and-api-feedback.md
-doc/pr-readiness.md
 doc/rfc-*.md
 doc/runtime-transport-journal.md

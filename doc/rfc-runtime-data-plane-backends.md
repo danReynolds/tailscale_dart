@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft decision RFC.
+Accepted and implemented for the POSIX backend. The proposal and migration
+language below is retained as historical design context.
 
 ## Summary
 

@@ -28,7 +28,7 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 | [pub.dev](https://pub.dev/packages/tailscale) | Install, versions |
 | [CHANGELOG](https://github.com/danReynolds/tailscale_dart/blob/main/CHANGELOG.md) | Release notes and breaking changes |
 | [`example/`](https://github.com/danReynolds/tailscale_dart/tree/main/example) | Runnable Dart snippets |
-| [Rearchitecture plan](https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md) | Implementation status, remaining architecture work, live PR disposition, and acceptance gates |
+| [Rearchitecture plan](https://github.com/danReynolds/tailscale_dart/blob/main/doc/rearchitecture-plan.md) | Implementation status, remaining gates, historical work disposition, and acceptance criteria |
 | [Runtime lifecycle ADR](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-runtime-ownership-and-lifecycle.md) | Per-lifecycle ownership, enrollment semantics, and automatic fail-safe teardown |
 | [Encrypted-state ADR](https://github.com/danReynolds/tailscale_dart/blob/main/doc/adr-encrypted-node-state.md) | Direct Keybay custody binding, encrypted StateStore, failure matrix, and no-migration reset policy |
 | [`doc/`](https://github.com/danReynolds/tailscale_dart/tree/main/doc) | Status-labeled index of API docs, ADRs, RFCs, and current-architecture notes |

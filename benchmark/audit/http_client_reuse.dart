@@ -5,7 +5,7 @@
 // NOTE: over netstack loopback a dial is near-free, so this shows FLAT latency
 // whether or not connections are reused — it does NOT by itself prove reuse.
 // The definitive, hermetic proof of reuse (dial counts via a counting dialer)
-// lives in go/http_transport_cache_test.go. The temporary Go-side dial-count
+// lives in go/http_transport_test.go. The temporary Go-side dial-count
 // instrumentation this comment once referenced was removed; run those unit
 // tests, not this script, to verify the dial-count behavior.
 //

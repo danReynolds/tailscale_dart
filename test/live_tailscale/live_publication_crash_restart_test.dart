@@ -16,7 +16,7 @@ import 'package:path/path.dart' as p;
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
-import '../e2e/support/native_asset_workaround.dart';
+import '../e2e/support/native_asset_warmup.dart';
 import 'support/tailscale_api.dart';
 
 const _appId = 'dev.tailscale.dart.live.crashReceipt';

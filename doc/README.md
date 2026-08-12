@@ -8,7 +8,7 @@ the checked-in code until their workstream lands.
 
 | Document | Status | Purpose |
 | --- | --- | --- |
-| [Rearchitecture plan](rearchitecture-plan.md) | In progress; R2-R5 and R7-R9 complete, device R6/R10 evidence remains | North Star, decisions, live PR disposition, implementation order, and release gates. |
+| [Rearchitecture plan](rearchitecture-plan.md) | In progress; R2-R5 and R7-R9 complete, device R6/R10 evidence remains | North Star, decisions, historical work disposition, implementation order, and release gates. |
 | [Runtime ownership and lifecycle ADR](adr-runtime-ownership-and-lifecycle.md) | R2-R5 and R7-R9 complete; physical launch receipts remain | `nodeRuntime`, generation gates, auth/logout semantics, publication bootstrap, and fail-safe teardown. |
 | [Encrypted node state ADR](adr-encrypted-node-state.md) | R4d plus non-device R6 evidence complete; remaining platform receipts pending | Direct Keybay custody binding, encrypted file format, state lease, failure/reset matrix, and no-migration rollout. |
 | [Current architecture and API feedback](current-architecture-and-api-feedback.md) | Current implementation | Existing Go/Dart/fd ownership and public API shape. |
@@ -26,8 +26,8 @@ When documents disagree:
 3. Accepted ADRs define both implemented invariants and decisions for later
    work; use each ADR's status section to distinguish them.
 4. `rearchitecture-plan.md` defines sequencing and acceptance gates.
-5. Historical RFCs and readiness notes explain earlier decisions but do not
-   override a newer accepted ADR.
+5. Historical RFCs and implementation journals explain earlier decisions but
+   do not override a newer accepted ADR.
 
 ## Implementation rule
 
@@ -49,7 +49,6 @@ Every rearchitecture PR should:
 | [Runtime transport journal](runtime-transport-journal.md) | Historical implementation evidence and decisions. |
 | [Routing controls notes](implementation-notes-routing-controls.md) | Prefs and exit-node implementation details. |
 | [Testing](testing.md) | Repository test tiers and commands. |
-| [PR readiness](pr-readiness.md) | Historical fd-transport readiness record. |
 
 ## Security wording
 

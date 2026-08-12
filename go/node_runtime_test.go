@@ -8,10 +8,20 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"tailscale.com/envknob"
 	"tailscale.com/tsnet"
 )
 
 const testKeybayNamespace = "dev.tailscale.dart.test.tailscale"
+
+func restoreRawDiscoForTest(previous string, hadPrevious bool) {
+	if hadPrevious {
+		envknob.Setenv(rawDiscoEnv, previous)
+		return
+	}
+	envknob.Setenv(rawDiscoEnv, "")
+	_ = os.Unsetenv(rawDiscoEnv)
+}
 
 func TestNativeLifecycleRequiresFrozenConfiguration(t *testing.T) {
 	runtimes.mu.Lock()
@@ -503,7 +513,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 	runtimes.reset = nil
 	runtimes.mu.Unlock()
 	previousNativeLogLevel := atomic.LoadInt32(&LogLevel)
-	previousRawDisco, hadRawDisco := os.LookupEnv("TS_ENABLE_RAW_DISCO")
+	previousRawDisco, hadRawDisco := os.LookupEnv(rawDiscoEnv)
 	// Register the TempDir cleanup before the runtime-controller cleanup below.
 	// testing runs cleanups in LIFO order, so any live state lease is released
 	// while its configured root still exists instead of poisoning admission.
@@ -525,11 +535,7 @@ func configureFreshStateRootForTest(t *testing.T) string {
 		runtimes.reset = previousReset
 		runtimes.mu.Unlock()
 		atomic.StoreInt32(&LogLevel, previousNativeLogLevel)
-		if hadRawDisco {
-			_ = os.Setenv("TS_ENABLE_RAW_DISCO", previousRawDisco)
-		} else {
-			_ = os.Unsetenv("TS_ENABLE_RAW_DISCO")
-		}
+		restoreRawDiscoForTest(previousRawDisco, hadRawDisco)
 	})
 
 	if _, err := Configure(root, testKeybayNamespace, 0); err != nil {
@@ -629,7 +635,7 @@ func TestConfigure_IsIdempotentForNativeAliasesAndRejectsMismatch(t *testing.T) 
 	runtimes.logLevel = 0
 	runtimes.mu.Unlock()
 	previousNativeLogLevel := atomic.LoadInt32(&LogLevel)
-	previousRawDisco, hadRawDisco := os.LookupEnv("TS_ENABLE_RAW_DISCO")
+	previousRawDisco, hadRawDisco := os.LookupEnv(rawDiscoEnv)
 	t.Cleanup(func() {
 		runtimes.mu.Lock()
 		runtimes.configured = previousConfigured
@@ -639,11 +645,7 @@ func TestConfigure_IsIdempotentForNativeAliasesAndRejectsMismatch(t *testing.T) 
 		runtimes.logLevel = previousLogLevel
 		runtimes.mu.Unlock()
 		atomic.StoreInt32(&LogLevel, previousNativeLogLevel)
-		if hadRawDisco {
-			_ = os.Setenv("TS_ENABLE_RAW_DISCO", previousRawDisco)
-		} else {
-			_ = os.Unsetenv("TS_ENABLE_RAW_DISCO")
-		}
+		restoreRawDiscoForTest(previousRawDisco, hadRawDisco)
 	})
 
 	parent := t.TempDir()

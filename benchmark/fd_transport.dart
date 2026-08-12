@@ -559,8 +559,10 @@ Future<void> _runPipelinedExperiment() async {
   const writeChunk = 64 * 1024;
   print('');
   print('=== pipelined throughput experiment ===');
-  print('payload ${payloadPerPair ~/ (1024 * 1024)} MiB/pair, write chunk '
-      '${writeChunk ~/ 1024} KiB, pipelined (no per-chunk await)');
+  print(
+    'payload ${payloadPerPair ~/ (1024 * 1024)} MiB/pair, write chunk '
+    '${writeChunk ~/ 1024} KiB, pipelined (no per-chunk await)',
+  );
   print('');
   for (final pairs in <int>[1, 4]) {
     for (final sockBufKiB in <int>[0, 256]) {
@@ -578,8 +580,10 @@ Future<void> _runPipelinedExperiment() async {
           if (mibs > best) best = mibs;
         }
         final buf = sockBufKiB == 0 ? 'default' : '${sockBufKiB}KiB';
-        print('pairs=$pairs sockbuf=$buf read=${readKiB}KiB  ->  '
-            '${best.toStringAsFixed(1)} MiB/s');
+        print(
+          'pairs=$pairs sockbuf=$buf read=${readKiB}KiB  ->  '
+          '${best.toStringAsFixed(1)} MiB/s',
+        );
       }
     }
     print('');
@@ -975,8 +979,20 @@ final int _soRcvBuf = Platform.isMacOS ? 0x1002 : 8;
 void _setSockBuf(int fd, int bytes) {
   final p = calloc<Int32>()..value = bytes;
   try {
-    _BenchPosixBindings.instance.setsockopt(fd, _solSocket, _soSndBuf, p.cast(), 4);
-    _BenchPosixBindings.instance.setsockopt(fd, _solSocket, _soRcvBuf, p.cast(), 4);
+    _BenchPosixBindings.instance.setsockopt(
+      fd,
+      _solSocket,
+      _soSndBuf,
+      p.cast(),
+      4,
+    );
+    _BenchPosixBindings.instance.setsockopt(
+      fd,
+      _solSocket,
+      _soRcvBuf,
+      p.cast(),
+      4,
+    );
   } finally {
     calloc.free(p);
   }

@@ -4,8 +4,8 @@ The launch-critical architecture work is tracked in the
 [accepted rearchitecture plan](rearchitecture-plan.md). Its runtime ownership,
 auth conformance, encrypted StateStore, fail-safe teardown, publication
 convergence, and platform-proof work takes priority over new feature breadth.
-The plan now records R4d/R5 code that is present and the remaining target;
-this roadmap continues to describe public API priorities.
+The plan records completed R2-R5 and R7-R9 work plus the remaining physical
+R6/R10 evidence; this roadmap continues to describe public API priorities.
 
 This package is consumer-first rather than full Tailscale CLI parity. The
 current public spine is already useful for embedded Dart and Flutter apps:

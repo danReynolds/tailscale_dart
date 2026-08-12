@@ -951,15 +951,17 @@ private paths unnecessarily.
 - Close logic becomes enumerable and testable.
 - Identity changes cannot inherit pooled connections or listeners.
 - Worker death and timeouts become deterministic lifecycle events.
-- Later deletion of redundant locks, maps, and caches is incremental.
+- Redundant ownership bridges can be deleted incrementally when their proof
+  gates permit it.
 
 ### Costs
 
 - The controller must handle a non-cancellable upstream `Start` without
   violating Close ordering.
 - The supervisor needs a rescue FFI path independent of the worker.
-- Runtime migration temporarily leaves some registries global; the epoch tests
-  remain mandatory throughout.
+- A few explicitly sanctioned process bridges remain global, including the
+  raw-disco compatibility knob and the scoped `TS_LOGS_DIR` override; epoch and
+  environment-restoration tests remain mandatory while they do.
 - Correct remote logout after an earlier `down()` may require a short-lived
   runtime solely to contact the control plane.
 

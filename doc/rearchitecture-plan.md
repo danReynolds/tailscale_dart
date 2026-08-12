@@ -337,7 +337,7 @@ authoritative, `nodeRuntime` becomes the ownership boundary, the epoch remains
 the stale-commit guard, caches require current measurements, and the fd reactor
 stays as the justified Dart/mobile data-plane adaptation.
 
-## Live work disposition
+## Historical work disposition
 
 Snapshot: 2026-08-10.
 

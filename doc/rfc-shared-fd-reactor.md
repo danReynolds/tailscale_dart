@@ -2,9 +2,10 @@
 
 ## Status
 
-Accepted design for the POSIX data-plane backend.
+Accepted and implemented for the POSIX data-plane backend. The proposal and
+migration language below is retained as historical design context.
 
-This replaces the current per-fd reader/writer isolate model. It does not
+The shared reactor replaced the per-fd reader/writer isolate model. It does not
 change the public TCP, UDP, or HTTP APIs.
 
 ## Summary

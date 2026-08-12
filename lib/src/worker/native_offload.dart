@@ -409,12 +409,7 @@ Future<({int listenerId, TailscaleEndpoint local})> offloadTcpListenFd({
   required int tailnetPort,
   required String tailnetHost,
 }) => runCappedNativeOffload(
-  () => _execListenFd(
-    runtimeToken,
-    tailnetPort,
-    tailnetHost,
-    tls: false,
-  ),
+  () => _execListenFd(runtimeToken, tailnetPort, tailnetHost, tls: false),
 );
 
 /// Offloaded `tls.bind`. See [offloadHttpBind] for why binds leave the FIFO.
@@ -423,12 +418,7 @@ Future<({int listenerId, TailscaleEndpoint local})> offloadTlsListenFd({
   required int tailnetPort,
   required String tailnetHost,
 }) => runCappedNativeOffload(
-  () => _execListenFd(
-    runtimeToken,
-    tailnetPort,
-    tailnetHost,
-    tls: true,
-  ),
+  () => _execListenFd(runtimeToken, tailnetPort, tailnetHost, tls: true),
 );
 
 ({int listenerId, TailscaleEndpoint local}) _execListenFd(

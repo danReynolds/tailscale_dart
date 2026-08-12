@@ -44,9 +44,10 @@ which never accesses Keybay.
 
 **Implementation model:** this package aligns to both upstream
 `tsnet.Server` and upstream `local.Client`. HTTP, TCP, UDP, and raw listeners
-use `tsnet`; node introspection, diagnostics, prefs, profiles, Serve/Funnel
-configuration, exit nodes, certificate lookup, and taildrop use LocalAPI via
-the runtime's cached `local.Client`.
+use `tsnet`; implemented node introspection, diagnostics, prefs, Serve/Funnel
+configuration, exit-node controls, and certificate lookup use LocalAPI via the
+runtime's cached `local.Client`. The planned Profiles and Taildrop namespaces
+would also wrap LocalAPI.
 
 **Mobile publication qualification:** the current upstream v1.102.2 pin
 compiles the LocalAPI certificate endpoint used by TLS termination as a 404

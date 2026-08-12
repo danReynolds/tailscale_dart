@@ -11,7 +11,7 @@ reuses the Headscale Docker environment and fixed E2E echo peer, but it does
 not run or duplicate the functional test suite.
 
 ```sh
-dart run --enable-experiment=native-assets benchmark/release_compare.dart
+dart run benchmark/release_compare.dart
 ```
 
 The full profile alternates five trials per version, takes 50 steady-state
@@ -21,7 +21,7 @@ RSS. Raw samples and the aggregate comparison are written to a temporary JSON
 report. A one-trial development pass is available while editing the harness:
 
 ```sh
-dart run --enable-experiment=native-assets \
+dart run \
   benchmark/release_compare.dart --quick
 ```
 
@@ -64,7 +64,6 @@ Run the same command on both branches:
 
 ```sh
 dart run \
-  --enable-experiment=native-assets \
   benchmark/fd_transport.dart \
   --pairs=1,10,50,100 \
   --extra-pairs=1 \
@@ -114,7 +113,6 @@ For a quick smoke run while iterating:
 
 ```sh
 dart run \
-  --enable-experiment=native-assets \
   benchmark/fd_transport.dart \
   --pairs=1,10 \
   --extra-pairs=1 \
@@ -133,7 +131,7 @@ accumulates. Real bulk transfer (e.g. Go's `io.Copy` filling the socketpair)
 pipelines, and that is where socketpair buffers dominate.
 
 ```sh
-dart run --enable-experiment=native-assets benchmark/fd_transport.dart --pipelined
+dart run benchmark/fd_transport.dart --pipelined
 ```
 
 This runs a small matrix over socketpair buffer size and receiver read-chunk

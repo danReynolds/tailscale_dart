@@ -21,7 +21,7 @@ without rebuilding Flutter apps.
 Run one serving node:
 
 ```sh
-dart run --enable-experiment=native-assets bin/demo_node.dart serve \
+dart run bin/demo_node.dart serve \
   --state-dir /tmp/dune-a \
   --hostname demo-a \
   --auth-key "$AUTH_KEY" \
@@ -32,7 +32,7 @@ dart run --enable-experiment=native-assets bin/demo_node.dart serve \
 Run a probe node:
 
 ```sh
-dart run --enable-experiment=native-assets bin/demo_node.dart probe \
+dart run bin/demo_node.dart probe \
   --state-dir /tmp/dune-b \
   --hostname demo-b \
   --auth-key "$AUTH_KEY" \
@@ -44,7 +44,7 @@ dart run --enable-experiment=native-assets bin/demo_node.dart probe \
 Run a two-process local loop:
 
 ```sh
-dart run --enable-experiment=native-assets bin/demo_node.dart pair \
+dart run bin/demo_node.dart pair \
   --auth-key "$AUTH_KEY" \
   --ephemeral \
   --control-url "$CONTROL_URL"

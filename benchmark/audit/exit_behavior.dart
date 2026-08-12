@@ -3,7 +3,7 @@
 // live transport, or (c) leaked by a failed registration (the shard never arms
 // its idle-exit because `sawTransport` never becomes true)?
 //
-// Run with: dart run --enable-experiment=native-assets \
+// Run with: dart run \
 //   benchmark/audit/exit_behavior.dart <clean|open|register-failure>
 // and wrap in `timeout` to detect hangs.
 import 'dart:async';

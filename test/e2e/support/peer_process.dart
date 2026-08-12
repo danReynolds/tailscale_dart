@@ -23,7 +23,7 @@ final class PeerProcess {
   }) async {
     final process = await Process.start(
       Platform.resolvedExecutable,
-      ['run', '--enable-experiment=native-assets', 'test/e2e/peer_main.dart'],
+      ['run', 'test/e2e/peer_main.dart'],
       environment: {
         ...Platform.environment,
         'STATE_DIR': stateDir,

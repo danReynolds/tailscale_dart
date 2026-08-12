@@ -16,7 +16,6 @@ import 'package:path/path.dart' as p;
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
-import '../e2e/support/native_asset_warmup.dart';
 import 'support/tailscale_api.dart';
 
 const _appId = 'dev.tailscale.dart.live.crashReceipt';
@@ -148,7 +147,6 @@ void main() {
   test(
     'SIGKILL then ordinary up clears stale publication before Running',
     () async {
-      await warmUpNativeAssetForPeerSubprocesses();
       final lockFile = File(
         p.join(
           Directory.systemTemp.path,
@@ -419,11 +417,7 @@ Future<_HelperProcess> _startHelper({
 }) async {
   final process = await Process.start(
     Platform.resolvedExecutable,
-    [
-      'run',
-      '--enable-experiment=native-assets',
-      'test/live_tailscale/live_publication_crash_main.dart',
-    ],
+    ['run', 'test/live_tailscale/live_publication_crash_main.dart'],
     environment: <String, String>{
       ...Platform.environment,
       // The helper receives only the credential explicitly needed by its

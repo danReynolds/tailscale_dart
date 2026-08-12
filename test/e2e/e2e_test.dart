@@ -19,7 +19,6 @@ import 'package:path/path.dart' as p;
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
-import 'support/native_asset_warmup.dart';
 import 'support/peer_process.dart';
 import 'support/state_waiters.dart';
 import 'support/test_keybay_backend.dart';
@@ -43,8 +42,6 @@ void main() {
   late String stateDir;
 
   setUpAll(() async {
-    await warmUpNativeAssetForPeerSubprocesses();
-
     stateDir = Directory.systemTemp.createTempSync('tailscale_e2e_').path;
     installE2ETestKeybay(stateDir);
     Tailscale.init(
@@ -52,7 +49,6 @@ void main() {
       appId: 'dev.tailscale.dart.test.e2e.primary',
     );
     tsnet = Tailscale.instance;
-    await detachLoadedNativeAssetForPeerSubprocesses();
   });
 
   tearDownAll(() async {
@@ -133,12 +129,6 @@ void main() {
   });
 
   // Two-node groups spawn `dart run test/e2e/peer_main.dart` as a subprocess.
-  // On Linux CI runners the Dart hooks framework re-invokes the package's
-  // native build hook from the subprocess, which races the parent process's
-  // mmap of the .so and crashes the parent with SIGBUS. The library itself
-  // works fine on Linux — the issue is in the test harness's subprocess
-  // pattern. Currently un-skipped while diagnosing; the CI workflow dumps
-  // /tmp/dune_hook.log on failure (DUNE_HOOK_LOG=1 is set in env).
   group('two-node connectivity', () {
     late PeerProcess peer;
     late String peerStateDir;

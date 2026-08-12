@@ -951,7 +951,6 @@ final class _ManagedPeer {
   }) async {
     final process = await Process.start(dart, [
       'run',
-      '--enable-experiment=native-assets',
       'bin/demo_node.dart',
       'serve',
       '--state-dir',

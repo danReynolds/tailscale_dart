@@ -151,7 +151,6 @@ Future<void> _setUpLiveTailnet({
   required Set<String> deviceIdsToDelete,
 }) async {
   await warmUpNativeAssetForPeerSubprocesses();
-  await detachLoadedNativeAssetForPeerSubprocesses();
 
   final api = LiveTailscaleApi(apiKey: apiKey, tailnetId: tailnetId);
   onApi(api);

@@ -52,7 +52,6 @@ void main() {
       appId: 'dev.tailscale.dart.test.e2e.primary',
     );
     tsnet = Tailscale.instance;
-    await detachLoadedNativeAssetForPeerSubprocesses();
   });
 
   tearDownAll(() async {

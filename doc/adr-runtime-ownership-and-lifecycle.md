@@ -261,12 +261,13 @@ second long-lived DEK copy; the Store is the sole long-lived in-process owner.
 
 ### Process-global upstream environment
 
-The current bridge still sets `TS_ENABLE_RAW_DISCO=false`; R2 centralized and
-audited that compatibility assignment but did not remove or narrow it. R1 never
-calls `Server.Start` and is not evidence for that change. R10 removes it only
-after a v1.102.2 source/unit conformance test proves raw discovery stays opt-in
-with the variable absent and a real Android `Server.Start`/reconnect/stop
-receipt shows no `SIGSYS`.
+The current bridge still sets `TS_ENABLE_RAW_DISCO=false`; R2 centralized that
+compatibility assignment but did not remove or narrow it. The setter uses
+upstream `envknob.Setenv`, which updates magicsock's value even though its knob
+was registered during package initialization. A pinned v1.102.2 source test now
+proves raw discovery is guarded by that boolean opt-in before raw-socket
+creation. R10 removes the process-global assignment only after a real Android
+`Server.Start`/reconnect/stop receipt also shows no `SIGSYS`.
 
 Upstream still consults `TS_LOGS_DIR` while constructing the LocalBackend's
 sockstat logger and exposes no per-Server field for it. Until that gap is fixed

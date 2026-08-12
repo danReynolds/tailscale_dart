@@ -188,7 +188,6 @@ Future<({int statusCode, String body})> _runClientFetch({
   required String? controlUrl,
   required Uri url,
 }) async {
-  await detachLoadedNativeAssetForPeerSubprocesses();
   final process = await Process.start(
     Platform.resolvedExecutable,
     [

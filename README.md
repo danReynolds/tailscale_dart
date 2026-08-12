@@ -40,8 +40,9 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 > and macOS production-Keybay process-crash/restart receipts passed on
 > 2026-08-10. R8 retained the identity cache from measured evidence, R9's
 > conformance audit is complete, and non-device R6 inventory/backup integration
-> is present. Real-device custody, backup readback, data-plane/publication, and
-> final launch receipts remain.
+> is present. Exact-main Android arm64 emulator and iOS simulator Headscale
+> smoke passed on 2026-08-11. Real-device custody, backup readback,
+> data-plane/publication, and final launch receipts remain.
 
 ## What you can build
 

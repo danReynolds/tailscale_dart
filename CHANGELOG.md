@@ -11,6 +11,15 @@ gate remain before release.
 
 **Conformance and performance closeout:**
 
+- Fixed the raw-disco compatibility pin to use upstream `envknob.Setenv`;
+  `os.Setenv` did not update magicsock's already-registered knob. A pinned
+  v1.102.2 source contract now proves raw-socket creation remains opt-in. The
+  pin stays in place until the physical Android launch receipt passes.
+- Removed the obsolete Linux native-asset detach workaround now that stable
+  Dart includes the delete-before-copy dylib fix, while retaining the small
+  subprocess warmup that avoids duplicate native builds.
+- Widened the Keybay constraint to the semver-compatible `^0.1.0` range so the
+  package passes dependency-constraint publication validation.
 - Default `udp.bind()` now asks the initialized upstream server for
   `TailscaleIPs()` directly instead of materializing the public full-status
   model in Dart solely to recover the node's IPv4 address.

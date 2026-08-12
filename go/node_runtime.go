@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"tailscale.com/client/local"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/mak"
@@ -47,6 +48,8 @@ var ErrStartupAbandoned = errors.New("tailscale startup abandoned")
 // in-memory state, but its result was not confirmed. Local state is retained
 // and the affected runtime is closed so a later fresh start can reconcile.
 var ErrLogoutIndeterminate = errors.New("tailscale logout indeterminate")
+
+const rawDiscoEnv = "TS_ENABLE_RAW_DISCO"
 
 type runtimeConfig struct {
 	hostname   string
@@ -468,9 +471,7 @@ func Configure(stateRoot, keybayNamespace string, logLevel int32) (string, error
 
 	runtimes.mu.Lock()
 	defer runtimes.mu.Unlock()
-	if err := setRawDiscoCompatibility(); err != nil {
-		return "", err
-	}
+	setRawDiscoCompatibility()
 	runtimes.configured = true
 	runtimes.stateRoot = resolved
 	runtimes.stateRootInfo = info
@@ -551,11 +552,11 @@ func ensurePrivateOwnedDirectory(path string) error {
 	return secureEncryptedStateDirectory(path, true)
 }
 
-func setRawDiscoCompatibility() error {
-	if err := os.Setenv("TS_ENABLE_RAW_DISCO", "false"); err != nil {
-		return fmt.Errorf("configure TS_ENABLE_RAW_DISCO compatibility: %w", err)
-	}
-	return nil
+func setRawDiscoCompatibility() {
+	// Upstream registers this knob during package initialization, so os.Setenv
+	// alone would change the environment without updating magicsock's cached
+	// value. Use upstream's mutation path to keep both views consistent.
+	envknob.Setenv(rawDiscoEnv, "false")
 }
 
 func (c *runtimeController) reserve(token uint64, config runtimeConfig) (*nodeRuntime, *nodeRuntime, error) {

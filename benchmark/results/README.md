@@ -15,7 +15,7 @@ quick, dirty-checkout, and targeted diagnostic runs do not belong here.
 Generate a candidate report with an explicit output path:
 
 ```sh
-dart run --enable-experiment=native-assets \
+dart run \
   benchmark/release_compare.dart \
   --output=benchmark/results/<current-version>/<platform>-vs-<baseline>.json
 ```

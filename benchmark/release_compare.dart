@@ -314,7 +314,7 @@ Future<_Target> _prepareTarget({
     'name: tailscale_release_perf_$name\n'
     'publish_to: none\n'
     'environment:\n'
-    "  sdk: '>=3.10.4 <4.0.0'\n"
+    "  sdk: '>=3.12.0 <4.0.0'\n"
     'dependencies:\n'
     '$dependencyYaml',
   );
@@ -335,11 +335,7 @@ String _yamlQuote(String value) => value.replaceAll("'", "''");
 Future<void> _warmTarget(_Target target) async {
   final result = await Process.run(
     Platform.resolvedExecutable,
-    const <String>[
-      'run',
-      '--enable-experiment=native-assets',
-      'bin/probe.dart',
-    ],
+    const <String>['run', 'bin/probe.dart'],
     workingDirectory: target.directory.path,
     environment: <String, String>{
       ...Platform.environment,
@@ -373,11 +369,7 @@ Future<List<Map<String, Object?>>> _runProbe(
 }) async {
   final process = await Process.start(
     Platform.resolvedExecutable,
-    const <String>[
-      'run',
-      '--enable-experiment=native-assets',
-      'bin/probe.dart',
-    ],
+    const <String>['run', 'bin/probe.dart'],
     workingDirectory: target.directory.path,
     environment: <String, String>{
       ...Platform.environment,

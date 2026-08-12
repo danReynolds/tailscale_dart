@@ -21,7 +21,6 @@ import 'dart:io';
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
-import '../e2e/support/native_asset_warmup.dart';
 import '../e2e/support/state_waiters.dart';
 import '../integration/support/process_state_root.dart';
 import 'support/live_tailnet_fetch.dart';
@@ -77,8 +76,6 @@ void main() {
   test(
     'a Funnel publication also answers inside the tailnet',
     () async {
-      await warmUpNativeAssetForPeerSubprocesses();
-
       api = LiveTailscaleApi(apiKey: apiKey, tailnetId: tailnetId);
       stateRoot = processIntegrationStateRoot();
       clearProcessIntegrationState(stateRoot!);

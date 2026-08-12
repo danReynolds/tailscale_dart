@@ -27,9 +27,9 @@ gate remain before release.
   `os.Setenv` did not update magicsock's already-registered knob. A pinned
   v1.102.2 source contract now proves raw-socket creation remains opt-in. The
   pin stays in place until the physical Android launch receipt passes.
-- Removed the obsolete Linux native-asset detach workaround now that stable
-  Dart includes the delete-before-copy dylib fix, while retaining the small
-  subprocess warmup that avoids duplicate native builds.
+- Raised the minimum SDK to Dart 3.12 and removed the obsolete Linux
+  native-asset detach/warmup workaround now that the supported toolchain
+  includes the delete-before-copy dylib fix.
 - Widened the Keybay constraint to the semver-compatible `^0.1.0` range so the
   package passes dependency-constraint publication validation.
 - Default `udp.bind()` now asks the initialized upstream server for

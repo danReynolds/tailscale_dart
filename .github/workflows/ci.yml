@@ -102,13 +102,15 @@ jobs:
         run: dart test --exclude-tags live-tailscale
 
   e2e-tests:
-    name: E2E (Headscale)
+    name: E2E (Headscale, Dart 3.12 floor)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: stable
+          # This lane exercises the minimum SDK's native-assets subprocess
+          # behavior; other Dart and performance jobs follow current stable.
+          sdk: 3.12.0
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'

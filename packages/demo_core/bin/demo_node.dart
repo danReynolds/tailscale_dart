@@ -398,7 +398,6 @@ final class _ManagedNode {
   }) async {
     final process = await Process.start(Platform.resolvedExecutable, [
       'run',
-      '--enable-experiment=native-assets',
       'bin/demo_node.dart',
       'serve',
       '--state-dir',
@@ -568,15 +567,15 @@ final class _UsageException implements Exception {
 void _printUsage() {
   stdout.writeln('''
 Usage:
-  dart run --enable-experiment=native-assets bin/demo_node.dart serve \\
+  dart run bin/demo_node.dart serve \\
     --state-dir /tmp/dune-a --hostname demo-a --auth-key tskey-auth-... \\
     --ephemeral
 
-  dart run --enable-experiment=native-assets bin/demo_node.dart probe \\
+  dart run bin/demo_node.dart probe \\
     --state-dir /tmp/dune-b --hostname demo-b --auth-key tskey-auth-... \\
     --node 100.x.y.z --ephemeral
 
-  dart run --enable-experiment=native-assets bin/demo_node.dart pair \\
+  dart run bin/demo_node.dart pair \\
     --auth-key tskey-auth-... --control-url http://localhost:8080 --ephemeral
 
 Commands:

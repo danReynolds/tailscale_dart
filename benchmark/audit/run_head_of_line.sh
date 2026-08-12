@@ -33,4 +33,4 @@ echo "=== Running head-of-line regression benchmark ==="
 cd "$PKG_DIR"
 HEADSCALE_URL="http://localhost:$HEADSCALE_PORT" \
 HEADSCALE_AUTH_KEY="$AUTH_KEY" \
-  "${DART:-dart}" run --enable-experiment=native-assets benchmark/audit/head_of_line.dart
+  "${DART:-dart}" run benchmark/audit/head_of_line.dart

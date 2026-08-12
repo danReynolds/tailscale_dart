@@ -91,14 +91,8 @@ void main(List<String> args) async {
         ? outDir.resolve('libtailscale.a').toFilePath()
         : libPath;
 
-    // Idempotency: if the output library is already newer than every native
-    // build input (and, on iOS, the intermediate archive exists), skip
-    // running `go build` entirely. This matters beyond pure speed: on
-    // Linux, rewriting an mmap'd .so under a process that has it loaded
-    // crashes that process with SIGBUS. The Dart hooks framework can
-    // re-invoke this hook from a subprocess while the parent test process
-    // still has the .so mmap'd; short-circuiting here keeps the file
-    // bit-for-bit stable across subprocess invocations.
+    // If the output library is newer than every native build input (and, on
+    // iOS, the intermediate archive exists), skip the redundant Go build.
     final goDir = p.join(packageRoot, 'go');
     final goBuildInputs = _goBuildInputs(goDir);
 
@@ -190,8 +184,7 @@ List<File> _goBuildInputs(String goDir) {
 
 /// Returns true if [outputPath] exists and was modified at or after every
 /// input in [inputs]. Used to skip an otherwise-unnecessary `go build`
-/// invocation that would rewrite the output and crash any process that
-/// currently has it mmap'd (Linux ELF dlopen + mutate = SIGBUS).
+/// invocation when none of its inputs have changed.
 bool _outputIsUpToDate(String outputPath, List<File> inputs) {
   final out = File(outputPath);
   if (!out.existsSync()) return false;

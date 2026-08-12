@@ -42,7 +42,7 @@ jobs:
       - run: dart pub get
       - name: Run full paired comparison
         run: >-
-          dart run --enable-experiment=native-assets
+          dart run
           benchmark/release_compare.dart
           --output=release-performance.json
       - name: Upload raw samples and aggregate

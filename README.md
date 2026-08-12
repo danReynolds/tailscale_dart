@@ -6,7 +6,7 @@
 
 [![pub package](https://img.shields.io/pub/v/tailscale.svg)](https://pub.dev/packages/tailscale)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/danReynolds/tailscale_dart/blob/main/LICENSE)
-[![Dart 3.10.4+](https://img.shields.io/badge/Dart-3.10.4+-0175C2?logo=dart&logoColor=white)](https://dart.dev)
+[![Dart 3.12+](https://img.shields.io/badge/Dart-3.12+-0175C2?logo=dart&logoColor=white)](https://dart.dev)
 [![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)](#platform-support)
 [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-70ffb1.svg)](https://danreynolds.github.io/tailscale_dart/)
 [![API reference](https://img.shields.io/badge/api-dartdoc-0175C2.svg)](https://danreynolds.github.io/tailscale_dart/api/)
@@ -75,7 +75,8 @@ The first `dart run`, `dart test`, or `flutter build` triggers a native build ho
 
 Prerequisites:
 
-- Dart SDK 3.10.4 or newer.
+- Dart SDK 3.12 or newer. Flutter apps need Flutter 3.44 or newer; use
+  Flutter 3.44.6+ on Linux for its native-assets bundle fix.
 - Go 1.26 or newer on `PATH` (or Go 1.25+ with the default
   `GOTOOLCHAIN=auto`, which auto-fetches the 1.26.5 toolchain that
   `tailscale.com` requires).

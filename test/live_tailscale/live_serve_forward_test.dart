@@ -22,7 +22,6 @@ import 'dart:io';
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
-import '../e2e/support/native_asset_warmup.dart';
 import '../e2e/support/state_waiters.dart';
 import '../integration/support/process_state_root.dart';
 import 'support/tailscale_api.dart';
@@ -88,8 +87,6 @@ void main() {
   test(
     'serve.forward proxies HTTPS tailnet traffic to a loopback HTTP server',
     () async {
-      await warmUpNativeAssetForPeerSubprocesses();
-
       api = LiveTailscaleApi(apiKey: apiKey, tailnetId: tailnetId);
       final processStateRoot = processIntegrationStateRoot();
       clearProcessIntegrationState(processStateRoot);
@@ -274,14 +271,9 @@ Future<({int? statusCode, String body, String? error})> _runClientFetchOutcome({
   required Uri url,
   Duration fetchBudget = const Duration(seconds: 150),
 }) async {
-  await detachLoadedNativeAssetForPeerSubprocesses();
   final process = await Process.start(
     Platform.resolvedExecutable,
-    [
-      'run',
-      '--enable-experiment=native-assets',
-      'test/live_tailscale/live_tls_fetch_main.dart',
-    ],
+    ['run', 'test/live_tailscale/live_tls_fetch_main.dart'],
     environment: {
       ...Platform.environment,
       'STATE_DIR': stateDir,

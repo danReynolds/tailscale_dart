@@ -27,7 +27,6 @@ import 'package:http/http.dart' as http;
 import 'package:tailscale/tailscale.dart';
 import 'package:test/test.dart';
 
-import '../e2e/support/native_asset_warmup.dart';
 import '../e2e/support/state_waiters.dart';
 import '../support/persistent_state_inventory.dart';
 import 'support/live_tailnet_fetch.dart';
@@ -90,8 +89,6 @@ void main() {
   test(
     'issue #87: Serve -> Funnel -> Serve uses one mapping and exact handles',
     () async {
-      await warmUpNativeAssetForPeerSubprocesses();
-
       api = LiveTailscaleApi(apiKey: apiKey, tailnetId: tailnetId);
       stateRoot = Directory.systemTemp.createTempSync(
         'tailscale_live_swap_persistent_',

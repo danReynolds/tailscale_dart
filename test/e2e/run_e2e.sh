@@ -72,7 +72,7 @@ cd "$PKG_DIR"
 HEADSCALE_URL="http://localhost:$HEADSCALE_PORT" \
 HEADSCALE_AUTH_KEY="$AUTH_KEY" \
 HEADSCALE_PERSIST_AUTH_KEY="$PERSIST_AUTH_KEY" \
-    "${DART:-dart}" test test/e2e/e2e_test.dart --enable-experiment=native-assets --timeout=360s
+    "${DART:-dart}" test test/e2e/e2e_test.dart --timeout=360s
 
 # R8's two live receipts each configure the process-global native runtime, so
 # they must run in separate Go test processes. Reuse this suite's disposable

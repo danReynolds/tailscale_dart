@@ -7,10 +7,10 @@
 /// shared-reactor implementation for before/after comparisons.
 ///
 /// Usage:
-///   dart run --enable-experiment=native-assets benchmark/fd_transport.dart
+///   dart run benchmark/fd_transport.dart
 ///
 /// Useful comparison run:
-///   dart run --enable-experiment=native-assets benchmark/fd_transport.dart \
+///   dart run benchmark/fd_transport.dart \
 ///     --pairs=1,10,50,100 --payload-mib=4 --latency-writes=200 --json
 library;
 

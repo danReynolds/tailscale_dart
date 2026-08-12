@@ -67,7 +67,6 @@ jobs:
       # probes the Go reactor without joining a tailnet or needing credentials.
       - name: Scaffold host app
         run: |
-          flutter config --enable-native-assets
           flutter create --platforms=android /tmp/smoke
           cd /tmp/smoke
           python3 - <<'PY'

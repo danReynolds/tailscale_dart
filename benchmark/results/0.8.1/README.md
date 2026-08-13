@@ -7,6 +7,8 @@ Physical-device reports:
 - [`2026-08-13 Android arm64`](devices/2026-08-13-android-arm64.md) — Pixel 6a,
   Android 16 (API 36), clean checkout, correctness and profile complete.
 
+## Host release comparison
+
 - Measured source: `1bc8f511cd5e9a7cdbb090c61f1d05483543515f`
 - Published baseline: `tailscale 0.8.0`
 - Host: macOS arm64, Dart 3.12.2

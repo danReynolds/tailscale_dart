@@ -633,6 +633,20 @@ final class SmokeResult {
     'eventCount': events.length,
   };
 
+  Map<String, Object?> toStdoutJson() {
+    if (ok) return toJson();
+    return {
+      'ok': false,
+      'startedAt': startedAt.toIso8601String(),
+      'finishedAt': finishedAt.toIso8601String(),
+      'durationMs': finishedAt.difference(startedAt).inMilliseconds,
+      'hostname': hostname,
+      'platform': platform,
+      'targetIp': targetIp,
+      'error': _shorten(error ?? 'smoke probe failed'),
+    };
+  }
+
   static Map<String, Object?>? _reportJson(DemoProbeReport? report) {
     if (report == null) return null;
     return {
@@ -720,9 +734,10 @@ Future<void> _postResult(SmokeResult result) async {
 
 void _emitResult(SmokeResult result) {
   // The matrix runner accepts this stdout line as a fallback if /result POST
-  // fails to land. Keep emitting it for diagnostic visibility too.
+  // fails to land. Failures stay compact because Flutter can truncate long
+  // device log lines, especially when the runner itself is unreachable.
   // ignore: avoid_print
-  print('$_resultPrefix${jsonEncode(result.toJson())}');
+  print('$_resultPrefix${jsonEncode(result.toStdoutJson())}');
 }
 
 String _shorten(String value, [int maxLength = 240]) {

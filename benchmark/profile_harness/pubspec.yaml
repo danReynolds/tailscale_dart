@@ -1,0 +1,11 @@
+name: tailscale_profile_harness
+description: Private, dependency-free performance workload shared by host and device profiles.
+publish_to: none
+version: 0.0.0
+
+environment:
+  sdk: ^3.12.0
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.31.1

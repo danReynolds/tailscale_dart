@@ -12,6 +12,10 @@ final class SmokeRunnerConfig {
     required this.targetIp,
     required this.hostname,
     required this.stateSuffix,
+    this.profileSamples = 0,
+    this.profileContext = 'primary',
+    this.lanProfileHost,
+    this.lanProfilePort,
   });
 
   final String controlUrl;
@@ -19,6 +23,10 @@ final class SmokeRunnerConfig {
   final String targetIp;
   final String hostname;
   final String stateSuffix;
+  final int profileSamples;
+  final String profileContext;
+  final String? lanProfileHost;
+  final int? lanProfilePort;
 }
 
 Future<SmokeRunnerConfig> fetchSmokeConfig({
@@ -44,6 +52,10 @@ Future<SmokeRunnerConfig> fetchSmokeConfig({
       targetIp: _requiredField(data, 'targetIp'),
       hostname: data['hostname'] as String? ?? 'dune-smoke-$session',
       stateSuffix: data['stateSuffix'] as String? ?? session,
+      profileSamples: _nonNegativeInt(data, 'profileSamples'),
+      profileContext: data['profileContext'] as String? ?? 'primary',
+      lanProfileHost: data['lanProfileHost'] as String?,
+      lanProfilePort: _optionalPort(data, 'lanProfilePort'),
     );
   } finally {
     client.close(force: true);
@@ -83,6 +95,26 @@ String _requiredField(Map<String, dynamic> data, String key) {
   final value = data[key];
   if (value is! String || value.isEmpty) {
     throw StateError('runner /config missing required field $key');
+  }
+  return value;
+}
+
+int _nonNegativeInt(Map<String, dynamic> data, String key) {
+  final value = data[key];
+  if (value == null) return 0;
+  if (value is! int || value < 0) {
+    throw StateError(
+      'runner /config field $key must be a non-negative integer',
+    );
+  }
+  return value;
+}
+
+int? _optionalPort(Map<String, dynamic> data, String key) {
+  final value = data[key];
+  if (value == null) return null;
+  if (value is! int || value < 1 || value > 65535) {
+    throw StateError('runner /config field $key must be a valid port');
   }
   return value;
 }

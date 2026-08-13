@@ -47,9 +47,6 @@ void main(List<String> args) async {
     final libName = targetOS.dylibFileName('tailscale');
     final libPath = outDir.resolve(libName).toFilePath();
 
-    // Go source entry point
-    final mainGo = p.join(packageRoot, 'go', 'cmd', 'dylib', 'main.go');
-
     // Build environment
     final env = <String, String>{
       'GOOS': goos,
@@ -59,6 +56,16 @@ void main(List<String> args) async {
 
     // Build flags
     final buildTags = <String>[];
+    final profileDiagnostic = input.userDefines['profile_diagnostic'];
+    if (profileDiagnostic is! bool?) {
+      throw const FormatException(
+        'hooks.user_defines.tailscale.profile_diagnostic must be a boolean '
+        '(or omitted)',
+      );
+    }
+    if (profileDiagnostic == true) {
+      buildTags.add('tailscale_profile_diag');
+    }
 
     // Platform-specific toolchain setup
     if (targetOS == OS.android) {
@@ -111,7 +118,7 @@ void main(List<String> args) async {
         if (buildTags.isNotEmpty) '-tags=${buildTags.join(",")}',
         '-o',
         goOutput,
-        mainGo,
+        './cmd/dylib',
       ];
 
       final result = await Process.run(

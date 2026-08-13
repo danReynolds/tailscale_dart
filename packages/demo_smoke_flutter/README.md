@@ -45,7 +45,8 @@ The runner:
 4. runs this Flutter app as an explicitly ephemeral node on each selected
    platform target
 5. receives the result over `POST /result`
-6. tears down Headscale and any emulator it launched, unless told to keep them
+6. prints a per-capability matrix
+7. tears down Headscale and any emulator it launched, unless told to keep them
 
 Useful variants:
 
@@ -81,6 +82,25 @@ The required smoke probes are:
 Ping is included as diagnostic output but is not required for a pass. LocalAPI
 ping can lag during fresh netmap and DERP convergence even when the package data
 paths are working.
+
+With `--profile-samples N`, the same app runs in Flutter profile mode with
+Flutter tooling detached and adds N sequential small-operation samples after
+the first functional cycle, followed by three paired five-second uploads and
+downloads through the public Dart API and directly through the active upstream
+`tsnet.Conn`. Pair order
+alternates to reduce systematic first/second-run bias. A single one-second
+sample per direction over an ordinary host LAN socket supplies a coarse
+runtime/network ceiling without turning fast loopback into a second heavy
+benchmark. The bounded protocol, byte accounting, and sender write-completion
+statistics are shared with the host release profiler. The native control is an
+app-only build-tagged diagnostic; it is not exported by ordinary
+`package:tailscale` builds.
+Functional correctness and profile collection are reported separately;
+performance remains advisory and the raw samples are retained for historical
+comparison. The report records the detached launch mode so attached exploratory
+runs cannot be confused with canonical history. iOS Simulator diagnostics can
+explicitly use `--profile-run-mode debug`; they are not comparable with physical
+profile-mode history.
 
 Dart defines (all compile-time):
 

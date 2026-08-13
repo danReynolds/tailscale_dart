@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:tailscale/tailscale.dart';
+import 'package:tailscale_profile_harness/tailscale_profile_harness.dart';
 
 import 'test_custody_adapter.dart';
 
@@ -138,29 +139,12 @@ Future<void> _runEphemeral(Tailscale tsnet, _ProbeOptions options) async {
     await _tcpRoundTrip(tsnet, options.peerIp!, const <int>[1, 3, 3, 7]);
   });
 
-  final bulkPayload = Uint8List(1 << 20);
-  for (var i = 0; i < bulkPayload.length; i++) {
-    bulkPayload[i] = (i * 37 + 11) & 0xff;
+  final directions = options.trial.isOdd
+      ? SpeedTestDirection.values
+      : SpeedTestDirection.values.reversed;
+  for (final direction in directions) {
+    await _profileSustainedTransfer(tsnet, options.peerIp!, direction);
   }
-  final bulkTimings = <_Timing>[];
-  final bulkThroughput = <double>[];
-  for (var i = 0; i < options.bulkIterations; i++) {
-    final timing = await _measureAsync(
-      () => _tcpRoundTrip(tsnet, options.peerIp!, bulkPayload),
-    );
-    bulkTimings.add(timing);
-    bulkThroughput.add(
-      (2.0 * bulkPayload.length / (1 << 20)) /
-          (timing.wallUs / Duration.microsecondsPerSecond),
-    );
-  }
-  _emitTiming('tcp.bulk_1mib_round_trip', bulkTimings);
-  _emitMetric(
-    'tcp.bulk_1mib_throughput',
-    unit: 'mib_per_second',
-    samples: bulkThroughput,
-    higherIsBetter: true,
-  );
 
   late final TailscaleDatagramBinding udp;
   await _measureRepeated('udp.bind', 1, () async {
@@ -186,6 +170,60 @@ Future<void> _runEphemeral(Tailscale tsnet, _ProbeOptions options) async {
   _emitRss('rss.after_data_plane');
   await _measureRepeated('lifecycle.down.ephemeral', 1, tsnet.down);
   _emitRss('rss.after_down');
+}
+
+Future<void> _profileSustainedTransfer(
+  Tailscale tsnet,
+  String peerIp,
+  SpeedTestDirection direction,
+) async {
+  final pathBefore = await tsnet.diag.ping(
+    peerIp,
+    timeout: const Duration(seconds: 15),
+  );
+  final connection = await tsnet.tcp
+      .dial(peerIp, profileSpeedTestPort, timeout: const Duration(seconds: 30))
+      .timeout(const Duration(seconds: 30));
+  final result = await runSpeedTestClient(
+    SpeedTestConnection(
+      input: connection.input,
+      write: connection.output.write,
+      close: connection.close,
+    ),
+    direction: direction,
+  );
+  final pathAfter = await tsnet.diag.ping(
+    peerIp,
+    timeout: const Duration(seconds: 15),
+  );
+  final eligible =
+      pathBefore.path != PingPath.unknown && pathBefore.path == pathAfter.path;
+  _emit(<String, Object?>{
+    'kind': 'speedTest',
+    'scenario': 'tcp.sustained.${direction.name}',
+    'comparisonEligible': eligible,
+    'pathBefore': pathBefore.path.name,
+    'pathAfter': pathAfter.path.name,
+    'result': result.toJson(),
+  });
+  if (!eligible) {
+    throw StateError(
+      'TCP ${direction.name} path changed or was unknown: '
+      '${pathBefore.path.name} -> ${pathAfter.path.name}',
+    );
+  }
+  _emitMetric(
+    'tcp.sustained.${direction.name}',
+    unit: 'mib_per_second',
+    samples: <num>[result.mibPerSecond],
+    higherIsBetter: true,
+  );
+  _emitMetric(
+    'tcp.sustained.${direction.name}.sender_write_p95',
+    unit: 'microseconds',
+    samples: <num>[result.writeCompletion.p95Us],
+    advisoryOnly: true,
+  );
 }
 
 Future<void> _runPersistentEnroll(
@@ -470,7 +508,7 @@ final class _ProbeOptions {
     required this.peerResponse,
     required this.expectedIpv4,
     required this.iterations,
-    required this.bulkIterations,
+    required this.trial,
   });
 
   factory _ProbeOptions.fromEnvironment(String mode) {
@@ -502,9 +540,7 @@ final class _ProbeOptions {
       peerResponse: Platform.environment['PERF_PEER_RESPONSE'] ?? 'perf-peer',
       expectedIpv4: Platform.environment['PERF_EXPECTED_IPV4'],
       iterations: int.parse(Platform.environment['PERF_ITERATIONS'] ?? '50'),
-      bulkIterations: int.parse(
-        Platform.environment['PERF_BULK_ITERATIONS'] ?? '1',
-      ),
+      trial: int.parse(Platform.environment['PERF_TRIAL'] ?? '1'),
     );
   }
 
@@ -518,5 +554,5 @@ final class _ProbeOptions {
   final String peerResponse;
   final String? expectedIpv4;
   final int iterations;
-  final int bulkIterations;
+  final int trial;
 }

@@ -4,12 +4,15 @@ import 'dart:io';
 
 import 'package:demo_core/demo_core.dart';
 import 'package:dune_smoke_flutter/src/runner_client.dart';
+import 'package:dune_smoke_flutter/src/native_tsnet_profile.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 const _resultPrefix = 'DUNE_SMOKE_RESULT ';
 const _defaultTimeout = Duration(seconds: 120);
+const _speedRunsPerDirection = 3;
+const _lanRunsPerDirection = 1;
 
 // Compile-time only: where to fetch run-time config from. Stable across
 // matrix runs on the same machine + target, so dart-defines don't change
@@ -146,7 +149,98 @@ class _SmokeHomeState extends State<SmokeHome> {
         config.targetIp,
         timeout: const Duration(seconds: 20),
       );
+      final profileTargetIp = config.targetIp;
       final firstCycleOk = _requiredSmokeProbesOk(report);
+      final profileReports = <DemoProbeReport>[];
+      final speedTests = <DemoSpeedTestResult>[];
+      final nativeTsnetSpeedTests = <DemoSpeedTestResult>[];
+      final lanSpeedTests = <SpeedTestResult>[];
+      String? profileError;
+      if (config.profileSamples > 0) {
+        try {
+          for (var sample = 1; sample <= config.profileSamples; sample++) {
+            _event('profile: API sample $sample/${config.profileSamples}');
+            profileReports.add(
+              await _demo.probeNode(
+                config.targetIp,
+                timeout: const Duration(seconds: 30),
+              ),
+            );
+          }
+          for (var run = 1; run <= _speedRunsPerDirection; run++) {
+            final directions = run.isOdd
+                ? SpeedTestDirection.values
+                : SpeedTestDirection.values.reversed;
+            for (final direction in directions) {
+              Future<void> dartApi() async {
+                _event(
+                  'profile: Dart TCP ${direction.name} '
+                  '$run/$_speedRunsPerDirection',
+                );
+                speedTests.add(
+                  await _demo.profileNode(
+                    profileTargetIp,
+                    direction: direction,
+                  ),
+                );
+              }
+
+              Future<void> nativeTsnet() async {
+                _event(
+                  'profile: native tsnet ${direction.name} '
+                  '$run/$_speedRunsPerDirection',
+                );
+                nativeTsnetSpeedTests.add(
+                  await _profileNativeTsnet(
+                    profileTargetIp,
+                    direction: direction,
+                  ),
+                );
+              }
+
+              // Alternate pair order so first/second-run thermal or network
+              // drift is not assigned systematically to either lane.
+              if (run.isOdd) {
+                await dartApi();
+                await nativeTsnet();
+              } else {
+                await nativeTsnet();
+                await dartApi();
+              }
+            }
+          }
+          final lanHost = config.lanProfileHost;
+          final lanPort = config.lanProfilePort;
+          if (lanHost == null || lanPort == null) {
+            throw StateError('runner did not provide the ordinary-LAN control');
+          }
+          for (var run = 1; run <= _lanRunsPerDirection; run++) {
+            final directions = run.isOdd
+                ? SpeedTestDirection.values
+                : SpeedTestDirection.values.reversed;
+            for (final direction in directions) {
+              _event(
+                'profile: LAN ${direction.name} '
+                '$run/$_lanRunsPerDirection',
+              );
+              lanSpeedTests.add(
+                await _profileLan(lanHost, lanPort, direction: direction),
+              );
+            }
+          }
+        } catch (error) {
+          profileError = error.toString();
+          _event('profile: error $error');
+        }
+      }
+      final profileStatus = _profileStatus(
+        requestedSamples: config.profileSamples,
+        reports: profileReports,
+        speedTests: speedTests,
+        nativeTsnetSpeedTests: nativeTsnetSpeedTests,
+        lanSpeedTests: lanSpeedTests,
+        error: profileError,
+      );
 
       // Restart cycle: the runtime lifecycle receipt. A second Server start in
       // the same app process proves stop/start under the platform's real app
@@ -191,6 +285,14 @@ class _SmokeHomeState extends State<SmokeHome> {
           services: services,
           nodesSeen: nodes.length,
           report: report,
+          profileReports: profileReports,
+          profileRequested: config.profileSamples > 0,
+          profileContext: config.profileContext,
+          profileStatus: profileStatus,
+          profileError: profileError,
+          speedTests: speedTests,
+          nativeTsnetSpeedTests: nativeTsnetSpeedTests,
+          lanSpeedTests: lanSpeedTests,
           restartReport: restartReport,
           restartOk: restartOk,
           events: List.unmodifiable(_events),
@@ -246,6 +348,44 @@ class _SmokeHomeState extends State<SmokeHome> {
         'dune_smoke_${Platform.operatingSystem}_$stateSuffix',
       );
     }
+  }
+
+  Future<SpeedTestResult> _profileLan(
+    String host,
+    int port, {
+    required SpeedTestDirection direction,
+  }) async {
+    final socket = await Socket.connect(host, port, timeout: _defaultTimeout);
+    return runSpeedTestClient(
+      SpeedTestConnection.bufferedSink(
+        input: socket,
+        add: socket.add,
+        flush: socket.flush,
+        close: () async => socket.destroy(),
+      ),
+      direction: direction,
+      config: ordinaryLanControlConfig,
+      timeout: _defaultTimeout,
+    );
+  }
+
+  Future<DemoSpeedTestResult> _profileNativeTsnet(
+    String nodeIp, {
+    required SpeedTestDirection direction,
+  }) async {
+    final pathBefore = await _demo.pingNode(nodeIp, timeout: _defaultTimeout);
+    final transfer = await runNativeTsnetProfile(
+      host: nodeIp,
+      port: profileSpeedTestPort,
+      direction: direction,
+      timeout: _defaultTimeout,
+    );
+    final pathAfter = await _demo.pingNode(nodeIp, timeout: _defaultTimeout);
+    return DemoSpeedTestResult(
+      transfer: transfer,
+      pathBefore: pathBefore,
+      pathAfter: pathAfter,
+    );
   }
 
   @override
@@ -385,9 +525,11 @@ bool _requiredSmokeProbesOk(DemoProbeReport report) {
     DemoProbeKind.tcpEcho,
     DemoProbeKind.udpEcho,
   };
-  return report.results
+  final results = report.results
       .where((result) => required.contains(result.kind))
-      .every((result) => result.ok);
+      .toList(growable: false);
+  return results.length == required.length &&
+      results.every((result) => result.ok);
 }
 
 final class SmokeResult {
@@ -403,6 +545,14 @@ final class SmokeResult {
     required this.nodesSeen,
     required this.report,
     required this.events,
+    this.profileReports = const [],
+    this.profileRequested = false,
+    this.profileContext = 'primary',
+    this.profileStatus = 'notRun',
+    this.profileError,
+    this.speedTests = const [],
+    this.nativeTsnetSpeedTests = const [],
+    this.lanSpeedTests = const [],
     this.restartReport,
     this.restartOk = false,
     this.error,
@@ -419,6 +569,14 @@ final class SmokeResult {
   final DemoServices? services;
   final int nodesSeen;
   final DemoProbeReport? report;
+  final List<DemoProbeReport> profileReports;
+  final bool profileRequested;
+  final String profileContext;
+  final String profileStatus;
+  final String? profileError;
+  final List<DemoSpeedTestResult> speedTests;
+  final List<DemoSpeedTestResult> nativeTsnetSpeedTests;
+  final List<SpeedTestResult> lanSpeedTests;
   final DemoProbeReport? restartReport;
   final bool restartOk;
   final String? error;
@@ -441,9 +599,32 @@ final class SmokeResult {
             'httpTailnetPort': services!.httpTailnetPort,
             'tcpPort': services!.tcpPort,
             'udpPort': services!.udpPort,
+            'speedTestPort': services!.speedTestPort,
           },
     'nodesSeen': nodesSeen,
     'report': _reportJson(report),
+    'profile': !profileRequested
+        ? null
+        : {
+            'status': profileStatus,
+            'valid': profileStatus == 'complete',
+            'context': profileContext,
+            'error': profileError == null ? null : _shorten(profileError!),
+            'sampleCount': profileReports.length,
+            'reports': [
+              for (final report in profileReports) _reportJson(report),
+            ],
+            'speedTests': [
+              for (final speedTest in speedTests) _speedTestJson(speedTest),
+            ],
+            'nativeTsnetSpeedTests': [
+              for (final speedTest in nativeTsnetSpeedTests)
+                _speedTestJson(speedTest),
+            ],
+            'lanSpeedTests': [
+              for (final speedTest in lanSpeedTests) speedTest.toJson(),
+            ],
+          },
     'restart': restartReport == null
         ? null
         : {'ok': restartOk, 'report': _reportJson(restartReport)},
@@ -465,11 +646,63 @@ final class SmokeResult {
             'kind': result.kind.name,
             'ok': result.ok,
             'durationMs': result.duration.inMilliseconds,
+            'durationUs': result.duration.inMicroseconds,
             'message': _shorten(result.message),
+            if (result.networkLatency != null)
+              'networkLatencyUs': result.networkLatency!.inMicroseconds,
+            if (result.networkPath != null) 'networkPath': result.networkPath,
           },
       ],
     };
   }
+
+  static Map<String, Object?> _speedTestJson(DemoSpeedTestResult value) => {
+    'comparisonEligible': value.comparisonEligible,
+    'ineligibleReason': value.ineligibleReason,
+    'pathBefore': _pathJson(value.pathBefore),
+    'pathAfter': _pathJson(value.pathAfter),
+    'result': value.transfer.toJson(),
+  };
+
+  static Map<String, Object?> _pathJson(DemoProbeResult value) => {
+    'ok': value.ok,
+    'durationUs': value.duration.inMicroseconds,
+    if (value.networkLatency != null)
+      'networkLatencyUs': value.networkLatency!.inMicroseconds,
+    if (value.networkPath != null) 'networkPath': value.networkPath,
+  };
+}
+
+String _profileStatus({
+  required int requestedSamples,
+  required List<DemoProbeReport> reports,
+  required List<DemoSpeedTestResult> speedTests,
+  required List<DemoSpeedTestResult> nativeTsnetSpeedTests,
+  required List<SpeedTestResult> lanSpeedTests,
+  required String? error,
+}) {
+  if (requestedSamples == 0) return 'notRun';
+  if (error != null) return 'error';
+  if (reports.length != requestedSamples ||
+      !reports.every(_requiredSmokeProbesOk)) {
+    return 'invalid';
+  }
+  if (speedTests.length !=
+          _speedRunsPerDirection * SpeedTestDirection.values.length ||
+      !speedTests.every((value) => value.comparisonEligible)) {
+    return 'invalid';
+  }
+  if (nativeTsnetSpeedTests.length !=
+          _speedRunsPerDirection * SpeedTestDirection.values.length ||
+      !nativeTsnetSpeedTests.every((value) => value.comparisonEligible)) {
+    return 'invalid';
+  }
+  if (lanSpeedTests.length !=
+          _lanRunsPerDirection * SpeedTestDirection.values.length ||
+      !lanSpeedTests.every((value) => value.valid)) {
+    return 'invalid';
+  }
+  return 'complete';
 }
 
 Future<void> _postResult(SmokeResult result) async {

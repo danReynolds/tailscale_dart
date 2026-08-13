@@ -295,6 +295,7 @@ Map<String, Object?> _servicesToJson(DemoServices services) => {
   'httpTailnetPort': services.httpTailnetPort,
   'tcpPort': services.tcpPort,
   'udpPort': services.udpPort,
+  'speedTestPort': services.speedTestPort,
 };
 
 Map<String, Object?> _reportToJson(DemoProbeReport report) => {

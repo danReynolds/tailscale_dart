@@ -5,6 +5,7 @@
 ///   - a trivial tailnet HTTP server on port 80 (via `http.bind`), and
 ///   - a raw TCP byte-echo server on tailnet port 7000 (via `tcp.bind`),
 ///   - a UDP datagram echo binding on tailnet port 7001 (via `udp.bind`),
+///   - a sustained TCP profile server on tailnet port 7002,
 /// prints `READY <ipv4>` on stdout once the node is Running, then shuts down
 /// cleanly when stdin closes.
 ///
@@ -28,6 +29,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:tailscale/tailscale.dart';
+import 'package:tailscale_profile_harness/tailscale_profile_harness.dart';
 
 import 'support/test_keybay_backend.dart';
 
@@ -113,6 +115,24 @@ Future<void> main(List<String> args) async {
     unawaited(udpEcho.send(datagram.payload, to: datagram.remote));
   });
 
+  final profileServer = await tsnet.tcp.bind(port: profileSpeedTestPort);
+  profileServer.connections.listen((connection) {
+    unawaited(
+      serveSpeedTestConnection(
+        SpeedTestConnection(
+          input: connection.input,
+          write: connection.output.write,
+          close: connection.close,
+        ),
+      ).then<void>(
+        (_) {},
+        onError: (Object error) {
+          stderr.writeln('peer: speed test failed: $error');
+        },
+      ),
+    );
+  });
+
   // Leading newline: the Dart build hook writes `Running build hooks...`
   // without a trailing newline, so force a line break before our sentinel.
   stdout.write('\nREADY $ipv4\n');
@@ -171,6 +191,9 @@ Future<void> main(List<String> args) async {
 
   try {
     await udpEcho.close();
+  } catch (_) {}
+  try {
+    await profileServer.close();
   } catch (_) {}
   try {
     await echoServer.close();

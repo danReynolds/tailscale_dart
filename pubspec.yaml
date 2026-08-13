@@ -38,4 +38,6 @@ hooks:
 dev_dependencies:
   lints: ">=5.0.0 <7.0.0"
   shelf: ^1.4.2
+  tailscale_profile_harness:
+    path: benchmark/profile_harness
   test: ^1.31.1

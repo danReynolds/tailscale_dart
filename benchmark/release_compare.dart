@@ -4,6 +4,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:tailscale_profile_harness/tailscale_profile_harness.dart';
+
 import '../test/e2e/support/peer_process.dart';
 import 'profile/result_analysis.dart';
 
@@ -120,7 +122,6 @@ Future<void> main(List<String> args) async {
             authKey: ephemeralKey,
             peerIp: peer.ipv4,
             iterations: options.iterations,
-            bulkIterations: options.bulkIterations,
           ),
         );
       }
@@ -149,7 +150,6 @@ Future<void> main(List<String> args) async {
           controlUrl: controlUrl,
           authKey: persistentKey,
           iterations: options.iterations,
-          bulkIterations: options.bulkIterations,
         );
         records.addAll(enrolled);
         final enrolledIpv4 = _fact(enrolled, 'ipv4');
@@ -169,7 +169,6 @@ Future<void> main(List<String> args) async {
             controlUrl: controlUrl,
             expectedIpv4: enrolledIpv4,
             iterations: options.iterations,
-            bulkIterations: options.bulkIterations,
           ),
         );
       }
@@ -212,7 +211,7 @@ Future<void> main(List<String> args) async {
         'processors': Platform.numberOfProcessors,
         'trials': options.trials,
         'iterations': options.iterations,
-        'bulkIterations': options.bulkIterations,
+        'speedTest': canonicalSpeedTestConfig.toJson(),
       },
       'records': records,
       'comparisons': comparisons.map((value) => value.toJson()).toList(),
@@ -310,13 +309,18 @@ Future<_Target> _prepareTarget({
             '  keybay: 0.1.0\n'
             '  path: ^1.9.1\n'
       : "  tailscale: ${_yamlQuote(dependency)}\n";
+  final harnessPath = '${repo.path}/benchmark/profile_harness'.replaceAll(
+    "'",
+    "''",
+  );
   File('${directory.path}/pubspec.yaml').writeAsStringSync(
     'name: tailscale_release_perf_$name\n'
     'publish_to: none\n'
     'environment:\n'
     "  sdk: '>=3.12.0 <4.0.0'\n"
     'dependencies:\n'
-    '$dependencyYaml',
+    '$dependencyYaml'
+    "  tailscale_profile_harness:\n    path: '$harnessPath'\n",
   );
   await _runChecked(
     Platform.resolvedExecutable,
@@ -362,7 +366,6 @@ Future<List<Map<String, Object?>>> _runProbe(
   required String hostname,
   required String controlUrl,
   required int iterations,
-  required int bulkIterations,
   String? authKey,
   String? peerIp,
   String? expectedIpv4,
@@ -381,7 +384,7 @@ Future<List<Map<String, Object?>>> _runProbe(
       'PERF_CONTROL_URL': controlUrl,
       'PERF_PEER_RESPONSE': _peerResponse,
       'PERF_ITERATIONS': '$iterations',
-      'PERF_BULK_ITERATIONS': '$bulkIterations',
+      'PERF_TRIAL': '$trial',
       'PERF_AUTH_KEY': ?authKey,
       'PERF_PEER_IP': ?peerIp,
       'PERF_EXPECTED_IPV4': ?expectedIpv4,
@@ -697,7 +700,6 @@ final class _RunnerOptions {
     required this.quick,
     required this.trials,
     required this.iterations,
-    required this.bulkIterations,
     required this.baselineVersion,
     required this.outputPath,
     required this.keepTemp,
@@ -716,15 +718,13 @@ final class _RunnerOptions {
 
     final trials = int.parse(value('--trials') ?? (quick ? '1' : '5'));
     final iterations = int.parse(value('--iterations') ?? (quick ? '5' : '50'));
-    final bulkIterations = int.parse(value('--bulk-iterations') ?? '1');
-    if (trials <= 0 || iterations <= 0 || bulkIterations <= 0) {
+    if (trials <= 0 || iterations <= 0) {
       throw ArgumentError('trial and iteration counts must be positive');
     }
     return _RunnerOptions(
       quick: quick,
       trials: trials,
       iterations: iterations,
-      bulkIterations: bulkIterations,
       baselineVersion: value('--baseline'),
       outputPath: value('--output'),
       keepTemp: arguments.contains('--keep-temp'),
@@ -734,7 +734,6 @@ final class _RunnerOptions {
   final bool quick;
   final int trials;
   final int iterations;
-  final int bulkIterations;
   final String? baselineVersion;
   final String? outputPath;
   final bool keepTemp;

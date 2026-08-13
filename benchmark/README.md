@@ -75,7 +75,8 @@ DUNE_SMOKE_RUNNER_URL_IOS=http://<host-lan-ip>:18099 \
 ```
 
 Android physical-device runs use the corresponding Android variables and
-device selector:
+device selector. Unlock the device before starting; a secure keyguard prevents
+Flutter from launching the profile app and is reported as a preflight failure:
 
 ```sh
 DUNE_SMOKE_CONTROL_URL_ANDROID=http://<host-lan-ip>:18080 \

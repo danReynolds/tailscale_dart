@@ -284,7 +284,8 @@ hosted control-plane state and a secret. Rotate the API key after sharing it.
 Physical devices usually need a reachable host LAN URL. The runner exposes
 both the Headscale control plane and a small config-fetch HTTP server back to
 the smoke app, so override both and explicitly bind the runner server to a
-reachable interface:
+reachable interface. Unlock the device before starting; the runner wakes it
+and dismisses a non-secure keyguard, but fails fast when a secure lock remains:
 
 ```bash
 DUNE_SMOKE_CONTROL_URL_IOS=http://192.168.86.22:18080 \

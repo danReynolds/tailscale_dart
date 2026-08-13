@@ -16,3 +16,9 @@ history. The generated platform-qualification matrix keeps ephemeral data
 plane, process-death reconnect, production custody, local reset, and profiling
 as distinct lanes; `NOT RUN` is not a pass. Link either artifact from a dated
 narrative receipt when extra context is useful.
+
+Current `0.9.0` release-candidate receipts:
+
+- [Android 16 persistent-custody matrix](2026-08-13-android-16.md) with its
+  [machine-readable artifact](2026-08-13-android-16.json).
+- [iOS 18.7.3 physical-device receipt](2026-08-12-ios-18.7.3.md).

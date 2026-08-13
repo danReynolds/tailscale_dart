@@ -216,8 +216,10 @@ void main() {
     final target = (artifact['targets'] as List).single as Map<String, Object?>;
     expect(target['custody'], containsPair('scheme', 'encryptedFile'));
     final markdown = renderSmokeRunMarkdown(artifact);
+    expect(markdown, startsWith('# Device persistent-custody qualification'));
     expect(markdown, contains('android persistent custody'));
     expect(markdown, contains('hardwareBacked'));
+    expect(markdown, isNot(contains('Performance measurements are advisory')));
   });
 }
 

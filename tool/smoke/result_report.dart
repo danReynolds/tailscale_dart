@@ -268,8 +268,20 @@ String renderSmokeRunMarkdown(Map<String, Object?> artifact) {
       artifact['environment'] as Map<String, Object?>? ?? const {};
   final targets = (artifact['targets'] as List? ?? const [])
       .cast<Map<String, Object?>>();
+  final hasProfile = targets.any(
+    (target) => target['profile'] is Map<String, Object?>,
+  );
+  final hasCustody = targets.any(
+    (target) => target['custody'] is Map<String, Object?>,
+  );
   final buffer = StringBuffer()
-    ..writeln('# Device correctness and network profile')
+    ..writeln(
+      hasProfile
+          ? '# Device correctness and network profile'
+          : hasCustody
+          ? '# Device persistent-custody qualification'
+          : '# Device correctness smoke',
+    )
     ..writeln()
     ..writeln('- Generated: `${artifact['generatedAt']}`')
     ..writeln('- Package: `tailscale ${source['version'] ?? 'unknown'}`')
@@ -503,12 +515,14 @@ String renderSmokeRunMarkdown(Map<String, Object?> artifact) {
     }
   }
 
-  buffer
-    ..writeln()
-    ..writeln(
-      'Performance measurements are advisory. The JSON report retains every raw '
-      'sample for like-for-like historical comparisons.',
-    );
+  if (hasProfile) {
+    buffer
+      ..writeln()
+      ..writeln(
+        'Performance measurements are advisory. The JSON report retains every raw '
+        'sample for like-for-like historical comparisons.',
+      );
+  }
   return buffer.toString();
 }
 

@@ -17,7 +17,9 @@ Physical-device reports:
 These profile runs used ephemeral nodes. They prove the physical-device data
 plane and profiling lanes, not persistent custody or process-death reconnect.
 Those lifecycle qualifications are recorded separately under
-[`test/device_receipts/`](../../../test/device_receipts/).
+[`test/device_receipts/`](../../../test/device_receipts/), including the
+[Android 16 persistent-custody matrix](../../../test/device_receipts/2026-08-13-android-16.md)
+and [iOS 18.7.3 receipt](../../../test/device_receipts/2026-08-12-ios-18.7.3.md).
 
 ## Host release comparison
 

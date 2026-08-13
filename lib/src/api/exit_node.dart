@@ -85,13 +85,12 @@ final class _ExitNode extends ExitNode {
     required ExitNodeUseByIdFn useByIdFn,
     required ExitNodeUseAutoFn useAutoFn,
     required ExitNodeClearFn clearFn,
-    required Stream<List<TailscaleNode>> nodeChanges,
+    required this._nodeChanges,
   }) : _current = currentFn,
        _suggest = suggestFn,
        _useById = useByIdFn,
        _useAuto = useAutoFn,
-       _clear = clearFn,
-       _nodeChanges = nodeChanges;
+       _clear = clearFn;
 
   final ExitNodeCurrentFn _current;
   final ExitNodeSuggestFn _suggest;

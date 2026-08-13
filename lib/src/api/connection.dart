@@ -206,8 +206,8 @@ final class _FdTailscaleListener implements TailscaleListener {
   _FdTailscaleListener({
     required this.listenerId,
     required this.local,
-    required Future<void> Function(int listenerId) closeFn,
-  }) : _closeFn = closeFn {
+    required this._closeFn,
+  }) {
     _connections = StreamController<TailscaleConnection>(
       onListen: _startAcceptLoop,
       onResume: _drainPendingAccepts,

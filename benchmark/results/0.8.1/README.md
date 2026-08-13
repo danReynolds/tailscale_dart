@@ -6,6 +6,8 @@ Physical-device reports:
 
 - [`2026-08-13 Android arm64`](devices/2026-08-13-android-arm64.md) — Pixel 6a,
   Android 16 (API 36), clean checkout, correctness and profile complete.
+- [`2026-08-13 iOS arm64`](devices/2026-08-13-ios-arm64.md) — iPhone 16,
+  iOS 18.7.3, clean checkout, correctness and profile complete.
 
 ## Host release comparison
 
@@ -51,3 +53,17 @@ The one-run ordinary-LAN ceiling was only 3.52 MiB/s upload and 4.66 MiB/s
 download, while paired direct-tsnet results varied widely. That makes this a
 useful historical device/network baseline, not evidence that either bridge is
 intrinsically faster. The raw report retains the paired and interval samples.
+
+## iOS physical-device profile
+
+All required join, discovery, WhoIs, HTTP, TCP, UDP, and restart checks passed.
+The initial diagnostic LocalAPI ping timed out and one of 20 sampled pings did
+not complete; all required probes passed in every sample, so this is retained
+as a non-gating convergence observation.
+
+Median public-Dart throughput was 0.49 MiB/s upload and 1.14 MiB/s download.
+The ordinary-LAN control was similarly constrained at 0.83 MiB/s upload and
+1.20 MiB/s download. The public-Dart and direct-tsnet download medians were
+close, while upload pairs remained noisy. As with Android, these are useful
+historical ballpark numbers under the recorded device/network conditions, not
+an architecture verdict.

@@ -17,7 +17,16 @@ plane, process-death reconnect, production custody, local reset, and profiling
 as distinct lanes; `NOT RUN` is not a pass. Link either artifact from a dated
 narrative receipt when extra context is useful.
 
-Current `0.9.0` release-candidate receipts:
+The one human-readable release report per physical device consolidates those
+separate runs under `benchmark/results/<version>/devices/`; the raw artifacts
+stay in their purpose-specific locations as provenance.
+
+Current `0.9.0` consolidated reports:
+
+- [Android](../../benchmark/results/0.9.0/devices/android.md).
+- [iOS](../../benchmark/results/0.9.0/devices/ios.md).
+
+Supporting custody receipts:
 
 - [Android 16 persistent-custody matrix](2026-08-13-android-16.md) with its
   [machine-readable artifact](2026-08-13-android-16.json).

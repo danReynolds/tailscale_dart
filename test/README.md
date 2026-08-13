@@ -306,6 +306,11 @@ ephemeral data plane, persistent custody, process-death reconnect, local reset,
 and profiling separately. `NOT RUN` is never displayed as `PASS`, so a broad
 ephemeral smoke run cannot be mistaken for persistent lifecycle evidence.
 
+For release evidence, keep those executions and machine-readable receipts
+separate, then consolidate their outcomes into one human-readable report per
+physical device under `benchmark/results/<version>/devices/`. The consolidated
+report links every source receipt; it does not replace or broaden them.
+
 The canonical Android persistent-custody receipt is deliberately a separate
 run from profiling:
 

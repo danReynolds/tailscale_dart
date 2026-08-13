@@ -20,6 +20,12 @@ Physical-device network profiles use the same version directory, under a
 0.9.0/devices/2026-08-13-ios-arm64.md
 ```
 
+When qualification requires separate profile, custody, or hosted runs, keep
+those raw receipts and add one canonical consolidated report per physical
+device, for example `0.9.0/devices/ios.md`. The consolidated report links each
+source receipt and combines their results without turning `NOT RUN` into
+`PASS`.
+
 Generate a candidate report with an explicit output path:
 
 ```sh

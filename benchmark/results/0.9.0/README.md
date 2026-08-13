@@ -7,19 +7,16 @@ candidate with this release.
 
 Canonical report: [`macos-arm64-vs-0.8.0.json`](macos-arm64-vs-0.8.0.json)
 
-Physical-device reports:
+Canonical consolidated physical-device reports:
 
-- [`2026-08-13 Android arm64`](devices/2026-08-13-android-arm64.md) — Pixel 6a,
-  Android 16 (API 36), clean checkout, correctness and profile complete.
-- [`2026-08-13 iOS arm64`](devices/2026-08-13-ios-arm64.md) — iPhone 16,
-  iOS 18.7.3, clean checkout, correctness and profile complete.
+- [Android](devices/android.md) — Pixel 6a, Android 16 (API 36): correctness,
+  profiling, production custody, process-death reconnect, and reset.
+- [iOS](devices/ios.md) — iPhone 16, iOS 18.7.3: correctness, profiling,
+  production custody, process-death reconnect, reset, and hosted boundaries.
 
-These profile runs used ephemeral nodes. They prove the physical-device data
-plane and profiling lanes, not persistent custody or process-death reconnect.
-Those lifecycle qualifications are recorded separately under
-[`test/device_receipts/`](../../../test/device_receipts/), including the
-[Android 16 persistent-custody matrix](../../../test/device_receipts/2026-08-13-android-16.md)
-and [iOS 18.7.3 receipt](../../../test/device_receipts/2026-08-12-ios-18.7.3.md).
+Each consolidated report is the one human-readable release view for that
+device. It links the separately generated JSON/Markdown receipts so narrower
+runs retain exact provenance and never imply that an unexecuted lane passed.
 
 ## Host release comparison
 

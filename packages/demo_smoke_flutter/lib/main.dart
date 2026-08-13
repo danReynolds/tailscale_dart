@@ -6,6 +6,7 @@ import 'package:demo_core/demo_core.dart';
 import 'package:dune_smoke_flutter/src/runner_client.dart';
 import 'package:dune_smoke_flutter/src/native_tsnet_profile.dart';
 import 'package:flutter/material.dart';
+import 'package:keybay/keybay.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -13,6 +14,8 @@ const _resultPrefix = 'DUNE_SMOKE_RESULT ';
 const _defaultTimeout = Duration(seconds: 120);
 const _speedRunsPerDirection = 3;
 const _lanRunsPerDirection = 1;
+const _smokeAppId = 'dev.tailscale.dart.demo.smoke';
+const _stateStoreDekEntry = 'tailscale/state-store/v1/dek';
 
 // Compile-time only: where to fetch run-time config from. Stable across
 // matrix runs on the same machine + target, so dart-defines don't change
@@ -124,14 +127,26 @@ class _SmokeHomeState extends State<SmokeHome> {
       if (mounted) setState(() => _config = config);
       _event('config target=${config.targetIp} host=${config.hostname}');
 
-      final stateDir = await _stateDir(config.stateSuffix);
+      final persistent = config.mode == 'persistentCustody';
+      final stateDir = await _stateDir(
+        config.stateSuffix,
+        persistent: persistent,
+      );
       _event('state-dir $stateDir');
+      if (persistent) {
+        await _runPersistentCustody(
+          config: config,
+          stateDir: stateDir,
+          startedAt: startedAt,
+        );
+        return;
+      }
       final running = _demo.onStateChange.firstWhere(
         (state) => state == NodeState.running,
       );
       final status = await _demo.up(
         stateDir: stateDir,
-        appId: 'dev.tailscale.dart.demo.smoke',
+        appId: _smokeAppId,
         hostname: config.hostname,
         authKey: config.authKey,
         ephemeral: true,
@@ -255,7 +270,7 @@ class _SmokeHomeState extends State<SmokeHome> {
       _event('restart: up');
       final restartStatus = await _demo.up(
         stateDir: stateDir,
-        appId: 'dev.tailscale.dart.demo.smoke',
+        appId: _smokeAppId,
         hostname: config.hostname,
         authKey: config.authKey,
         ephemeral: true,
@@ -296,6 +311,8 @@ class _SmokeHomeState extends State<SmokeHome> {
           restartReport: restartReport,
           restartOk: restartOk,
           events: List.unmodifiable(_events),
+          mode: config.mode,
+          phase: config.phase,
         ),
       );
     } catch (error, stackTrace) {
@@ -315,9 +332,140 @@ class _SmokeHomeState extends State<SmokeHome> {
           error: error.toString(),
           stackTrace: stackTrace.toString(),
           events: List.unmodifiable(_events),
+          mode: config?.mode ?? 'ephemeral',
+          phase: config?.phase ?? 'single',
         ),
       );
     }
+  }
+
+  Future<void> _runPersistentCustody({
+    required SmokeRunnerConfig config,
+    required String stateDir,
+    required DateTime startedAt,
+  }) async {
+    if (Platform.operatingSystem != 'android') {
+      throw UnsupportedError(
+        'the canonical persistent-custody runner currently supports Android',
+      );
+    }
+    final storage = SecretStorage(appId: '$_smokeAppId.tailscale');
+    final dekBeforeUp = await storage.containsKey(_stateStoreDekEntry);
+    final running = _demo.onStateChange.firstWhere(
+      (state) => state == NodeState.running,
+    );
+    final enrolling = config.phase == 'enroll';
+    if (!enrolling && config.phase != 'reconnect') {
+      throw StateError('persistent custody requires enroll or reconnect phase');
+    }
+    if (enrolling && dekBeforeUp) {
+      throw StateError('persistent enrollment did not begin with an empty DEK');
+    }
+    if (!enrolling && !dekBeforeUp) {
+      throw StateError('persistent reconnect could not find its existing DEK');
+    }
+
+    _event('persistent-${config.phase}: up');
+    final status = await _demo.up(
+      stateDir: stateDir,
+      appId: _smokeAppId,
+      hostname: config.hostname,
+      authKey: enrolling ? config.authKey : null,
+      ephemeral: false,
+      controlUrl: Uri.parse(config.controlUrl),
+      logLevel: TailscaleLogLevel.error,
+    );
+    if (!status.isRunning) await running.timeout(_defaultTimeout);
+
+    final finalStatus = await _demo.status();
+    final services = await _demo.startServices();
+    final nodes = await _demo.nodes();
+    final report = await _demo.probeNode(
+      config.targetIp,
+      timeout: const Duration(seconds: 20),
+    );
+    final dataPlaneOk = _requiredSmokeProbesOk(report);
+    final dekAfterUp = await storage.containsKey(_stateStoreDekEntry);
+    final backend = await storage.backend.describe();
+    final backendOk =
+        backend.scheme == StorageScheme.encryptedFile &&
+        backend.available &&
+        !backend.locked &&
+        backend.capabilities.persistent &&
+        dekAfterUp;
+
+    var identityPreserved = false;
+    var resetOk = false;
+    var dekAbsentAfterReset = false;
+    var stateSubtreeRemoved = false;
+    if (enrolling) {
+      identityPreserved = true;
+    } else {
+      identityPreserved =
+          config.expectedStableNodeId != null &&
+          config.expectedStableNodeId!.isNotEmpty &&
+          finalStatus.stableNodeId == config.expectedStableNodeId &&
+          config.expectedIpv4 != null &&
+          config.expectedIpv4!.isNotEmpty &&
+          finalStatus.ipv4 == config.expectedIpv4;
+      _event('persistent-reconnect: forget local identity');
+      await _demo.forgetLocalIdentity();
+      dekAbsentAfterReset = !await storage.containsKey(_stateStoreDekEntry);
+      stateSubtreeRemoved = !Directory(
+        p.join(stateDir, 'tailscale'),
+      ).existsSync();
+      final resetStatus = await _demo.status();
+      resetOk =
+          dekAbsentAfterReset &&
+          stateSubtreeRemoved &&
+          resetStatus.state == NodeState.noState;
+    }
+
+    final ok =
+        backendOk && dataPlaneOk && identityPreserved && (enrolling || resetOk);
+    await _finish(
+      SmokeResult(
+        ok: ok,
+        startedAt: startedAt,
+        finishedAt: DateTime.now().toUtc(),
+        hostname: config.hostname,
+        platform: Platform.operatingSystem,
+        localIp: finalStatus.ipv4,
+        stableNodeId: finalStatus.stableNodeId,
+        targetIp: config.targetIp,
+        services: services,
+        nodesSeen: nodes.length,
+        report: report,
+        restartReport: enrolling ? null : report,
+        restartOk: !enrolling && identityPreserved && dataPlaneOk,
+        mode: config.mode,
+        phase: config.phase,
+        custody: <String, Object?>{
+          'persistentCustody': backendOk ? 'pass' : 'fail',
+          'processDeathReconnect': enrolling
+              ? 'notRun'
+              : identityPreserved && dataPlaneOk
+              ? 'pass'
+              : 'fail',
+          'localReset': enrolling
+              ? 'notRun'
+              : resetOk
+              ? 'pass'
+              : 'fail',
+          'scheme': backend.scheme.name,
+          'securityLevel': backend.level?.name ?? 'unknown',
+          'backendPersistent': backend.capabilities.persistent,
+          'dekBeforeReconnect': enrolling ? null : dekBeforeUp,
+          'dekPresentAfterUp': dekAfterUp,
+          'identityPreserved': identityPreserved,
+          'dataPlaneAfterReconnect': enrolling ? null : dataPlaneOk,
+          'dekAbsentAfterReset': enrolling ? null : dekAbsentAfterReset,
+          'stateSubtreeRemoved': enrolling ? null : stateSubtreeRemoved,
+          'authKeyProvided': enrolling,
+        },
+        events: List.unmodifiable(_events),
+      ),
+    );
   }
 
   Future<void> _finish(SmokeResult result) async {
@@ -338,7 +486,14 @@ class _SmokeHomeState extends State<SmokeHome> {
     });
   }
 
-  Future<String> _stateDir(String stateSuffix) async {
+  Future<String> _stateDir(
+    String stateSuffix, {
+    required bool persistent,
+  }) async {
+    if (persistent) {
+      final support = await getApplicationSupportDirectory();
+      return p.join(support.path, 'dune_smoke_persistent', stateSuffix);
+    }
     try {
       final temporary = await getTemporaryDirectory();
       return p.join(temporary.path, 'dune_smoke', stateSuffix);
@@ -555,6 +710,10 @@ final class SmokeResult {
     this.lanSpeedTests = const [],
     this.restartReport,
     this.restartOk = false,
+    this.mode = 'ephemeral',
+    this.phase = 'single',
+    this.stableNodeId,
+    this.custody,
     this.error,
     this.stackTrace,
   });
@@ -579,6 +738,10 @@ final class SmokeResult {
   final List<SpeedTestResult> lanSpeedTests;
   final DemoProbeReport? restartReport;
   final bool restartOk;
+  final String mode;
+  final String phase;
+  final String? stableNodeId;
+  final Map<String, Object?>? custody;
   final String? error;
   final String? stackTrace;
   final List<String> events;
@@ -590,7 +753,11 @@ final class SmokeResult {
     'durationMs': finishedAt.difference(startedAt).inMilliseconds,
     'hostname': hostname,
     'platform': platform,
+    'processId': pid,
+    'mode': mode,
+    'phase': phase,
     'localIp': localIp,
+    'stableNodeId': stableNodeId,
     'targetIp': targetIp,
     'services': services == null
         ? null
@@ -628,6 +795,7 @@ final class SmokeResult {
     'restart': restartReport == null
         ? null
         : {'ok': restartOk, 'report': _reportJson(restartReport)},
+    'custody': custody,
     'error': error,
     'stackTrace': stackTrace == null ? null : _shorten(stackTrace!, 600),
     'eventCount': events.length,
@@ -642,6 +810,9 @@ final class SmokeResult {
       'durationMs': finishedAt.difference(startedAt).inMilliseconds,
       'hostname': hostname,
       'platform': platform,
+      'processId': pid,
+      'mode': mode,
+      'phase': phase,
       'targetIp': targetIp,
       'error': _shorten(error ?? 'smoke probe failed'),
     };

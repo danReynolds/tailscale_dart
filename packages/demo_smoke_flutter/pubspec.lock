@@ -171,7 +171,7 @@ packages:
     source: hosted
     version: "1.0.1"
   keybay:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: keybay
       sha256: "86a03286662e155131e1f230bf73447893f28035ca452fce0f736bbbe20d5bec"

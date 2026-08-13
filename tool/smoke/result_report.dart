@@ -17,6 +17,14 @@ const _capabilities = <(String, String, bool)>[
   ('restart', 'Restart', true),
 ];
 
+const _qualificationCapabilities = <(String, String)>[
+  ('ephemeralDataPlane', 'Ephemeral data plane'),
+  ('persistentCustody', 'Persistent custody'),
+  ('processDeathReconnect', 'Process-death reconnect'),
+  ('localReset', 'Local reset'),
+  ('profiling', 'Profiling'),
+];
+
 Map<String, Object?> buildSmokeRunArtifact({
   required List<Map<String, Object?>> runs,
   required Map<String, Object?> source,
@@ -26,7 +34,7 @@ Map<String, Object?> buildSmokeRunArtifact({
   DateTime? generatedAt,
 }) {
   return <String, Object?>{
-    'schema': 2,
+    'schema': 3,
     'kind': 'tailscale-dart-device-smoke',
     'generatedAt': (generatedAt ?? DateTime.now().toUtc()).toIso8601String(),
     'source': source,
@@ -55,6 +63,9 @@ Map<String, Object?> buildSmokeRunArtifact({
           if (run['result'] case final Map<String, Object?> result) ...{
             if (result['durationMs'] is num) 'durationMs': result['durationMs'],
             'capabilities': smokeCapabilities(run),
+            'qualification': smokeQualificationCapabilities(run),
+            if (result['custody'] case final Map<String, Object?> custody)
+              'custody': _custodySummary(custody),
             if (result['profile'] case final Map<String, Object?> profile)
               'profile': _profileSummary(
                 profile,
@@ -64,9 +75,68 @@ Map<String, Object?> buildSmokeRunArtifact({
               ),
           } else
             'capabilities': smokeCapabilities(run),
+          'qualification': smokeQualificationCapabilities(run),
         },
     ],
   };
+}
+
+List<Map<String, Object?>> smokeQualificationCapabilities(
+  Map<String, Object?> run,
+) {
+  final skipped = run['skipped'] == true;
+  final result = run['result'] as Map<String, Object?>?;
+  if (result == null) {
+    return [
+      for (final definition in _qualificationCapabilities)
+        <String, Object?>{
+          'id': definition.$1,
+          'label': definition.$2,
+          'status': skipped ? 'skip' : 'notRun',
+        },
+    ];
+  }
+
+  final mode = result['mode'] as String? ?? 'ephemeral';
+  final custody = result['custody'] as Map<String, Object?>?;
+  final profile = result['profile'] as Map<String, Object?>?;
+  String custodyStatus(String key) => custody?[key] as String? ?? 'notRun';
+  return [
+    _qualificationCapability(
+      'ephemeralDataPlane',
+      mode == 'ephemeral'
+          ? result['ok'] == true
+                ? 'pass'
+                : 'fail'
+          : 'notRun',
+    ),
+    _qualificationCapability(
+      'persistentCustody',
+      mode == 'persistentCustody'
+          ? custodyStatus('persistentCustody')
+          : 'notRun',
+    ),
+    _qualificationCapability(
+      'processDeathReconnect',
+      mode == 'persistentCustody'
+          ? custodyStatus('processDeathReconnect')
+          : 'notRun',
+    ),
+    _qualificationCapability(
+      'localReset',
+      mode == 'persistentCustody' ? custodyStatus('localReset') : 'notRun',
+    ),
+    _qualificationCapability(
+      'profiling',
+      profile == null
+          ? 'notRun'
+          : profile['status'] == 'complete'
+          ? 'pass'
+          : profile['status'] == 'error'
+          ? 'fail'
+          : 'warn',
+    ),
+  ];
 }
 
 List<Map<String, Object?>> smokeCapabilities(Map<String, Object?> run) {
@@ -153,6 +223,45 @@ String renderSmokeCapabilityMatrix(List<Map<String, Object?>> runs) {
   return lines.join('\n');
 }
 
+String renderSmokeQualificationMatrix(List<Map<String, Object?>> runs) {
+  final headers = <String>[
+    'Target',
+    ..._qualificationCapabilities.map((value) => value.$2),
+  ];
+  final rows = <List<String>>[
+    headers,
+    for (final run in runs)
+      <String>[
+        run['target'] as String? ?? 'unknown',
+        for (final capability in smokeQualificationCapabilities(run))
+          _statusLabel(capability['status'] as String),
+      ],
+  ];
+  final widths = <int>[
+    for (var column = 0; column < headers.length; column++)
+      rows.map((row) => row[column].length).reduce(math.max),
+  ];
+  final lines = <String>[];
+  for (var rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    final row = rows[rowIndex];
+    lines.add(
+      [
+        for (var column = 0; column < row.length; column++)
+          row[column].padRight(widths[column]),
+      ].join(' | '),
+    );
+    if (rowIndex == 0) {
+      lines.add(
+        [
+          for (final width in widths) List.filled(width, '-').join(),
+        ].join('-|-'),
+      );
+    }
+  }
+  lines.add('NOT RUN is distinct from PASS and does not qualify that lane.');
+  return lines.join('\n');
+}
+
 String renderSmokeRunMarkdown(Map<String, Object?> artifact) {
   final source = artifact['source'] as Map<String, Object?>? ?? const {};
   final environment =
@@ -168,6 +277,27 @@ String renderSmokeRunMarkdown(Map<String, Object?> artifact) {
     ..writeln('- Dirty checkout: `${source['dirty'] ?? 'unknown'}`')
     ..writeln('- Flutter: `${environment['flutter'] ?? 'unknown'}`')
     ..writeln('- Dart: `${environment['dart'] ?? 'unknown'}`')
+    ..writeln()
+    ..writeln('## Platform qualification')
+    ..writeln()
+    ..writeln(
+      '| Target | ${_qualificationCapabilities.map((value) => value.$2).join(' | ')} |',
+    )
+    ..writeln(
+      '| --- | ${_qualificationCapabilities.map((_) => '---').join(' | ')} |',
+    );
+  for (final target in targets) {
+    final qualification = (target['qualification'] as List? ?? const [])
+        .cast<Map<String, Object?>>();
+    buffer.writeln(
+      '| ${target['target']} | ${qualification.map((value) => _statusLabel(value['status'] as String)).join(' | ')} |',
+    );
+  }
+  buffer
+    ..writeln()
+    ..writeln(
+      '`NOT RUN` is distinct from `PASS` and does not qualify that lane.',
+    )
     ..writeln()
     ..writeln('## Correctness matrix')
     ..writeln()
@@ -189,6 +319,32 @@ String renderSmokeRunMarkdown(Map<String, Object?> artifact) {
     );
 
   for (final target in targets) {
+    if (target['custody'] case final Map<String, Object?> custody) {
+      buffer
+        ..writeln()
+        ..writeln('## ${target['target']} persistent custody')
+        ..writeln()
+        ..writeln('- Backend: `${custody['scheme'] ?? 'unknown'}`')
+        ..writeln('- Protection: `${custody['securityLevel'] ?? 'unknown'}`')
+        ..writeln(
+          '- Persistent backend: `${custody['backendPersistent'] ?? 'unknown'}`',
+        )
+        ..writeln(
+          '- DEK present before reconnect: `${custody['dekBeforeReconnect'] ?? 'unknown'}`',
+        )
+        ..writeln(
+          '- Identity preserved: `${custody['identityPreserved'] ?? 'unknown'}`',
+        )
+        ..writeln(
+          '- Data plane after reconnect: `${custody['dataPlaneAfterReconnect'] ?? 'unknown'}`',
+        )
+        ..writeln(
+          '- DEK absent after reset: `${custody['dekAbsentAfterReset'] ?? 'unknown'}`',
+        )
+        ..writeln(
+          '- State subtree removed: `${custody['stateSubtreeRemoved'] ?? 'unknown'}`',
+        );
+    }
     final profile = target['profile'] as Map<String, Object?>?;
     if (profile == null) continue;
     final device = target['device'] as Map<String, Object?>? ?? const {};
@@ -355,6 +511,23 @@ String renderSmokeRunMarkdown(Map<String, Object?> artifact) {
     );
   return buffer.toString();
 }
+
+Map<String, Object?> _custodySummary(Map<String, Object?> custody) => {
+  for (final key in const [
+    'persistentCustody',
+    'processDeathReconnect',
+    'localReset',
+    'scheme',
+    'securityLevel',
+    'backendPersistent',
+    'dekBeforeReconnect',
+    'identityPreserved',
+    'dataPlaneAfterReconnect',
+    'dekAbsentAfterReset',
+    'stateSubtreeRemoved',
+  ])
+    if (custody.containsKey(key)) key: custody[key],
+};
 
 Map<String, Object?> _profileSummary(
   Map<String, Object?> profile, {
@@ -768,6 +941,13 @@ Map<String, Object?> _capability(String id, String status, {num? durationUs}) {
   };
 }
 
+Map<String, Object?> _qualificationCapability(String id, String status) {
+  final definition = _qualificationCapabilities.firstWhere(
+    (value) => value.$1 == id,
+  );
+  return <String, Object?>{'id': id, 'label': definition.$2, 'status': status};
+}
+
 double _percentile(List<double> values, double percentile) {
   final sorted = List<double>.of(values)..sort();
   final index = (sorted.length * percentile).ceil() - 1;
@@ -779,7 +959,8 @@ String _statusLabel(String status) => switch (status) {
   'fail' => 'FAIL',
   'warn' => 'WARN',
   'skip' => 'SKIP',
-  _ => '--',
+  'notRun' => 'NOT RUN',
+  _ => status.toUpperCase(),
 };
 
 String _formatMetric(num value, String unit) => switch (unit) {

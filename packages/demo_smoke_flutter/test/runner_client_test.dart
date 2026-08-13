@@ -42,6 +42,8 @@ void main() {
     expect(config.targetIp, '100.64.0.1');
     expect(config.hostname, 'dune-smoke-macos');
     expect(config.stateSuffix, 'macos-1');
+    expect(config.mode, 'ephemeral');
+    expect(config.phase, 'single');
     expect(config.profileSamples, 12);
     expect(config.profileContext, 'wifi-office');
     expect(config.lanProfileHost, '192.0.2.10');
@@ -74,6 +76,38 @@ void main() {
     expect(config.profileContext, 'primary');
     expect(config.lanProfileHost, isNull);
     expect(config.lanProfilePort, isNull);
+  });
+
+  test('fetchSmokeConfig accepts auth-key-free persistent reconnect', () async {
+    final server = await _TestServer.start((request) async {
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType.json
+        ..write(
+          jsonEncode({
+            'controlUrl': 'http://192.0.2.1:18080',
+            'targetIp': '100.64.0.1',
+            'mode': 'persistentCustody',
+            'phase': 'reconnect',
+            'expectedStableNodeId': 'node-id',
+            'expectedIpv4': '100.64.0.2',
+          }),
+        );
+      await request.response.close();
+    });
+    addTearDown(server.close);
+
+    final config = await fetchSmokeConfig(
+      runnerUrl: server.url,
+      session: 'android',
+      token: 'secret',
+    );
+
+    expect(config.authKey, isNull);
+    expect(config.mode, 'persistentCustody');
+    expect(config.phase, 'reconnect');
+    expect(config.expectedStableNodeId, 'node-id');
+    expect(config.expectedIpv4, '100.64.0.2');
   });
 
   test('fetchSmokeConfig rejects non-200 responses', () async {
@@ -120,6 +154,40 @@ void main() {
           (error) => error.message,
           'message',
           contains('authKey'),
+        ),
+      ),
+    );
+  });
+
+  test('fetchSmokeConfig rejects incompatible mode and phase', () async {
+    final server = await _TestServer.start((request) async {
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType.json
+        ..write(
+          jsonEncode({
+            'controlUrl': 'http://localhost:18080',
+            'authKey': 'auth',
+            'targetIp': '100.64.0.1',
+            'mode': 'persistentCustody',
+            'phase': 'single',
+          }),
+        );
+      await request.response.close();
+    });
+    addTearDown(server.close);
+
+    expect(
+      fetchSmokeConfig(
+        runnerUrl: server.url,
+        session: 'android',
+        token: 'secret',
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('incompatible'),
         ),
       ),
     );

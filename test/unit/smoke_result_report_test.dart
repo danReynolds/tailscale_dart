@@ -18,10 +18,21 @@ void main() {
     expect(_capability(capabilities, 'restart')['status'], 'pass');
     expect(_capability(capabilities, 'profile')['status'], 'notRun');
 
+    final qualification = smokeQualificationCapabilities(run);
+    expect(_capability(qualification, 'ephemeralDataPlane')['status'], 'pass');
+    expect(_capability(qualification, 'persistentCustody')['status'], 'notRun');
+    expect(
+      _capability(qualification, 'processDeathReconnect')['status'],
+      'notRun',
+    );
+    expect(_capability(qualification, 'localReset')['status'], 'notRun');
+    expect(_capability(qualification, 'profiling')['status'], 'notRun');
+
     final matrix = renderSmokeCapabilityMatrix([run]);
     expect(matrix, contains('ios'));
     expect(matrix, contains('WARN'));
     expect(matrix, contains('Ping is diagnostic'));
+    expect(renderSmokeQualificationMatrix([run]), contains('NOT RUN'));
   });
 
   test('artifact retains raw samples and omits tailnet addresses', () {
@@ -79,6 +90,7 @@ void main() {
 
     final markdown = renderSmokeRunMarkdown(artifact);
     expect(markdown, contains('Correctness matrix'));
+    expect(markdown, contains('Platform qualification'));
     expect(markdown, contains('Dart public API over Tailscale'));
     expect(markdown, contains('Device-side direct tsnet control'));
     expect(markdown, contains('same remote Dart peer'));
@@ -149,6 +161,63 @@ void main() {
       'skip',
     });
     expect(renderSmokeCapabilityMatrix([run]), contains('SKIP'));
+    expect(renderSmokeQualificationMatrix([run]), contains('SKIP'));
+  });
+
+  test('persistent custody is a separate qualification lane', () {
+    final report = _report(pingOk: true, pingUs: 5000, networkUs: 2000);
+    final run = <String, Object?>{
+      'target': 'android',
+      'ok': true,
+      'skipped': false,
+      'result': <String, Object?>{
+        'ok': true,
+        'mode': 'persistentCustody',
+        'durationMs': 42000,
+        'localIp': '100.64.0.3',
+        'nodesSeen': 1,
+        'report': report,
+        'restart': <String, Object?>{'ok': true, 'report': report},
+        'custody': const <String, Object?>{
+          'persistentCustody': 'pass',
+          'processDeathReconnect': 'pass',
+          'localReset': 'pass',
+          'scheme': 'encryptedFile',
+          'securityLevel': 'hardwareBacked',
+          'backendPersistent': true,
+          'dekBeforeReconnect': true,
+          'identityPreserved': true,
+          'dataPlaneAfterReconnect': true,
+          'dekAbsentAfterReset': true,
+          'stateSubtreeRemoved': true,
+        },
+      },
+    };
+
+    final qualification = smokeQualificationCapabilities(run);
+    expect(
+      _capability(qualification, 'ephemeralDataPlane')['status'],
+      'notRun',
+    );
+    expect(_capability(qualification, 'persistentCustody')['status'], 'pass');
+    expect(
+      _capability(qualification, 'processDeathReconnect')['status'],
+      'pass',
+    );
+    expect(_capability(qualification, 'localReset')['status'], 'pass');
+
+    final artifact = buildSmokeRunArtifact(
+      runs: [run],
+      source: const <String, Object?>{},
+      environment: const <String, Object?>{},
+      profileSamples: 0,
+      profileContext: 'primary',
+    );
+    final target = (artifact['targets'] as List).single as Map<String, Object?>;
+    expect(target['custody'], containsPair('scheme', 'encryptedFile'));
+    final markdown = renderSmokeRunMarkdown(artifact);
+    expect(markdown, contains('android persistent custody'));
+    expect(markdown, contains('hardwareBacked'));
   });
 }
 

@@ -14,6 +14,11 @@ Physical-device reports:
 - [`2026-08-13 iOS arm64`](devices/2026-08-13-ios-arm64.md) — iPhone 16,
   iOS 18.7.3, clean checkout, correctness and profile complete.
 
+These profile runs used ephemeral nodes. They prove the physical-device data
+plane and profiling lanes, not persistent custody or process-death reconnect.
+Those lifecycle qualifications are recorded separately under
+[`test/device_receipts/`](../../../test/device_receipts/).
+
 ## Host release comparison
 
 - Measured source: `1bc8f511cd5e9a7cdbb090c61f1d05483543515f`

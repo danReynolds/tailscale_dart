@@ -1271,25 +1271,24 @@ final class _SmokeMatrixRunner {
   /// cycle) must finish without the app-process seccomp policy killing a
   /// thread. Zygote-spawned app processes carry the real policy — a binary
   /// run from adb shell would not — so probe success plus a clean crash scan
-  /// here IS the Server.Start/reconnect/stop receipt. The full dump is saved
-  /// beside the system temp directory as the receipt artifact.
+  /// here IS the Server.Start/reconnect/stop receipt. The device log is held
+  /// only in memory long enough to scan crash signatures; it may contain
+  /// unrelated private device data and must never be printed or retained.
   Future<_TargetRun> _applyAndroidSigsysCheck(
     _TargetRun run,
     String deviceId,
   ) async {
     try {
-      final dump = await _run(config.adb, [
+      final dump = await Process.run(config.adb, [
         '-s',
         deviceId,
         'logcat',
         '-d',
-      ], allowFailure: true);
+      ]);
+      if (dump.exitCode != 0) {
+        throw StateError('adb logcat exited with ${dump.exitCode}');
+      }
       final text = dump.stdout as String? ?? '';
-      final artifact = File(
-        '${Directory.systemTemp.path}/dune_smoke_android_logcat_$_runStartMillis.txt',
-      );
-      artifact.writeAsStringSync(text);
-      _log('android logcat receipt saved to ${artifact.path}');
       // Match crash-specific signatures only; benign boot chatter can mention
       // seccomp policy installation without any violation.
       final violations = text
@@ -1299,18 +1298,17 @@ final class _SmokeMatrixRunner {
           )
           .toList(growable: false);
       if (violations.isNotEmpty) {
-        _log('android SIGSYS lines:\n${violations.join('\n')}');
+        _log('android SIGSYS scan found ${violations.length} violation(s)');
         return _TargetRun(
           target: run.target,
           ok: false,
           skipped: false,
-          message:
-              'seccomp SIGSYS in logcat (${violations.length} lines; '
-              'see ${artifact.path})',
+          message: 'seccomp SIGSYS in logcat (${violations.length} lines)',
           result: run.result,
           device: run.device,
         );
       }
+      _log('android SIGSYS scan passed');
     } catch (error) {
       _log('android logcat scan failed (receipt not collected): $error');
     }

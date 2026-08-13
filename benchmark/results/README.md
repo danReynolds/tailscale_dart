@@ -1,10 +1,10 @@
 # Release performance history
 
-Each directory is the `tailscale` package version being measured. Report files
-name the host platform and published baseline, for example:
+Each directory is the `tailscale` release represented by its reports. Report
+files name the host platform and published baseline, for example:
 
 ```text
-0.8.1/macos-arm64-vs-0.8.0.json
+0.9.0/macos-arm64-vs-0.8.0.json
 ```
 
 Keep one canonical full-profile report per platform and baseline. Reports retain
@@ -16,8 +16,8 @@ Physical-device network profiles use the same version directory, under a
 `devices/` child. The runner creates both raw JSON and a Markdown summary:
 
 ```text
-0.8.1/devices/2026-08-12-ios-arm64.json
-0.8.1/devices/2026-08-12-ios-arm64.md
+0.9.0/devices/2026-08-13-ios-arm64.json
+0.9.0/devices/2026-08-13-ios-arm64.md
 ```
 
 Generate a candidate report with an explicit output path:
@@ -31,7 +31,9 @@ dart run \
 Before committing it, confirm that:
 
 - `current.commit` identifies the measured source and `current.dirty` is false;
-- `current.version` matches the directory name;
+- `current.version` matches the directory name, unless a `releaseVersion`
+  explicitly associates a runtime-identical pre-release run with the final
+  release while preserving the version and commit that were actually measured;
 - the run used the default five trials and full iteration count;
 - no credentials, state paths, or developer-specific absolute paths remain;
 - the matching version directory summarizes material and inconclusive results.

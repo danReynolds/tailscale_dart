@@ -1,0 +1,2515 @@
+{
+  "schema": 2,
+  "kind": "tailscale-dart-device-smoke",
+  "generatedAt": "2026-08-13T18:45:05.854455Z",
+  "source": {
+    "package": "tailscale",
+    "version": "0.8.1",
+    "commit": "6f301bdf8c8d74a867f1d0f0fc3cf838feaf73b3",
+    "dirty": false
+  },
+  "environment": {
+    "flutter": "3.44.4",
+    "dart": "3.12.2",
+    "hostOperatingSystem": "macos",
+    "hostOperatingSystemVersion": "Version 26.2 (Build 25C56)",
+    "flutterRunMode": "profile",
+    "flutterLaunchMode": "detached"
+  },
+  "configuration": {
+    "controlPlane": "local-headscale",
+    "profileSamples": 20,
+    "profileContext": "primary",
+    "speedRunsPerDirection": 3,
+    "speedTest": {
+      "workloadId": "tcp-sustained-v2",
+      "measuredDurationUs": 5000000,
+      "warmupBytes": 1048576,
+      "chunkBytes": 65536,
+      "maxInFlightBytes": 524288,
+      "intervalUs": 1000000,
+      "streamCount": 1
+    },
+    "nativeTsnetRunsPerDirection": 3,
+    "lanRunsPerDirection": 1,
+    "lanSpeedTest": {
+      "workloadId": "tcp-lan-control-v1",
+      "measuredDurationUs": 1000000,
+      "warmupBytes": 1048576,
+      "chunkBytes": 65536,
+      "maxInFlightBytes": 524288,
+      "intervalUs": 1000000,
+      "streamCount": 1
+    }
+  },
+  "targets": [
+    {
+      "target": "ios",
+      "status": "pass",
+      "device": {
+        "targetPlatform": "ios",
+        "platformType": "",
+        "emulator": false,
+        "sdk": "iOS 18.7.3 22H217",
+        "deviceClass": "physical"
+      },
+      "durationMs": 213667,
+      "capabilities": [
+        {
+          "id": "overall",
+          "label": "Overall",
+          "required": true,
+          "status": "pass"
+        },
+        {
+          "id": "join",
+          "label": "Join",
+          "required": true,
+          "status": "pass"
+        },
+        {
+          "id": "discovery",
+          "label": "Nodes",
+          "required": true,
+          "status": "pass"
+        },
+        {
+          "id": "ping",
+          "label": "Ping*",
+          "required": false,
+          "status": "warn",
+          "durationUs": 20005519
+        },
+        {
+          "id": "whois",
+          "label": "WhoIs",
+          "required": true,
+          "status": "pass",
+          "durationUs": 2202
+        },
+        {
+          "id": "httpGet",
+          "label": "HTTP GET",
+          "required": true,
+          "status": "pass",
+          "durationUs": 99277
+        },
+        {
+          "id": "httpPost",
+          "label": "HTTP POST",
+          "required": true,
+          "status": "pass",
+          "durationUs": 18030
+        },
+        {
+          "id": "tcpEcho",
+          "label": "TCP",
+          "required": true,
+          "status": "pass",
+          "durationUs": 29054
+        },
+        {
+          "id": "udpEcho",
+          "label": "UDP",
+          "required": true,
+          "status": "pass",
+          "durationUs": 14915
+        },
+        {
+          "id": "profile",
+          "label": "Profile",
+          "required": false,
+          "status": "pass"
+        },
+        {
+          "id": "restart",
+          "label": "Restart",
+          "required": true,
+          "status": "pass"
+        }
+      ],
+      "profile": {
+        "status": "complete",
+        "valid": true,
+        "comparisonEligible": true,
+        "context": "primary",
+        "expectedSamples": 20,
+        "completedSamples": 20,
+        "completedSpeedTests": 6,
+        "expectedSpeedTests": 6,
+        "completedNativeTsnetSpeedTests": 6,
+        "expectedNativeTsnetSpeedTests": 6,
+        "nativeTsnetControlComplete": true,
+        "completedLanSpeedTests": 2,
+        "expectedLanSpeedTests": 2,
+        "lanControlComplete": true,
+        "networkPaths": {
+          "direct": 19
+        },
+        "advisoryOnly": true,
+        "metrics": [
+          {
+            "id": "httpGet.roundTrip",
+            "label": "HTTP GET",
+            "unit": "microseconds",
+            "advisoryOnly": true,
+            "sampleCount": 20,
+            "p50": 13044.0,
+            "p95": 17785.0,
+            "mean": 13426.15,
+            "samples": [
+              13076.0,
+              17785.0,
+              14384.0,
+              8065.0,
+              14302.0,
+              15341.0,
+              11635.0,
+              12847.0,
+              13172.0,
+              12341.0,
+              10934.0,
+              10821.0,
+              8735.0,
+              13553.0,
+              17095.0,
+              12341.0,
+              8678.0,
+              24225.0,
+              13044.0,
+              16149.0
+            ]
+          },
+          {
+            "id": "httpPost.roundTrip",
+            "label": "HTTP POST",
+            "unit": "microseconds",
+            "advisoryOnly": true,
+            "sampleCount": 20,
+            "p50": 11222.0,
+            "p95": 98289.0,
+            "mean": 20776.45,
+            "samples": [
+              12977.0,
+              14568.0,
+              9833.0,
+              11222.0,
+              98289.0,
+              12039.0,
+              10571.0,
+              10868.0,
+              10845.0,
+              13874.0,
+              100750.0,
+              15949.0,
+              13383.0,
+              8945.0,
+              9180.0,
+              13071.0,
+              9929.0,
+              10871.0,
+              19518.0,
+              8847.0
+            ]
+          },
+          {
+            "id": "ping.networkRtt",
+            "label": "Ping network RTT",
+            "unit": "microseconds",
+            "advisoryOnly": true,
+            "sampleCount": 19,
+            "p50": 8220.0,
+            "p95": 18904.0,
+            "mean": 9143.78947368421,
+            "samples": [
+              7730.0,
+              5804.0,
+              7474.0,
+              8207.0,
+              6793.0,
+              8747.0,
+              6467.0,
+              6173.0,
+              18904.0,
+              9652.0,
+              8220.0,
+              6219.0,
+              11524.0,
+              9067.0,
+              13717.0,
+              9128.0,
+              9220.0,
+              13701.0,
+              6985.0
+            ]
+          },
+          {
+            "id": "ping.roundTrip",
+            "label": "Ping API round trip",
+            "unit": "microseconds",
+            "advisoryOnly": true,
+            "sampleCount": 19,
+            "p50": 10032.0,
+            "p95": 19915.0,
+            "mean": 10644.947368421053,
+            "samples": [
+              8798.0,
+              6747.0,
+              8373.0,
+              9074.0,
+              11316.0,
+              9831.0,
+              7369.0,
+              9223.0,
+              19915.0,
+              10826.0,
+              12886.0,
+              7278.0,
+              12196.0,
+              10032.0,
+              14647.0,
+              10090.0,
+              10105.0,
+              14907.0,
+              8641.0
+            ]
+          },
+          {
+            "id": "tcpEcho.roundTrip",
+            "label": "TCP echo",
+            "unit": "microseconds",
+            "advisoryOnly": true,
+            "sampleCount": 20,
+            "p50": 18830.0,
+            "p95": 32649.0,
+            "mean": 21645.4,
+            "samples": [
+              24523.0,
+              17323.0,
+              13074.0,
+              24656.0,
+              18499.0,
+              23290.0,
+              18009.0,
+              47448.0,
+              14663.0,
+              16238.0,
+              20625.0,
+              17756.0,
+              21821.0,
+              18830.0,
+              15622.0,
+              20043.0,
+              18810.0,
+              32649.0,
+              24531.0,
+              24498.0
+            ]
+          },
+          {
+            "id": "udpEcho.roundTrip",
+            "label": "UDP echo",
+            "unit": "microseconds",
+            "advisoryOnly": true,
+            "sampleCount": 20,
+            "p50": 9989.0,
+            "p95": 21013.0,
+            "mean": 12294.9,
+            "samples": [
+              9538.0,
+              9980.0,
+              8605.0,
+              13498.0,
+              8974.0,
+              13282.0,
+              9307.0,
+              24555.0,
+              17428.0,
+              9989.0,
+              14257.0,
+              10368.0,
+              10820.0,
+              8665.0,
+              9138.0,
+              13975.0,
+              8891.0,
+              9569.0,
+              21013.0,
+              14046.0
+            ]
+          },
+          {
+            "id": "whois.roundTrip",
+            "label": "WhoIs",
+            "unit": "microseconds",
+            "advisoryOnly": true,
+            "sampleCount": 20,
+            "p50": 952.0,
+            "p95": 2541.0,
+            "mean": 1267.3,
+            "samples": [
+              730.0,
+              1013.0,
+              886.0,
+              1966.0,
+              871.0,
+              1065.0,
+              891.0,
+              757.0,
+              1211.0,
+              1180.0,
+              821.0,
+              980.0,
+              2541.0,
+              1046.0,
+              861.0,
+              952.0,
+              926.0,
+              1648.0,
+              747.0,
+              4254.0
+            ]
+          }
+        ],
+        "throughput": [
+          {
+            "direction": "upload",
+            "sampleCount": 3,
+            "median": 0.49348278435958487,
+            "min": 0.40632061513690565,
+            "max": 0.838290330343394,
+            "samples": [
+              0.838290330343394,
+              0.49348278435958487,
+              0.40632061513690565
+            ]
+          },
+          {
+            "direction": "download",
+            "sampleCount": 3,
+            "median": 1.1353471830551705,
+            "min": 0.6972799689477986,
+            "max": 1.1498326188656718,
+            "samples": [
+              1.1498326188656718,
+              1.1353471830551705,
+              0.6972799689477986
+            ]
+          }
+        ],
+        "writeCompletion": [
+          {
+            "direction": "upload",
+            "sampleCount": 3,
+            "medianP50Us": 565.0,
+            "medianP95Us": 1565736.0,
+            "medianP99Us": 1614272.0,
+            "p50SamplesUs": [
+              3472.0,
+              556.0,
+              565.0
+            ],
+            "p95SamplesUs": [
+              1180172.0,
+              1565736.0,
+              1631033.0
+            ],
+            "p99SamplesUs": [
+              1294507.0,
+              1614272.0,
+              1816529.0
+            ]
+          },
+          {
+            "direction": "download",
+            "sampleCount": 3,
+            "medianP50Us": 174.0,
+            "medianP95Us": 546121.0,
+            "medianP99Us": 2056990.0,
+            "p50SamplesUs": [
+              166.0,
+              174.0,
+              311.0
+            ],
+            "p95SamplesUs": [
+              148765.0,
+              546121.0,
+              3355514.0
+            ],
+            "p99SamplesUs": [
+              2056990.0,
+              667882.0,
+              3355557.0
+            ]
+          }
+        ],
+        "nativeTsnetThroughput": [
+          {
+            "direction": "upload",
+            "sampleCount": 3,
+            "median": 0.32393977104455285,
+            "min": 0.28279240989696514,
+            "max": 0.45134020961844096,
+            "samples": [
+              0.45134020961844096,
+              0.28279240989696514,
+              0.32393977104455285
+            ]
+          },
+          {
+            "direction": "download",
+            "sampleCount": 3,
+            "median": 1.0842084702702532,
+            "min": 0.8778675543663376,
+            "max": 1.1741526727237288,
+            "samples": [
+              0.8778675543663376,
+              1.1741526727237288,
+              1.0842084702702532
+            ]
+          }
+        ],
+        "nativeTsnetWriteCompletion": [
+          {
+            "direction": "upload",
+            "sampleCount": 3,
+            "medianP50Us": 998539.0,
+            "medianP95Us": 2280837.0,
+            "medianP99Us": 2280901.0,
+            "p50SamplesUs": [
+              442625.0,
+              2155065.0,
+              998539.0
+            ],
+            "p95SamplesUs": [
+              1524765.0,
+              2280837.0,
+              3020621.0
+            ],
+            "p99SamplesUs": [
+              1524820.0,
+              2280901.0,
+              3020622.0
+            ]
+          },
+          {
+            "direction": "download",
+            "sampleCount": 3,
+            "medianP50Us": 144.0,
+            "medianP95Us": 948885.0,
+            "medianP99Us": 1337333.0,
+            "p50SamplesUs": [
+              144.0,
+              135.0,
+              325.0
+            ],
+            "p95SamplesUs": [
+              1116696.0,
+              21634.0,
+              948885.0
+            ],
+            "p99SamplesUs": [
+              1337333.0,
+              2320201.0,
+              949021.0
+            ]
+          }
+        ],
+        "dartApiToNativeTsnet": [
+          {
+            "direction": "upload",
+            "sampleCount": 3,
+            "medianPercent": 174.5035464492786,
+            "minPercent": 125.43091384756909,
+            "maxPercent": 185.7335802303272,
+            "samplesPercent": [
+              185.7335802303272,
+              174.5035464492786,
+              125.43091384756909
+            ]
+          },
+          {
+            "direction": "download",
+            "sampleCount": 3,
+            "medianPercent": 96.69502181700615,
+            "minPercent": 64.31235210457196,
+            "maxPercent": 130.98019321327396,
+            "samplesPercent": [
+              130.98019321327396,
+              96.69502181700615,
+              64.31235210457196
+            ]
+          }
+        ],
+        "lanThroughput": [
+          {
+            "direction": "upload",
+            "sampleCount": 1,
+            "median": 0.8307575234785921,
+            "min": 0.8307575234785921,
+            "max": 0.8307575234785921,
+            "samples": [
+              0.8307575234785921
+            ]
+          },
+          {
+            "direction": "download",
+            "sampleCount": 1,
+            "median": 1.1981414429936283,
+            "min": 1.1981414429936283,
+            "max": 1.1981414429936283,
+            "samples": [
+              1.1981414429936283
+            ]
+          }
+        ],
+        "lanWriteCompletion": [
+          {
+            "direction": "upload",
+            "sampleCount": 1,
+            "medianP50Us": 1054.0,
+            "medianP95Us": 1141005.0,
+            "medianP99Us": 1141028.0,
+            "p50SamplesUs": [
+              1054.0
+            ],
+            "p95SamplesUs": [
+              1141005.0
+            ],
+            "p99SamplesUs": [
+              1141028.0
+            ]
+          },
+          {
+            "direction": "download",
+            "sampleCount": 1,
+            "medianP50Us": 1435.0,
+            "medianP95Us": 883223.0,
+            "medianP99Us": 883238.0,
+            "p50SamplesUs": [
+              1435.0
+            ],
+            "p95SamplesUs": [
+              883223.0
+            ],
+            "p99SamplesUs": [
+              883238.0
+            ]
+          }
+        ],
+        "raw": {
+          "apiReports": [
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 8798,
+                  "networkLatencyUs": 7730,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 730
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 13076
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 12977
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 24523
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 9538
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 6747,
+                  "networkLatencyUs": 5804,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 1013
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 17785
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 14568
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 17323
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 9980
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 8373,
+                  "networkLatencyUs": 7474,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 886
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 14384
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 9833
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 13074
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 8605
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 9074,
+                  "networkLatencyUs": 8207,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 1966
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 8065
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 11222
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 24656
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 13498
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 11316,
+                  "networkLatencyUs": 6793,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 871
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 14302
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 98289
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 18499
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 8974
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 9831,
+                  "networkLatencyUs": 8747,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 1065
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 15341
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 12039
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 23290
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 13282
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 7369,
+                  "networkLatencyUs": 6467,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 891
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 11635
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 10571
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 18009
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 9307
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 9223,
+                  "networkLatencyUs": 6173,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 757
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 12847
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 10868
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 47448
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 24555
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 19915,
+                  "networkLatencyUs": 18904,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 1211
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 13172
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 10845
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 14663
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 17428
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 10826,
+                  "networkLatencyUs": 9652,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 1180
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 12341
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 13874
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 16238
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 9989
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 12886,
+                  "networkLatencyUs": 8220,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 821
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 10934
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 100750
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 20625
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 14257
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 7278,
+                  "networkLatencyUs": 6219,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 980
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 10821
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 15949
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 17756
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 10368
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 12196,
+                  "networkLatencyUs": 11524,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 2541
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 8735
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 13383
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 21821
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 10820
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 10032,
+                  "networkLatencyUs": 9067,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 1046
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 13553
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 8945
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 18830
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 8665
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 14647,
+                  "networkLatencyUs": 13717,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 861
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 17095
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 9180
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 15622
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 9138
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 10090,
+                  "networkLatencyUs": 9128,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 952
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 12341
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 13071
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 20043
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 13975
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 10105,
+                  "networkLatencyUs": 9220,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 926
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 8678
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 9929
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 18810
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 8891
+                }
+              ]
+            },
+            {
+              "ok": false,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": false,
+                  "durationUs": 30002454
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 1648
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 24225
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 10871
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 32649
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 9569
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 14907,
+                  "networkLatencyUs": 13701,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 747
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 13044
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 19518
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 24531
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 21013
+                }
+              ]
+            },
+            {
+              "ok": true,
+              "requiredOk": true,
+              "results": [
+                {
+                  "kind": "ping",
+                  "ok": true,
+                  "durationUs": 8641,
+                  "networkLatencyUs": 6985,
+                  "networkPath": "direct"
+                },
+                {
+                  "kind": "whois",
+                  "ok": true,
+                  "durationUs": 4254
+                },
+                {
+                  "kind": "httpGet",
+                  "ok": true,
+                  "durationUs": 16149
+                },
+                {
+                  "kind": "httpPost",
+                  "ok": true,
+                  "durationUs": 8847
+                },
+                {
+                  "kind": "tcpEcho",
+                  "ok": true,
+                  "durationUs": 24498
+                },
+                {
+                  "kind": "udpEcho",
+                  "ok": true,
+                  "durationUs": 14046
+                }
+              ]
+            }
+          ],
+          "speedTests": [
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 30154,
+                "networkLatencyUs": 29217,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 35058,
+                "networkLatencyUs": 33696,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "upload",
+                "senderBytes": 7864320,
+                "receiverBytes": 7864320,
+                "senderElapsedUs": 5354684,
+                "receiverElapsedUs": 8946781,
+                "mibPerSecond": 0.838290330343394,
+                "writeCompletion": {
+                  "sampleCount": 120,
+                  "minUs": 241,
+                  "p50Us": 3472,
+                  "p95Us": 1180172,
+                  "p99Us": 1294507,
+                  "maxUs": 1294525
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1013704,
+                    "bytes": 2949120,
+                    "mibPerSecond": 2.77447854600554
+                  },
+                  {
+                    "startUs": 1013704,
+                    "endUs": 2037259,
+                    "bytes": 1835008,
+                    "mibPerSecond": 1.7097273717582349
+                  },
+                  {
+                    "startUs": 2037259,
+                    "endUs": 3200765,
+                    "bytes": 1114112,
+                    "mibPerSecond": 0.9131882431203622
+                  },
+                  {
+                    "startUs": 3200765,
+                    "endUs": 4312305,
+                    "bytes": 458752,
+                    "mibPerSecond": 0.3935980711445382
+                  },
+                  {
+                    "startUs": 4312305,
+                    "endUs": 5323141,
+                    "bytes": 393216,
+                    "mibPerSecond": 0.3709800600690913
+                  },
+                  {
+                    "startUs": 5323141,
+                    "endUs": 6368780,
+                    "bytes": 262144,
+                    "mibPerSecond": 0.23908825129896646
+                  },
+                  {
+                    "startUs": 6368780,
+                    "endUs": 7610741,
+                    "bytes": 327680,
+                    "mibPerSecond": 0.25161820701294163
+                  },
+                  {
+                    "startUs": 7610741,
+                    "endUs": 8644283,
+                    "bytes": 458752,
+                    "mibPerSecond": 0.4233016171573095
+                  },
+                  {
+                    "startUs": 8644283,
+                    "endUs": 8946781,
+                    "bytes": 65536,
+                    "mibPerSecond": 0.20661293628387625
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 200476,
+                "networkLatencyUs": 199177,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 93798,
+                "networkLatencyUs": 92044,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "download",
+                "senderBytes": 10485760,
+                "receiverBytes": 10485760,
+                "senderElapsedUs": 5968818,
+                "receiverElapsedUs": 8696918,
+                "mibPerSecond": 1.1498326188656718,
+                "writeCompletion": {
+                  "sampleCount": 160,
+                  "minUs": 49,
+                  "p50Us": 166,
+                  "p95Us": 148765,
+                  "p99Us": 2056990,
+                  "maxUs": 2173864
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 2178664,
+                    "bytes": 1638400,
+                    "mibPerSecond": 0.7171826403704289
+                  },
+                  {
+                    "startUs": 2178664,
+                    "endUs": 3592391,
+                    "bytes": 2162688,
+                    "mibPerSecond": 1.4589096763377938
+                  },
+                  {
+                    "startUs": 3592391,
+                    "endUs": 4629037,
+                    "bytes": 2293760,
+                    "mibPerSecond": 2.110170685074751
+                  },
+                  {
+                    "startUs": 4629037,
+                    "endUs": 5727567,
+                    "bytes": 1376256,
+                    "mibPerSecond": 1.1947784766915788
+                  },
+                  {
+                    "startUs": 5727567,
+                    "endUs": 6809480,
+                    "bytes": 983040,
+                    "mibPerSecond": 0.8665206906655157
+                  },
+                  {
+                    "startUs": 6809480,
+                    "endUs": 7837368,
+                    "bytes": 983040,
+                    "mibPerSecond": 0.9120643494232835
+                  },
+                  {
+                    "startUs": 7837368,
+                    "endUs": 8696918,
+                    "bytes": 1048576,
+                    "mibPerSecond": 1.163399453202257
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 31191,
+                "networkLatencyUs": 30157,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 9302,
+                "networkLatencyUs": 7636,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "download",
+                "senderBytes": 6815744,
+                "receiverBytes": 6815744,
+                "senderElapsedUs": 5123814,
+                "receiverElapsedUs": 5725121,
+                "mibPerSecond": 1.1353471830551705,
+                "writeCompletion": {
+                  "sampleCount": 104,
+                  "minUs": 83,
+                  "p50Us": 174,
+                  "p95Us": 546121,
+                  "p99Us": 667882,
+                  "maxUs": 1522070
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1006941,
+                    "bytes": 1376256,
+                    "mibPerSecond": 1.303452734569354
+                  },
+                  {
+                    "startUs": 1006941,
+                    "endUs": 2029724,
+                    "bytes": 983040,
+                    "mibPerSecond": 0.9166167212399893
+                  },
+                  {
+                    "startUs": 2029724,
+                    "endUs": 3073906,
+                    "bytes": 1572864,
+                    "mibPerSecond": 1.4365311794304059
+                  },
+                  {
+                    "startUs": 3073906,
+                    "endUs": 4085029,
+                    "bytes": 851968,
+                    "mibPerSecond": 0.8035619800953989
+                  },
+                  {
+                    "startUs": 4085029,
+                    "endUs": 5085941,
+                    "bytes": 524288,
+                    "mibPerSecond": 0.4995444154930703
+                  },
+                  {
+                    "startUs": 5085941,
+                    "endUs": 5725121,
+                    "bytes": 1507328,
+                    "mibPerSecond": 2.2489752495384714
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 14422,
+                "networkLatencyUs": 11718,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 14064,
+                "networkLatencyUs": 12234,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "upload",
+                "senderBytes": 3670016,
+                "receiverBytes": 3670016,
+                "senderElapsedUs": 6372294,
+                "receiverElapsedUs": 7092446,
+                "mibPerSecond": 0.49348278435958487,
+                "writeCompletion": {
+                  "sampleCount": 56,
+                  "minUs": 288,
+                  "p50Us": 556,
+                  "p95Us": 1565736,
+                  "p99Us": 1614272,
+                  "maxUs": 1614272
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1285935,
+                    "bytes": 393216,
+                    "mibPerSecond": 0.2916166058160016
+                  },
+                  {
+                    "startUs": 1285935,
+                    "endUs": 2381421,
+                    "bytes": 655360,
+                    "mibPerSecond": 0.5705230372638262
+                  },
+                  {
+                    "startUs": 2381421,
+                    "endUs": 3410961,
+                    "bytes": 524288,
+                    "mibPerSecond": 0.4856537871282321
+                  },
+                  {
+                    "startUs": 3410961,
+                    "endUs": 4538672,
+                    "bytes": 524288,
+                    "mibPerSecond": 0.4433760067960675
+                  },
+                  {
+                    "startUs": 4538672,
+                    "endUs": 5543723,
+                    "bytes": 393216,
+                    "mibPerSecond": 0.37311539414417777
+                  },
+                  {
+                    "startUs": 5543723,
+                    "endUs": 6568659,
+                    "bytes": 524288,
+                    "mibPerSecond": 0.487835338011349
+                  },
+                  {
+                    "startUs": 6568659,
+                    "endUs": 7092446,
+                    "bytes": 655360,
+                    "mibPerSecond": 1.193233127206288
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 11092,
+                "networkLatencyUs": 10184,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 9139,
+                "networkLatencyUs": 7680,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "upload",
+                "senderBytes": 3145728,
+                "receiverBytes": 3145728,
+                "senderElapsedUs": 5413224,
+                "receiverElapsedUs": 7383332,
+                "mibPerSecond": 0.40632061513690565,
+                "writeCompletion": {
+                  "sampleCount": 48,
+                  "minUs": 262,
+                  "p50Us": 565,
+                  "p95Us": 1631033,
+                  "p99Us": 1816529,
+                  "maxUs": 1816529
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1107778,
+                    "bytes": 917504,
+                    "mibPerSecond": 0.7898694503772417
+                  },
+                  {
+                    "startUs": 1107778,
+                    "endUs": 2217291,
+                    "bytes": 262144,
+                    "mibPerSecond": 0.2253240836294843
+                  },
+                  {
+                    "startUs": 2217291,
+                    "endUs": 3646589,
+                    "bytes": 458752,
+                    "mibPerSecond": 0.30609432042863
+                  },
+                  {
+                    "startUs": 3646589,
+                    "endUs": 4747927,
+                    "bytes": 393216,
+                    "mibPerSecond": 0.3404949252636339
+                  },
+                  {
+                    "startUs": 4747927,
+                    "endUs": 5820904,
+                    "bytes": 196608,
+                    "mibPerSecond": 0.17474745497806568
+                  },
+                  {
+                    "startUs": 5820904,
+                    "endUs": 6867798,
+                    "bytes": 458752,
+                    "mibPerSecond": 0.4179028631360959
+                  },
+                  {
+                    "startUs": 6867798,
+                    "endUs": 7383332,
+                    "bytes": 458752,
+                    "mibPerSecond": 0.8486346196371141
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 102523,
+                "networkLatencyUs": 101119,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 52079,
+                "networkLatencyUs": 49888,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "download",
+                "senderBytes": 6291456,
+                "receiverBytes": 6291456,
+                "senderElapsedUs": 6868028,
+                "receiverElapsedUs": 8604865,
+                "mibPerSecond": 0.6972799689477986,
+                "writeCompletion": {
+                  "sampleCount": 96,
+                  "minUs": 70,
+                  "p50Us": 311,
+                  "p95Us": 3355514,
+                  "p99Us": 3355557,
+                  "maxUs": 3355557
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 2095440,
+                    "bytes": 1114112,
+                    "mibPerSecond": 0.5070534112167373
+                  },
+                  {
+                    "startUs": 2095440,
+                    "endUs": 3802268,
+                    "bytes": 851968,
+                    "mibPerSecond": 0.4760292191128807
+                  },
+                  {
+                    "startUs": 3802268,
+                    "endUs": 6405361,
+                    "bytes": 589824,
+                    "mibPerSecond": 0.21608909093912512
+                  },
+                  {
+                    "startUs": 6405361,
+                    "endUs": 7412783,
+                    "bytes": 2097152,
+                    "mibPerSecond": 1.9852653604944104
+                  },
+                  {
+                    "startUs": 7412783,
+                    "endUs": 8444014,
+                    "bytes": 1441792,
+                    "mibPerSecond": 1.3333578994425108
+                  },
+                  {
+                    "startUs": 8444014,
+                    "endUs": 8604865,
+                    "bytes": 196608,
+                    "mibPerSecond": 1.1656750657440738
+                  }
+                ]
+              }
+            }
+          ],
+          "nativeTsnetSpeedTests": [
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 10041,
+                "networkLatencyUs": 6647,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 28091,
+                "networkLatencyUs": 26482,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "upload",
+                "senderBytes": 4718592,
+                "receiverBytes": 4718592,
+                "senderElapsedUs": 6173527,
+                "receiverElapsedUs": 9970306,
+                "mibPerSecond": 0.45134020961844096,
+                "writeCompletion": {
+                  "sampleCount": 72,
+                  "minUs": 11,
+                  "p50Us": 442625,
+                  "p95Us": 1524765,
+                  "p99Us": 1524820,
+                  "maxUs": 1524820
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1059748,
+                    "bytes": 262144,
+                    "mibPerSecond": 0.23590513971245997
+                  },
+                  {
+                    "startUs": 1059748,
+                    "endUs": 2074501,
+                    "bytes": 983040,
+                    "mibPerSecond": 0.9238701437689762
+                  },
+                  {
+                    "startUs": 2074501,
+                    "endUs": 3087696,
+                    "bytes": 786432,
+                    "mibPerSecond": 0.7402326304413267
+                  },
+                  {
+                    "startUs": 3087696,
+                    "endUs": 4090515,
+                    "bytes": 786432,
+                    "mibPerSecond": 0.7478916933165407
+                  },
+                  {
+                    "startUs": 4090515,
+                    "endUs": 5127339,
+                    "bytes": 720896,
+                    "mibPerSecond": 0.6630826446918667
+                  },
+                  {
+                    "startUs": 5127339,
+                    "endUs": 6230090,
+                    "bytes": 327680,
+                    "mibPerSecond": 0.28338219598077896
+                  },
+                  {
+                    "startUs": 6230090,
+                    "endUs": 7354973,
+                    "bytes": 393216,
+                    "mibPerSecond": 0.3333680036057083
+                  },
+                  {
+                    "startUs": 7354973,
+                    "endUs": 8507106,
+                    "bytes": 196608,
+                    "mibPerSecond": 0.1627416279196933
+                  },
+                  {
+                    "startUs": 8507106,
+                    "endUs": 9526649,
+                    "bytes": 131072,
+                    "mibPerSecond": 0.12260395098588288
+                  },
+                  {
+                    "startUs": 9526649,
+                    "endUs": 9970306,
+                    "bytes": 131072,
+                    "mibPerSecond": 0.2817491891258337
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 75244,
+                "networkLatencyUs": 74002,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 8000,
+                "networkLatencyUs": 6391,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "download",
+                "senderBytes": 5767168,
+                "receiverBytes": 5767168,
+                "senderElapsedUs": 5296538,
+                "receiverElapsedUs": 6265182,
+                "mibPerSecond": 0.8778675543663376,
+                "writeCompletion": {
+                  "sampleCount": 88,
+                  "minUs": 64,
+                  "p50Us": 144,
+                  "p95Us": 1116696,
+                  "p99Us": 1337333,
+                  "maxUs": 1337333
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1027518,
+                    "bytes": 1966080,
+                    "mibPerSecond": 1.8247855512020228
+                  },
+                  {
+                    "startUs": 1027518,
+                    "endUs": 2085600,
+                    "bytes": 851968,
+                    "mibPerSecond": 0.7678988963048233
+                  },
+                  {
+                    "startUs": 2085600,
+                    "endUs": 3137336,
+                    "bytes": 655360,
+                    "mibPerSecond": 0.5942555926582336
+                  },
+                  {
+                    "startUs": 3137336,
+                    "endUs": 4342895,
+                    "bytes": 458752,
+                    "mibPerSecond": 0.3629021889430546
+                  },
+                  {
+                    "startUs": 4342895,
+                    "endUs": 5347941,
+                    "bytes": 655360,
+                    "mibPerSecond": 0.6218620839245168
+                  },
+                  {
+                    "startUs": 5347941,
+                    "endUs": 6265182,
+                    "bytes": 1179648,
+                    "mibPerSecond": 1.2265042665995087
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 10059,
+                "networkLatencyUs": 7752,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 97794,
+                "networkLatencyUs": 96105,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "download",
+                "senderBytes": 9961472,
+                "receiverBytes": 9961472,
+                "senderElapsedUs": 6085614,
+                "receiverElapsedUs": 8090941,
+                "mibPerSecond": 1.1741526727237288,
+                "writeCompletion": {
+                  "sampleCount": 152,
+                  "minUs": 70,
+                  "p50Us": 135,
+                  "p95Us": 21634,
+                  "p99Us": 2320201,
+                  "maxUs": 2556455
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1034847,
+                    "bytes": 3276800,
+                    "mibPerSecond": 3.0197700722908793
+                  },
+                  {
+                    "startUs": 1034847,
+                    "endUs": 2181374,
+                    "bytes": 458752,
+                    "mibPerSecond": 0.3815871758798528
+                  },
+                  {
+                    "startUs": 2181374,
+                    "endUs": 3226708,
+                    "bytes": 983040,
+                    "mibPerSecond": 0.8968425402789921
+                  },
+                  {
+                    "startUs": 3226708,
+                    "endUs": 4332814,
+                    "bytes": 1114112,
+                    "mibPerSecond": 0.9605770152227725
+                  },
+                  {
+                    "startUs": 4332814,
+                    "endUs": 5344697,
+                    "bytes": 786432,
+                    "mibPerSecond": 0.7411924105850182
+                  },
+                  {
+                    "startUs": 5344697,
+                    "endUs": 6358095,
+                    "bytes": 1048576,
+                    "mibPerSecond": 0.9867791331737382
+                  },
+                  {
+                    "startUs": 6358095,
+                    "endUs": 7888272,
+                    "bytes": 1179648,
+                    "mibPerSecond": 0.7352090640494532
+                  },
+                  {
+                    "startUs": 7888272,
+                    "endUs": 8090941,
+                    "bytes": 1114112,
+                    "mibPerSecond": 5.24253832603901
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 7550,
+                "networkLatencyUs": 6592,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 13866,
+                "networkLatencyUs": 12266,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "upload",
+                "senderBytes": 2621440,
+                "receiverBytes": 2621440,
+                "senderElapsedUs": 6697168,
+                "receiverElapsedUs": 8840407,
+                "mibPerSecond": 0.28279240989696514,
+                "writeCompletion": {
+                  "sampleCount": 40,
+                  "minUs": 15,
+                  "p50Us": 2155065,
+                  "p95Us": 2280837,
+                  "p99Us": 2280901,
+                  "maxUs": 2280901
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1008769,
+                    "bytes": 262144,
+                    "mibPerSecond": 0.2478268067317691
+                  },
+                  {
+                    "startUs": 1008769,
+                    "endUs": 2105707,
+                    "bytes": 262144,
+                    "mibPerSecond": 0.22790713786923236
+                  },
+                  {
+                    "startUs": 2105707,
+                    "endUs": 3520527,
+                    "bytes": 196608,
+                    "mibPerSecond": 0.13252569231421665
+                  },
+                  {
+                    "startUs": 3520527,
+                    "endUs": 4663272,
+                    "bytes": 393216,
+                    "mibPerSecond": 0.3281572004252918
+                  },
+                  {
+                    "startUs": 4663272,
+                    "endUs": 5840838,
+                    "bytes": 196608,
+                    "mibPerSecond": 0.15922674397868147
+                  },
+                  {
+                    "startUs": 5840838,
+                    "endUs": 6957064,
+                    "bytes": 393216,
+                    "mibPerSecond": 0.33595347178797125
+                  },
+                  {
+                    "startUs": 6957064,
+                    "endUs": 8119229,
+                    "bytes": 393216,
+                    "mibPerSecond": 0.3226736306806693
+                  },
+                  {
+                    "startUs": 8119229,
+                    "endUs": 8840407,
+                    "bytes": 524288,
+                    "mibPerSecond": 0.6933101120666465
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 6859,
+                "networkLatencyUs": 6046,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 116548,
+                "networkLatencyUs": 114872,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "upload",
+                "senderBytes": 2621440,
+                "receiverBytes": 2621440,
+                "senderElapsedUs": 5022362,
+                "receiverElapsedUs": 7717484,
+                "mibPerSecond": 0.32393977104455285,
+                "writeCompletion": {
+                  "sampleCount": 40,
+                  "minUs": 16,
+                  "p50Us": 998539,
+                  "p95Us": 3020621,
+                  "p99Us": 3020622,
+                  "maxUs": 3020622
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1029252,
+                    "bytes": 589824,
+                    "mibPerSecond": 0.5465133903067471
+                  },
+                  {
+                    "startUs": 1029252,
+                    "endUs": 2332076,
+                    "bytes": 196608,
+                    "mibPerSecond": 0.14391813475956844
+                  },
+                  {
+                    "startUs": 2332076,
+                    "endUs": 3664103,
+                    "bytes": 196608,
+                    "mibPerSecond": 0.1407629124634861
+                  },
+                  {
+                    "startUs": 3664103,
+                    "endUs": 4762817,
+                    "bytes": 458752,
+                    "mibPerSecond": 0.398192796305499
+                  },
+                  {
+                    "startUs": 4762817,
+                    "endUs": 6135067,
+                    "bytes": 720896,
+                    "mibPerSecond": 0.5010020040080161
+                  },
+                  {
+                    "startUs": 6135067,
+                    "endUs": 7156397,
+                    "bytes": 262144,
+                    "mibPerSecond": 0.24477886677175836
+                  },
+                  {
+                    "startUs": 7156397,
+                    "endUs": 7717484,
+                    "bytes": 196608,
+                    "mibPerSecond": 0.33417277534499995
+                  }
+                ]
+              }
+            },
+            {
+              "comparisonEligible": true,
+              "ineligibleReason": null,
+              "pathBefore": {
+                "ok": true,
+                "durationUs": 59582,
+                "networkLatencyUs": 58097,
+                "networkPath": "direct"
+              },
+              "pathAfter": {
+                "ok": true,
+                "durationUs": 22541,
+                "networkLatencyUs": 20879,
+                "networkPath": "direct"
+              },
+              "result": {
+                "schema": 2,
+                "config": {
+                  "workloadId": "tcp-sustained-v2",
+                  "measuredDurationUs": 5000000,
+                  "warmupBytes": 1048576,
+                  "chunkBytes": 65536,
+                  "maxInFlightBytes": 524288,
+                  "intervalUs": 1000000,
+                  "streamCount": 1
+                },
+                "direction": "download",
+                "senderBytes": 6815744,
+                "receiverBytes": 6815744,
+                "senderElapsedUs": 5277981,
+                "receiverElapsedUs": 5995157,
+                "mibPerSecond": 1.0842084702702532,
+                "writeCompletion": {
+                  "sampleCount": 104,
+                  "minUs": 82,
+                  "p50Us": 325,
+                  "p95Us": 948885,
+                  "p99Us": 949021,
+                  "maxUs": 949021
+                },
+                "valid": true,
+                "intervals": [
+                  {
+                    "startUs": 0,
+                    "endUs": 1045341,
+                    "bytes": 1179648,
+                    "mibPerSecond": 1.076203841617233
+                  },
+                  {
+                    "startUs": 1045341,
+                    "endUs": 2053387,
+                    "bytes": 1179648,
+                    "mibPerSecond": 1.1160204990645268
+                  },
+                  {
+                    "startUs": 2053387,
+                    "endUs": 3064201,
+                    "bytes": 589824,
+                    "mibPerSecond": 0.556482201473268
+                  },
+                  {
+                    "startUs": 3064201,
+                    "endUs": 4080933,
+                    "bytes": 1310720,
+                    "mibPerSecond": 1.2294291907798713
+                  },
+                  {
+                    "startUs": 4080933,
+                    "endUs": 5114207,
+                    "bytes": 1376256,
+                    "mibPerSecond": 1.2702342263523518
+                  },
+                  {
+                    "startUs": 5114207,
+                    "endUs": 5995157,
+                    "bytes": 1179648,
+                    "mibPerSecond": 1.2770304784607527
+                  }
+                ]
+              }
+            }
+          ],
+          "lanSpeedTests": [
+            {
+              "schema": 2,
+              "config": {
+                "workloadId": "tcp-lan-control-v1",
+                "measuredDurationUs": 1000000,
+                "warmupBytes": 1048576,
+                "chunkBytes": 65536,
+                "maxInFlightBytes": 524288,
+                "intervalUs": 1000000,
+                "streamCount": 1
+              },
+              "direction": "upload",
+              "senderBytes": 1572864,
+              "receiverBytes": 1572864,
+              "senderElapsedUs": 1143584,
+              "receiverElapsedUs": 1805581,
+              "mibPerSecond": 0.8307575234785921,
+              "writeCompletion": {
+                "sampleCount": 24,
+                "minUs": 80,
+                "p50Us": 1054,
+                "p95Us": 1141005,
+                "p99Us": 1141028,
+                "maxUs": 1141028
+              },
+              "valid": true,
+              "intervals": [
+                {
+                  "startUs": 0,
+                  "endUs": 1035809,
+                  "bytes": 262144,
+                  "mibPerSecond": 0.241357238641487
+                },
+                {
+                  "startUs": 1035809,
+                  "endUs": 1805581,
+                  "bytes": 1310720,
+                  "mibPerSecond": 1.6238574538954391
+                }
+              ]
+            },
+            {
+              "schema": 2,
+              "config": {
+                "workloadId": "tcp-lan-control-v1",
+                "measuredDurationUs": 1000000,
+                "warmupBytes": 1048576,
+                "chunkBytes": 65536,
+                "maxInFlightBytes": 524288,
+                "intervalUs": 1000000,
+                "streamCount": 1
+              },
+              "direction": "download",
+              "senderBytes": 2097152,
+              "receiverBytes": 2097152,
+              "senderElapsedUs": 1140589,
+              "receiverElapsedUs": 1669252,
+              "mibPerSecond": 1.1981414429936283,
+              "writeCompletion": {
+                "sampleCount": 32,
+                "minUs": 144,
+                "p50Us": 1435,
+                "p95Us": 883223,
+                "p99Us": 883238,
+                "maxUs": 883238
+              },
+              "valid": true,
+              "intervals": [
+                {
+                  "startUs": 0,
+                  "endUs": 1066589,
+                  "bytes": 983040,
+                  "mibPerSecond": 0.8789702500213297
+                },
+                {
+                  "startUs": 1066589,
+                  "endUs": 1669252,
+                  "bytes": 1114112,
+                  "mibPerSecond": 1.7630085138792329
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

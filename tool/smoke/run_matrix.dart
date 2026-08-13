@@ -779,7 +779,6 @@ final class _SmokeMatrixRunner {
         '--no-enable-dart-profiling',
         '--no-dds',
         '--no-devtools',
-        if (target == 'ios') '--no-publish-port',
       ],
       if (binaryPath != null) ...['--use-application-binary', binaryPath],
       ..._smokeAppDartDefines(target, runnerUrl: runnerUrl),
@@ -956,12 +955,22 @@ final class _SmokeMatrixRunner {
       _log('${run.target.toUpperCase()} SKIP ${skipped.message}');
       return skipped;
     }
-    return _runFlutterTarget(
-      target: run.target,
-      deviceId: deviceId,
-      device: run.device,
-      preBuildFuture: preBuildFutures[run.target],
-    );
+    try {
+      return await _runFlutterTarget(
+        target: run.target,
+        deviceId: deviceId,
+        device: run.device,
+        preBuildFuture: preBuildFutures[run.target],
+      );
+    } catch (error) {
+      return _TargetRun(
+        target: run.target,
+        ok: false,
+        skipped: false,
+        message: error.toString(),
+        device: run.device,
+      );
+    }
   }
 
   String _controlUrlFor(String target) {
@@ -1124,6 +1133,7 @@ final class _SmokeMatrixRunner {
     _log('waiting for Android device $deviceId to finish booting');
     await _run(config.adb, ['-s', deviceId, 'wait-for-device']);
     Object? lastStatus;
+    var systemReady = false;
     for (var i = 0; i < 120; i++) {
       try {
         final booted = await _adbShell(deviceId, [
@@ -1143,8 +1153,8 @@ final class _SmokeMatrixRunner {
         if (booted.stdout.trim() == '1' &&
             packageService.stdout.contains('found') &&
             packageManager.exitCode == 0) {
-          _log('Android device $deviceId is ready');
-          return;
+          systemReady = true;
+          break;
         }
         lastStatus =
             'boot=${booted.stdout.trim()} '
@@ -1158,9 +1168,35 @@ final class _SmokeMatrixRunner {
       }
       await Future<void>.delayed(const Duration(seconds: 2));
     }
-    throw TimeoutException(
-      'Android device $deviceId did not become ready: $lastStatus',
-    );
+    if (!systemReady) {
+      throw TimeoutException(
+        'Android device $deviceId did not become ready: $lastStatus',
+      );
+    }
+    await _ensureAndroidInteractive(deviceId);
+    _log('Android device $deviceId is ready');
+  }
+
+  Future<void> _ensureAndroidInteractive(String deviceId) async {
+    await _adbShell(deviceId, ['input', 'keyevent', 'KEYCODE_WAKEUP']);
+    await _adbShell(deviceId, ['wm', 'dismiss-keyguard']);
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+
+    final power = await _adbShell(deviceId, ['dumpsys', 'power']);
+    final window = await _adbShell(deviceId, ['dumpsys', 'window']);
+    final powerText = power.stdout.toString();
+    final windowText = window.stdout.toString();
+    final awake = powerText.contains('mWakefulness=Awake');
+    final securelyLocked =
+        windowText.contains('mDreamingLockscreen=true') ||
+        windowText.contains('mShowingLockscreen=true') ||
+        windowText.contains('isStatusBarKeyguard=true');
+    if (!awake || securelyLocked) {
+      throw StateError(
+        'Android device $deviceId is asleep or securely locked. '
+        'Unlock it and leave the screen awake before rerunning.',
+      );
+    }
   }
 
   Future<ProcessResult> _adbShell(String deviceId, List<String> shellArgs) {

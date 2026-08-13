@@ -398,6 +398,13 @@ packages:
       relative: true
     source: path
     version: "0.8.1"
+  tailscale_profile_harness:
+    dependency: transitive
+    description:
+      path: "../../benchmark/profile_harness"
+      relative: true
+    source: path
+    version: "0.0.0"
   term_glyph:
     dependency: transitive
     description:

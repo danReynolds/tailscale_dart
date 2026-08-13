@@ -75,7 +75,8 @@ DUNE_SMOKE_RUNNER_URL_IOS=http://<host-lan-ip>:18099 \
 ```
 
 Android physical-device runs use the corresponding Android variables and
-device selector:
+device selector. Unlock the device before starting; a secure keyguard prevents
+Flutter from launching the profile app and is reported as a preflight failure:
 
 ```sh
 DUNE_SMOKE_CONTROL_URL_ANDROID=http://<host-lan-ip>:18080 \
@@ -91,7 +92,9 @@ DUNE_SMOKE_RUNNER_URL_ANDROID=http://<host-lan-ip>:18099 \
 ```
 
 Profile runs use Flutter profile mode, but detach Flutter tooling before the
-workload and disable Dart sampling, DDS, DevTools, and iOS VM-service discovery.
+workload and disable Dart sampling, DDS, and DevTools. Flutter's default iOS
+port publication remains enabled because wireless physical devices require it
+to launch.
 Keeping `flutter run` attached measurably distorts physical-device throughput;
 the artifact records the detached launch mode. Profile runs record p50/p95 for
 repeated small API operations and three five-second sustained TCP uploads plus

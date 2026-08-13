@@ -779,7 +779,6 @@ final class _SmokeMatrixRunner {
         '--no-enable-dart-profiling',
         '--no-dds',
         '--no-devtools',
-        if (target == 'ios') '--no-publish-port',
       ],
       if (binaryPath != null) ...['--use-application-binary', binaryPath],
       ..._smokeAppDartDefines(target, runnerUrl: runnerUrl),

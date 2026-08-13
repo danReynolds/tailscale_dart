@@ -89,7 +89,7 @@ packages:
     source: hosted
     version: "1.3.3"
   ffi:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: ffi
       sha256: "6d7fd89431262d8f3125e81b50d3847a091d846eafcd4fdb88dd06f36d705a45"
@@ -398,6 +398,13 @@ packages:
       relative: true
     source: path
     version: "0.8.1"
+  tailscale_profile_harness:
+    dependency: transitive
+    description:
+      path: "../../benchmark/profile_harness"
+      relative: true
+    source: path
+    version: "0.0.0"
   term_glyph:
     dependency: transitive
     description:

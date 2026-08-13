@@ -109,7 +109,7 @@ The same classifier is used by hosted TLS and Serve/Funnel receipt tests.
 
 ```bash
 dart analyze
-dart test
+dart test --exclude-tags live-tailscale
 cd go && go test -count=1 ./...
 test/e2e/run_e2e.sh
 TAILSCALE_API_KEY=... TAILSCALE_TAILNET_ID=... \
@@ -209,7 +209,8 @@ suite. The detailed protocol and API assertions live in unit, integration, and
 Headscale E2E tests. The smoke matrix answers a narrower question: "Can this
 Flutter runtime load the native asset, start tsnet, join the control plane, and
 move HTTP/TCP/UDP traffic to another node?" Because both nodes are ephemeral,
-it does not qualify persistent Keybay or restart behavior.
+its same-process restart/re-enrollment cycle does not qualify persistent Keybay
+reconnect across process death.
 
 Targets can be selected or made strict:
 
@@ -288,7 +289,8 @@ reachable interface:
 ```bash
 DUNE_SMOKE_CONTROL_URL_IOS=http://192.168.86.22:18080 \
 DUNE_SMOKE_RUNNER_URL_IOS=http://192.168.86.22:18099 \
-  tool/smoke/run_matrix.sh --targets ios --runner-bind-address 0.0.0.0
+  tool/smoke/run_matrix.sh --targets ios --ios-device <device-id> \
+  --runner-bind-address 0.0.0.0
 ```
 
 The runner HTTP server binds to `127.0.0.1` by default and protects `/config`
@@ -297,6 +299,35 @@ dart-define. Binding to `0.0.0.0` should be limited to physical-device smoke
 runs on trusted networks because `/config` carries a short-lived Headscale auth
 key.
 
+Every run ends with a compact capability matrix derived from the same
+machine-readable results that determine the smoke verdict. To collect
+historical performance samples without replacing or weakening those assertions,
+add profile mode and an explicit output path:
+
+```bash
+DUNE_SMOKE_CONTROL_URL_IOS=http://<host-lan-ip>:18080 \
+DUNE_SMOKE_RUNNER_URL_IOS=http://<host-lan-ip>:18099 \
+  tool/smoke/run_matrix.sh --targets ios --ios-device <device-id> \
+  --runner-bind-address 0.0.0.0 --strict --timeout-seconds 900 \
+  --profile-samples 20 \
+  --output benchmark/results/<version>/devices/<date>-ios-arm64.json
+```
+
+Profiling requires one target and an explicit iOS/Android device, runs the app
+in Flutter profile mode with Flutter tooling detached, and adds repeated
+small-operation latency plus three five-second uploads and downloads over
+Tailscale. One one-second upload and download over an ordinary host LAN socket
+provide a lightweight ceiling check. The LAN control makes a later physical run
+distinguish a tailnet/bridge bottleneck from device, Wi-Fi, or runtime behavior.
+Correctness and profile collection have separate statuses. It writes
+privacy-safe raw JSON and a generated Markdown summary. The detached launch
+avoids profiler/debugger measurement effects and is recorded in the artifact.
+For an explicitly non-comparable iOS Simulator diagnostic, add
+`--profile-run-mode debug`.
+Without `--output`, a profile is kept under the system temporary directory so
+an exploratory run cannot silently become canonical history.
+
 Real iOS/Android devices remain the release-confidence path because simulators
 and emulators do not fully cover ARM64 packaging, mobile networking, app
-lifecycle, or device-specific sandbox behavior.
+lifecycle, or device-specific sandbox behavior. Dated production-custody and
+hosted-control-plane results live in [`device_receipts/`](device_receipts/).

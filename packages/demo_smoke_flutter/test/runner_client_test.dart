@@ -21,6 +21,10 @@ void main() {
             'targetIp': '100.64.0.1',
             'hostname': 'dune-smoke-macos',
             'stateSuffix': 'macos-1',
+            'profileSamples': 12,
+            'profileContext': 'wifi-office',
+            'lanProfileHost': '192.0.2.10',
+            'lanProfilePort': 43123,
           }),
         );
       await request.response.close();
@@ -38,6 +42,38 @@ void main() {
     expect(config.targetIp, '100.64.0.1');
     expect(config.hostname, 'dune-smoke-macos');
     expect(config.stateSuffix, 'macos-1');
+    expect(config.profileSamples, 12);
+    expect(config.profileContext, 'wifi-office');
+    expect(config.lanProfileHost, '192.0.2.10');
+    expect(config.lanProfilePort, 43123);
+  });
+
+  test('fetchSmokeConfig defaults optional profile fields', () async {
+    final server = await _TestServer.start((request) async {
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType.json
+        ..write(
+          jsonEncode({
+            'controlUrl': 'http://localhost:18080',
+            'authKey': 'auth',
+            'targetIp': '100.64.0.1',
+          }),
+        );
+      await request.response.close();
+    });
+    addTearDown(server.close);
+
+    final config = await fetchSmokeConfig(
+      runnerUrl: server.url,
+      session: 'macos',
+      token: 'secret',
+    );
+
+    expect(config.profileSamples, 0);
+    expect(config.profileContext, 'primary');
+    expect(config.lanProfileHost, isNull);
+    expect(config.lanProfilePort, isNull);
   });
 
   test('fetchSmokeConfig rejects non-200 responses', () async {

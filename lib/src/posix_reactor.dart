@@ -8,10 +8,9 @@ part of 'fd_transport.dart';
 final class _SharedFdReactorProxy {
   _SharedFdReactorProxy._({
     required this.shard,
-    required SendPort commands,
-    required int handle,
-  }) : _commands = commands,
-       _handle = handle;
+    required this._commands,
+    required this._handle,
+  });
 
   /// Returns a proxy for the shard this transport is assigned, spawning a new
   /// reactor isolate if none is alive. A second call before the spawn completes
@@ -944,16 +943,12 @@ final class _PosixBindings {
 
   _PosixBindings._init(
     this._library, {
-    required _SocketPairDart socketpair,
-    required _ReadDart read,
-    required _WriteDart write,
-    required _CloseDart close,
-    required _ShutdownDart shutdown,
-  }) : _socketpair = socketpair,
-       _read = read,
-       _write = write,
-       _close = close,
-       _shutdown = shutdown {
+    required this._socketpair,
+    required this._read,
+    required this._write,
+    required this._close,
+    required this._shutdown,
+  }) {
     _errnoLocation = _lookupErrnoLocation(_library);
   }
 

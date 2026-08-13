@@ -13,13 +13,13 @@ void main() {
     final first = await demo.startServices();
     expect(first.localIp, '100.64.0.10');
     expect(tsnet.http.boundTailnetPorts, [demoDefaultHttpPort]);
-    expect(tsnet.tcp.boundPorts, [demoDefaultTcpPort]);
+    expect(tsnet.tcp.boundPorts, [demoDefaultTcpPort, profileSpeedTestPort]);
     expect(tsnet.udp.boundHosts, ['100.64.0.10']);
 
     final same = await demo.startServices();
     expect(identical(first, same), isTrue);
     expect(tsnet.http.boundTailnetPorts, [demoDefaultHttpPort]);
-    expect(tsnet.tcp.boundPorts, [demoDefaultTcpPort]);
+    expect(tsnet.tcp.boundPorts, [demoDefaultTcpPort, profileSpeedTestPort]);
     expect(tsnet.udp.boundHosts, ['100.64.0.10']);
 
     tsnet.ipv4 = '100.64.0.11';
@@ -30,8 +30,13 @@ void main() {
       demoDefaultHttpPort,
     ]);
     expect(tsnet.http.closedBindings, 1);
-    expect(tsnet.tcp.boundPorts, [demoDefaultTcpPort, demoDefaultTcpPort]);
-    expect(tsnet.tcp.closedListeners, 1);
+    expect(tsnet.tcp.boundPorts, [
+      demoDefaultTcpPort,
+      profileSpeedTestPort,
+      demoDefaultTcpPort,
+      profileSpeedTestPort,
+    ]);
+    expect(tsnet.tcp.closedListeners, 2);
     expect(tsnet.udp.boundHosts, ['100.64.0.10', '100.64.0.11']);
     expect(tsnet.udp.closedBindings, 1);
 

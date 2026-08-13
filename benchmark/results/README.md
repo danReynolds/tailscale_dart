@@ -12,6 +12,14 @@ the raw samples and aggregate comparisons so later releases can be evaluated
 against the same scenarios rather than a hand-selected subset. Experimental,
 quick, dirty-checkout, and targeted diagnostic runs do not belong here.
 
+Physical-device network profiles use the same version directory, under a
+`devices/` child. The runner creates both raw JSON and a Markdown summary:
+
+```text
+0.8.1/devices/2026-08-12-ios-arm64.json
+0.8.1/devices/2026-08-12-ios-arm64.md
+```
+
 Generate a candidate report with an explicit output path:
 
 ```sh
@@ -27,6 +35,13 @@ Before committing it, confirm that:
 - the run used the default five trials and full iteration count;
 - no credentials, state paths, or developer-specific absolute paths remain;
 - the matching version directory summarizes material and inconclusive results.
+
+For a device profile, also confirm that the device is physical, the checkout is
+clean, every capability passed (apart from an explicitly advisory Ping warning),
+the profile is complete and comparison-eligible, and the device/OS/network
+setup is documented well enough to make a future comparison meaningful. The
+public-Dart, direct-`tsnet`, and ordinary-LAN collections must all be complete.
+Device reports intentionally omit device identifiers and tailnet addresses.
 
 These reports are evidence, not a CI threshold. The comparison workflow remains
 report-only until multiple environments establish stable variance bounds.

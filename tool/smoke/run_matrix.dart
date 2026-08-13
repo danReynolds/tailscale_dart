@@ -5,6 +5,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:tailscale_profile_harness/tailscale_profile_harness.dart';
+
+import 'result_report.dart';
+
 const _knownTargets = ['macos', 'ios', 'android', 'linux'];
 const _defaultTargets = ['macos', 'ios', 'android'];
 const _resultPrefix = 'DUNE_SMOKE_RESULT ';
@@ -34,6 +38,8 @@ final class _SmokeMatrixRunner {
   late final String _runnerToken = _loadOrCreateRunnerToken();
   Process? _launchedAndroidEmulator;
   HttpServer? _runnerServer;
+  ServerSocket? _lanProfileServer;
+  StreamSubscription<Socket>? _lanProfileConnections;
   String? _currentAuthKey;
   String? _currentTargetIp;
   final Map<String, Completer<Map<String, Object?>>> _resultCompleters = {};
@@ -55,6 +61,7 @@ final class _SmokeMatrixRunner {
         }
       }
       await _startRunnerServer();
+      if (config.profileSamples > 0) await _startLanProfileServer();
       await _startHeadscale();
       headscaleStarted = true;
       _currentAuthKey = await _createAuthKey();
@@ -76,13 +83,22 @@ final class _SmokeMatrixRunner {
         await _launchAndroidAvd(config.androidAvd!);
         devices = await _waitForFlutterDevice('android');
       }
-      if (config.targets.contains('ios') && !_hasIosSimulator(devices)) {
+      if (config.targets.contains('ios') &&
+          !config.deviceOverrides.containsKey('ios') &&
+          !_hasIosSimulator(devices)) {
         await _launchIosSimulator(config.iosSimulator);
         devices = await _waitForFlutterDevice('ios', requireEmulator: true);
       }
 
       final runs = config.targets
-          .map((target) => _TargetLaunch(target, _deviceIdFor(target, devices)))
+          .map((target) {
+            final deviceId = _deviceIdFor(target, devices);
+            return _TargetLaunch(
+              target,
+              deviceId,
+              _deviceMetadata(target, deviceId, devices),
+            );
+          })
           .toList(growable: false);
       final results = await _runFlutterTargets(
         runs: runs,
@@ -94,13 +110,20 @@ final class _SmokeMatrixRunner {
       _log('');
       _log('Smoke matrix summary:');
       for (final result in results) {
+        final correctnessOk = result.result?['ok'] == true;
         final state = result.skipped
             ? 'SKIP'
-            : result.ok
+            : correctnessOk && result.ok
             ? 'PASS'
+            : correctnessOk
+            ? 'PROFILE INVALID'
             : 'FAIL';
         _log('  ${result.target}: $state ${result.message}');
       }
+      _log('');
+      _log('Capability matrix:');
+      stdout.writeln(renderSmokeCapabilityMatrix(_reportRuns(results)));
+      await _writeResultReport(results);
 
       if (config.strict && skipped.isNotEmpty) return false;
       return failed.isEmpty;
@@ -131,6 +154,7 @@ final class _SmokeMatrixRunner {
           } catch (_) {}
         }),
         _stopLaunchedAndroidEmulator(),
+        _stopLanProfileServer(),
         _stopRunnerServer(),
         // Drain any still-pending pre-builds so the runner doesn't leave
         // stray flutter build subprocesses behind. Errors are absorbed.
@@ -138,6 +162,101 @@ final class _SmokeMatrixRunner {
           future.then((_) {}, onError: (Object _) {}),
       ]);
     }
+  }
+
+  List<Map<String, Object?>> _reportRuns(List<_TargetRun> results) => [
+    for (final result in results)
+      <String, Object?>{
+        'target': result.target,
+        'ok': result.result?['ok'] == true,
+        'requestedOk': result.ok,
+        'skipped': result.skipped,
+        if (result.result != null) 'result': result.result,
+        if (result.device != null) 'device': result.device,
+      },
+  ];
+
+  Future<void> _writeResultReport(List<_TargetRun> results) async {
+    if (config.outputPath == null && config.profileSamples == 0) return;
+    final requestedPath = config.outputPath;
+    final defaultName =
+        'tailscale-device-profile-'
+        '${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-')}.json';
+    final rawPath = requestedPath == null
+        ? '${Directory.systemTemp.path}/$defaultName'
+        : File(requestedPath).absolute.path;
+    final jsonPath = rawPath.endsWith('.json') ? rawPath : '$rawPath.json';
+    final jsonFile = File(jsonPath);
+    final artifact = buildSmokeRunArtifact(
+      runs: _reportRuns(results),
+      source: await _sourceMetadata(),
+      environment: await _environmentMetadata(),
+      profileSamples: config.profileSamples,
+      profileContext: config.profileContext,
+    );
+    jsonFile.parent.createSync(recursive: true);
+    jsonFile.writeAsStringSync(
+      const JsonEncoder.withIndent('  ').convert(artifact),
+      flush: true,
+    );
+    final markdownFile = File(
+      '${jsonPath.substring(0, jsonPath.length - '.json'.length)}.md',
+    );
+    markdownFile.writeAsStringSync(
+      renderSmokeRunMarkdown(artifact),
+      flush: true,
+    );
+    _log('JSON result: ${jsonFile.path}');
+    _log('Markdown summary: ${markdownFile.path}');
+  }
+
+  Future<Map<String, Object?>> _sourceMetadata() async {
+    final versionMatch = RegExp(
+      r'^version:\s*(\S+)',
+      multiLine: true,
+    ).firstMatch(File('$root/pubspec.yaml').readAsStringSync());
+    final head = await Process.run('git', [
+      'rev-parse',
+      'HEAD',
+    ], workingDirectory: root);
+    final status = await Process.run('git', [
+      'status',
+      '--porcelain',
+    ], workingDirectory: root);
+    return <String, Object?>{
+      'package': 'tailscale',
+      'version': versionMatch?.group(1) ?? 'unknown',
+      'commit': head.exitCode == 0 ? (head.stdout as String).trim() : 'unknown',
+      'dirty':
+          status.exitCode != 0 || (status.stdout as String).trim().isNotEmpty,
+    };
+  }
+
+  Future<Map<String, Object?>> _environmentMetadata() async {
+    String flutterVersion = 'unknown';
+    String dartVersion = Platform.version.split(' ').first;
+    final result = await Process.run(config.flutter, [
+      '--version',
+      '--machine',
+    ]);
+    if (result.exitCode == 0) {
+      try {
+        final data =
+            jsonDecode(result.stdout as String) as Map<String, Object?>;
+        flutterVersion = data['flutterVersion'] as String? ?? flutterVersion;
+        dartVersion = data['dartSdkVersion'] as String? ?? dartVersion;
+      } catch (_) {}
+    }
+    return <String, Object?>{
+      'flutter': flutterVersion,
+      'dart': dartVersion,
+      'hostOperatingSystem': Platform.operatingSystem,
+      'hostOperatingSystemVersion': Platform.operatingSystemVersion,
+      'flutterRunMode': config.profileSamples > 0
+          ? config.profileRunMode
+          : 'smoke-default',
+      'flutterLaunchMode': config.profileDetached ? 'detached' : 'attached',
+    };
   }
 
   Future<void> _preparePackageDependencies() async {
@@ -149,35 +268,43 @@ final class _SmokeMatrixRunner {
   }
 
   List<String>? _buildArgsFor(String target) {
+    final runMode = _runModeFor(target);
     switch (target) {
       case 'macos':
-        return ['build', 'macos', '--debug'];
+        return ['build', 'macos', '--$runMode'];
       case 'ios':
         // Pre-build for the iOS simulator. If the user pinned an iOS device
         // override, fall back to flutter run's inline build (skip pre-build).
         if (config.deviceOverrides.containsKey('ios')) return null;
         return ['build', 'ios', '--simulator', '--debug', '--no-codesign'];
       case 'android':
-        return ['build', 'apk', '--${config.androidRunMode}'];
+        return ['build', 'apk', '--$runMode'];
       default:
         return null;
     }
   }
 
   String _binaryPathFor(String target) {
+    final runMode = _runModeFor(target);
     switch (target) {
       case 'macos':
-        return '$smokeAppDir/build/macos/Build/Products/Debug/'
+        final configuration = runMode == 'profile' ? 'Profile' : 'Debug';
+        return '$smokeAppDir/build/macos/Build/Products/$configuration/'
             'dune_smoke_flutter.app';
       case 'ios':
         return '$smokeAppDir/build/ios/iphonesimulator/Runner.app';
       case 'android':
-        final mode = config.androidRunMode;
-        return '$smokeAppDir/build/app/outputs/flutter-apk/app-$mode.apk';
+        return '$smokeAppDir/build/app/outputs/flutter-apk/app-$runMode.apk';
       default:
         throw StateError('no binary path for $target');
     }
   }
+
+  String _runModeFor(String target) => config.profileSamples > 0
+      ? config.profileRunMode
+      : target == 'android'
+      ? config.androidRunMode
+      : 'debug';
 
   Future<String> _preBuildTarget(String target) async {
     final args = _buildArgsFor(target);
@@ -237,6 +364,41 @@ final class _SmokeMatrixRunner {
     await server.close(force: true);
   }
 
+  Future<void> _startLanProfileServer() async {
+    final server = await ServerSocket.bind(config.runnerBindAddress, 0);
+    _lanProfileServer = server;
+    _lanProfileConnections = server.listen((socket) {
+      unawaited(
+        serveSpeedTestConnection(
+          SpeedTestConnection.bufferedSink(
+            input: socket,
+            add: socket.add,
+            flush: socket.flush,
+            close: () async => socket.destroy(),
+          ),
+        ).then<void>(
+          (_) {},
+          onError: (Object error) {
+            stderr.writeln('LAN profile connection failed: $error');
+          },
+        ),
+      );
+    });
+    _log(
+      'ordinary-LAN profile server listening on '
+      '${config.runnerBindAddress}:${server.port}',
+    );
+  }
+
+  Future<void> _stopLanProfileServer() async {
+    final subscription = _lanProfileConnections;
+    _lanProfileConnections = null;
+    if (subscription != null) await subscription.cancel();
+    final server = _lanProfileServer;
+    _lanProfileServer = null;
+    if (server != null) await server.close();
+  }
+
   Future<void> _serveRunnerRequests() async {
     final server = _runnerServer;
     if (server == null) return;
@@ -266,12 +428,19 @@ final class _SmokeMatrixRunner {
       return;
     }
     if (request.method == 'GET' && path == '/config') {
+      final lanServer = _lanProfileServer;
       final body = <String, Object?>{
         'authKey': _currentAuthKey ?? '',
         'controlUrl': _controlUrlFor(session),
         'targetIp': _currentTargetIp ?? '',
         'hostname': 'dune-smoke-$session',
         'stateSuffix': '$session-$_runStartMillis',
+        'profileSamples': config.profileSamples,
+        'profileContext': config.profileContext,
+        if (lanServer != null) ...{
+          'lanProfileHost': _lanProfileHost(session, request),
+          'lanProfilePort': lanServer.port,
+        },
       };
       request.response
         ..statusCode = HttpStatus.ok
@@ -299,6 +468,19 @@ final class _SmokeMatrixRunner {
     }
     request.response.statusCode = HttpStatus.notFound;
     await request.response.close();
+  }
+
+  String _lanProfileHost(String target, HttpRequest request) {
+    final specific =
+        Platform.environment['DUNE_SMOKE_LAN_HOST_${target.toUpperCase()}'];
+    if (specific != null && specific.isNotEmpty) return specific;
+    final shared = Platform.environment['DUNE_SMOKE_LAN_HOST'];
+    if (shared != null && shared.isNotEmpty) return shared;
+    final requestedHost = request.requestedUri.host;
+    if (requestedHost.isNotEmpty && requestedHost != '0.0.0.0') {
+      return requestedHost;
+    }
+    return Uri.parse(_runnerUrlFor(target)).host;
   }
 
   bool _isRunnerRequestAuthorized(HttpRequest request) {
@@ -526,9 +708,31 @@ final class _SmokeMatrixRunner {
     return matchesForTarget.first.id;
   }
 
+  Map<String, Object?>? _deviceMetadata(
+    String target,
+    String? deviceId,
+    List<_FlutterDevice> devices,
+  ) {
+    if (deviceId == null) return null;
+    for (final device in devices) {
+      if (device.id == deviceId) {
+        return <String, Object?>{
+          ...device.reportMetadata,
+          'deviceClass': target == 'ios' || target == 'android'
+              ? device.emulator
+                    ? 'emulator'
+                    : 'physical'
+              : 'host',
+        };
+      }
+    }
+    return null;
+  }
+
   Future<_TargetRun> _runFlutterTarget({
     required String target,
     required String deviceId,
+    required Map<String, Object?>? device,
     Future<String>? preBuildFuture,
   }) async {
     if (target == 'android') {
@@ -564,12 +768,19 @@ final class _SmokeMatrixRunner {
       ], allowFailure: true);
     }
     _log('running $target smoke on Flutter device $deviceId');
-    final runMode = target == 'android' ? config.androidRunMode : 'debug';
+    final runMode = _runModeFor(target);
     final process = await Process.start(config.flutter, [
       'run',
       '-d',
       deviceId,
       '--$runMode',
+      if (config.profileDetached) ...[
+        '--no-resident',
+        '--no-enable-dart-profiling',
+        '--no-dds',
+        '--no-devtools',
+        if (target == 'ios') '--no-publish-port',
+      ],
       if (binaryPath != null) ...['--use-application-binary', binaryPath],
       ..._smokeAppDartDefines(target, runnerUrl: runnerUrl),
     ], workingDirectory: smokeAppDir);
@@ -580,16 +791,16 @@ final class _SmokeMatrixRunner {
     unawaited(
       httpResult.future.then((data) {
         if (result.isCompleted) return;
-        final ok = data['ok'] == true;
+        final ok = _requestedResultOk(data);
         final duration = data['durationMs'];
         result.complete(
           _TargetRun(
             target: target,
             ok: ok,
             skipped: false,
-            message: ok
-                ? 'completed in ${duration ?? '?'}ms'
-                : (data['error'] as String? ?? 'probe failed'),
+            message: _resultMessage(data, ok: ok, duration: duration),
+            result: data,
+            device: device,
           ),
         );
       }),
@@ -603,16 +814,16 @@ final class _SmokeMatrixRunner {
       final jsonText = line.substring(resultIndex + _resultPrefix.length);
       try {
         final decoded = jsonDecode(jsonText) as Map<String, Object?>;
-        final ok = decoded['ok'] == true;
+        final ok = _requestedResultOk(decoded);
         final duration = decoded['durationMs'];
         result.complete(
           _TargetRun(
             target: target,
             ok: ok,
             skipped: false,
-            message: ok
-                ? 'completed in ${duration ?? '?'}ms'
-                : (decoded['error'] as String? ?? 'probe failed'),
+            message: _resultMessage(decoded, ok: ok, duration: duration),
+            result: decoded,
+            device: device,
           ),
         );
       } catch (error) {
@@ -638,13 +849,14 @@ final class _SmokeMatrixRunner {
 
     unawaited(
       process.exitCode.then((code) {
-        if (!result.isCompleted) {
+        if (!result.isCompleted && (!config.profileDetached || code != 0)) {
           result.complete(
             _TargetRun(
               target: target,
               ok: false,
               skipped: false,
               message: 'flutter run exited before smoke result: $code',
+              device: device,
             ),
           );
         }
@@ -663,6 +875,7 @@ final class _SmokeMatrixRunner {
         ok: false,
         skipped: false,
         message: 'timed out after ${config.timeout.inSeconds}s',
+        device: device,
       );
     } finally {
       _resultCompleters.remove(target);
@@ -705,19 +918,48 @@ final class _SmokeMatrixRunner {
     return results.cast<_TargetRun>();
   }
 
+  bool _requestedResultOk(Map<String, Object?> result) {
+    if (result['ok'] != true) return false;
+    if (config.profileSamples == 0) return true;
+    final profile = result['profile'];
+    return profile is Map<String, Object?> && profile['status'] == 'complete';
+  }
+
+  String _resultMessage(
+    Map<String, Object?> result, {
+    required bool ok,
+    required Object? duration,
+  }) {
+    if (ok) return 'completed in ${duration ?? '?'}ms';
+    if (result['ok'] == true && result['profile'] is Map<String, Object?>) {
+      final profile = result['profile']! as Map<String, Object?>;
+      final status = profile['status'] ?? 'invalid';
+      final error = profile['error'];
+      return error is String && error.isNotEmpty
+          ? 'profile $status: $error'
+          : 'profile $status';
+    }
+    return result['error'] as String? ?? 'probe failed';
+  }
+
   Future<_TargetRun> _runOrSkipTarget(
     _TargetLaunch run,
     Map<String, Future<String>> preBuildFutures,
   ) async {
     final deviceId = run.deviceId;
     if (deviceId == null) {
-      final skipped = _TargetRun.skipped(run.target, 'no Flutter device found');
+      final skipped = _TargetRun.skipped(
+        run.target,
+        'no Flutter device found',
+        device: run.device,
+      );
       _log('${run.target.toUpperCase()} SKIP ${skipped.message}');
       return skipped;
     }
     return _runFlutterTarget(
       target: run.target,
       deviceId: deviceId,
+      device: run.device,
       preBuildFuture: preBuildFutures[run.target],
     );
   }
@@ -852,6 +1094,8 @@ final class _SmokeMatrixRunner {
           message:
               'seccomp SIGSYS in logcat (${violations.length} lines; '
               'see ${artifact.path})',
+          result: run.result,
+          device: run.device,
         );
       }
     } catch (error) {
@@ -1032,26 +1276,37 @@ final class _FlutterDevice {
     required this.targetPlatform,
     required this.platformType,
     required this.emulator,
+    required this.sdk,
   });
 
   final String id;
   final String targetPlatform;
   final String platformType;
   final bool emulator;
+  final String sdk;
+
+  Map<String, Object?> get reportMetadata => <String, Object?>{
+    'targetPlatform': targetPlatform,
+    'platformType': platformType,
+    'emulator': emulator,
+    if (sdk.isNotEmpty) 'sdk': sdk,
+  };
 
   static _FlutterDevice fromJson(Map<String, Object?> json) => _FlutterDevice(
     id: json['id'] as String? ?? '',
     targetPlatform: json['targetPlatform'] as String? ?? '',
     platformType: json['platformType'] as String? ?? '',
     emulator: json['emulator'] == true,
+    sdk: json['sdk'] as String? ?? '',
   );
 }
 
 final class _TargetLaunch {
-  const _TargetLaunch(this.target, this.deviceId);
+  const _TargetLaunch(this.target, this.deviceId, this.device);
 
   final String target;
   final String? deviceId;
+  final Map<String, Object?>? device;
 }
 
 final class _TargetRun {
@@ -1060,15 +1315,28 @@ final class _TargetRun {
     required this.ok,
     required this.skipped,
     required this.message,
+    this.result,
+    this.device,
   });
 
-  factory _TargetRun.skipped(String target, String message) =>
-      _TargetRun(target: target, ok: true, skipped: true, message: message);
+  factory _TargetRun.skipped(
+    String target,
+    String message, {
+    Map<String, Object?>? device,
+  }) => _TargetRun(
+    target: target,
+    ok: true,
+    skipped: true,
+    message: message,
+    device: device,
+  );
 
   final String target;
   final bool ok;
   final bool skipped;
   final String message;
+  final Map<String, Object?>? result;
+  final Map<String, Object?>? device;
 }
 
 final class _Config {
@@ -1087,6 +1355,10 @@ final class _Config {
     required this.androidAvd,
     required this.iosSimulator,
     required this.androidRunMode,
+    required this.profileSamples,
+    required this.profileContext,
+    required this.profileRunMode,
+    required this.outputPath,
     required this.jobs,
     required this.keepHeadscale,
     required this.keepAndroidEmulator,
@@ -1109,12 +1381,18 @@ final class _Config {
   final String? androidAvd;
   final String iosSimulator;
   final String androidRunMode;
+  final int profileSamples;
+  final String profileContext;
+  final String profileRunMode;
+  final String? outputPath;
   final int jobs;
   final bool keepHeadscale;
   final bool keepAndroidEmulator;
   final bool preBuild;
   final bool strict;
   final bool help;
+
+  bool get profileDetached => profileSamples > 0;
 
   static _Config parse(List<String> args) {
     final options = <String, String>{};
@@ -1182,13 +1460,57 @@ final class _Config {
       throw ArgumentError('jobs must be >= 1');
     }
 
+    final profileSamples =
+        int.tryParse(
+          options['profile-samples'] ??
+              Platform.environment['DUNE_SMOKE_PROFILE_SAMPLES'] ??
+              '',
+        ) ??
+        0;
+    if (profileSamples < 0 || profileSamples > 1000) {
+      throw ArgumentError('profile-samples must be in 0..1000');
+    }
+    final profileContext =
+        options['profile-context'] ??
+        Platform.environment['DUNE_SMOKE_PROFILE_CONTEXT'] ??
+        'primary';
+    if (!RegExp(r'^[A-Za-z0-9._-]{1,64}$').hasMatch(profileContext)) {
+      throw ArgumentError(
+        'profile-context must be a 1-64 character identifier',
+      );
+    }
+    final profileRunMode =
+        options['profile-run-mode'] ??
+        Platform.environment['DUNE_SMOKE_PROFILE_RUN_MODE'] ??
+        'profile';
+    if (profileRunMode != 'debug' && profileRunMode != 'profile') {
+      throw ArgumentError(
+        'unsupported profile run mode "$profileRunMode"; '
+        'expected debug or profile',
+      );
+    }
     final deviceOverrides = <String, String>{};
-    for (final target in _defaultTargets) {
+    for (final target in _knownTargets) {
       final value =
           options['$target-device'] ??
           Platform.environment['DUNE_SMOKE_${target.toUpperCase()}_DEVICE'];
       if (value != null && value.isNotEmpty) {
         deviceOverrides[target] = value;
+      }
+    }
+    if (profileSamples > 0) {
+      if (targets.length != 1) {
+        throw ArgumentError(
+          'device profiling requires exactly one target for comparable results',
+        );
+      }
+      final target = targets.single;
+      if ((target == 'ios' || target == 'android') &&
+          !deviceOverrides.containsKey(target)) {
+        throw ArgumentError(
+          'device profiling for $target requires --$target-device so a '
+          'simulator or emulator is not selected accidentally',
+        );
       }
     }
 
@@ -1229,6 +1551,11 @@ final class _Config {
           Platform.environment['DUNE_SMOKE_IOS_SIMULATOR'] ??
           'apple_ios_simulator',
       androidRunMode: androidRunMode,
+      profileSamples: profileSamples,
+      profileContext: profileContext,
+      profileRunMode: profileRunMode,
+      outputPath:
+          options['output'] ?? Platform.environment['DUNE_SMOKE_OUTPUT'],
       jobs: jobs,
       keepHeadscale:
           flags.contains('keep-headscale') || flags.contains('reuse-headscale'),
@@ -1340,6 +1667,20 @@ Options:
                                       when a physical device must reach it.
   --android-avd NAME                  Launch this Android AVD if no Android device is visible.
   --android-run-mode debug|profile    Android Flutter run mode. Default: profile.
+  --profile-samples N                 Collect N repeated network samples after
+                                      the functional smoke pass. Uses Flutter
+                                      profile mode, detaches Flutter tooling,
+                                      and requires one target.
+                                      Default: 0 (disabled).
+  --profile-run-mode debug|profile    Flutter mode for a profile workload.
+                                      Default: profile. Debug is diagnostic,
+                                      primarily for iOS Simulator controls.
+  --profile-context LABEL             Short environment label stored with the
+                                      profile. Default: primary.
+  --output PATH                       Write privacy-safe JSON samples plus a
+                                      generated Markdown matrix. Profile runs
+                                      without this flag write under the system
+                                      temporary directory.
   --keep-android-emulator             Leave an emulator launched by this runner alive.
   --ios-simulator ID                  iOS simulator id to launch when iOS is
                                       requested and no iOS simulator is
@@ -1364,6 +1705,10 @@ Environment:
   DUNE_SMOKE_JOBS                     Same as --jobs.
   DUNE_SMOKE_ANDROID_AVD              Same as --android-avd.
   DUNE_SMOKE_ANDROID_RUN_MODE         Same as --android-run-mode.
+  DUNE_SMOKE_PROFILE_SAMPLES          Same as --profile-samples.
+  DUNE_SMOKE_PROFILE_CONTEXT          Same as --profile-context.
+  DUNE_SMOKE_PROFILE_RUN_MODE         Same as --profile-run-mode.
+  DUNE_SMOKE_OUTPUT                   Same as --output.
   DUNE_SMOKE_IOS_SIMULATOR            Same as --ios-simulator.
   ADB                                 adb executable. Default: adb.
   ANDROID_EMULATOR                    emulator executable override.
@@ -1376,6 +1721,8 @@ Environment:
                                       LAN IP instead of localhost).
   DUNE_SMOKE_RUNNER_PORT              Same as --runner-port.
   DUNE_SMOKE_RUNNER_BIND_ADDRESS      Same as --runner-bind-address.
+  DUNE_SMOKE_LAN_HOST                 Override the ordinary-LAN control host.
+  DUNE_SMOKE_LAN_HOST_<TARGET>        Override it for one target.
   DUNE_SMOKE_RUNNER_TOKEN             Optional stable runner auth token. When
                                       unset, one is created under .dart_tool.
   DUNE_SMOKE_<TARGET>_DEVICE          Per-target Flutter device id.

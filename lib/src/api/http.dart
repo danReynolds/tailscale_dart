@@ -171,12 +171,10 @@ abstract interface class TailscaleHttpResponse {
 
 final class _Http implements Http {
   _Http({
-    required http.Client? Function() clientGetter,
-    required HttpBindFn bindFn,
-    required HttpCloseBindingFn closeBindingFn,
-  }) : _clientGetter = clientGetter,
-       _bindFn = bindFn,
-       _closeBindingFn = closeBindingFn;
+    required this._clientGetter,
+    required this._bindFn,
+    required this._closeBindingFn,
+  });
 
   final http.Client? Function() _clientGetter;
   final HttpBindFn _bindFn;
@@ -222,8 +220,8 @@ final class _FdTailscaleHttpServer implements TailscaleHttpServer {
   _FdTailscaleHttpServer({
     required this.bindingId,
     required this.tailnet,
-    required Future<void> Function(int bindingId) closeFn,
-  }) : _closeFn = closeFn {
+    required this._closeFn,
+  }) {
     _requests = StreamController<TailscaleHttpRequest>(
       onListen: _startAcceptLoop,
       onResume: _drainPendingAccepts,
@@ -450,7 +448,7 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
     required this.remote,
     required this.local,
     required this.identity,
-    required PosixFdTransport requestTransport,
+    required this._requestTransport,
     required PosixFdTransport responseTransport,
   }) : // Lowercase header names to match dart:io's case-insensitive convention
        // (and shelf's lowercase headers). The wire keys arrive canonical-cased
@@ -466,8 +464,7 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
            if (entry.value.isNotEmpty)
              entry.key.toLowerCase(): entry.value.join(', '),
        }),
-       uri = Uri.parse(requestUri.isEmpty ? '/' : requestUri),
-       _requestTransport = requestTransport {
+       uri = Uri.parse(requestUri.isEmpty ? '/' : requestUri) {
     response = _TailscaleHttpResponse(
       responseTransport,
       onClose: _closeRequestBody,
@@ -624,8 +621,7 @@ final class _TailscaleHttpRequest implements TailscaleHttpRequest {
 }
 
 final class _TailscaleHttpResponse implements TailscaleHttpResponse {
-  _TailscaleHttpResponse(this._transport, {Future<void> Function()? onClose})
-    : _onClose = onClose {
+  _TailscaleHttpResponse(this._transport, {this._onClose}) {
     // `close()` can complete `done` with an error and rethrow; absorb the
     // orphaned completion so a caller that never awaits `done` can't leak an
     // unhandled async error.

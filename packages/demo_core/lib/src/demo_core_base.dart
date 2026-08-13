@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:tailscale/tailscale.dart';
+import 'package:tailscale_profile_harness/tailscale_profile_harness.dart';
 
 import 'auth_keys.dart';
 
@@ -15,11 +16,13 @@ final class DemoServiceConfig {
     this.httpTailnetPort = demoDefaultHttpPort,
     this.tcpPort = demoDefaultTcpPort,
     this.udpPort = demoDefaultUdpPort,
+    this.speedTestPort = profileSpeedTestPort,
   });
 
   final int httpTailnetPort;
   final int tcpPort;
   final int udpPort;
+  final int speedTestPort;
 }
 
 final class DemoServices {
@@ -28,17 +31,19 @@ final class DemoServices {
     required this.httpTailnetPort,
     required this.tcpPort,
     required this.udpPort,
+    required this.speedTestPort,
   });
 
   final String localIp;
   final int httpTailnetPort;
   final int tcpPort;
   final int udpPort;
+  final int speedTestPort;
 
   @override
   String toString() =>
       'DemoServices(ip: $localIp, http: $httpTailnetPort, '
-      'tcp: $tcpPort, udp: $udpPort)';
+      'tcp: $tcpPort, udp: $udpPort, speed: $speedTestPort)';
 }
 
 enum DemoProbeKind {
@@ -65,12 +70,16 @@ final class DemoProbeResult {
     required this.ok,
     required this.duration,
     required this.message,
+    this.networkLatency,
+    this.networkPath,
   });
 
   final DemoProbeKind kind;
   final bool ok;
   final Duration duration;
   final String message;
+  final Duration? networkLatency;
+  final String? networkPath;
 }
 
 final class DemoProbeReport {
@@ -80,6 +89,39 @@ final class DemoProbeReport {
   final List<DemoProbeResult> results;
 
   bool get ok => results.every((result) => result.ok);
+}
+
+/// A sustained transfer plus the Tailscale path observed around it.
+final class DemoSpeedTestResult {
+  const DemoSpeedTestResult({
+    required this.transfer,
+    required this.pathBefore,
+    required this.pathAfter,
+  });
+
+  final SpeedTestResult transfer;
+  final DemoProbeResult pathBefore;
+  final DemoProbeResult pathAfter;
+
+  bool get comparisonEligible =>
+      transfer.valid &&
+      pathBefore.ok &&
+      pathAfter.ok &&
+      pathBefore.networkPath != null &&
+      pathBefore.networkPath != 'unknown' &&
+      pathBefore.networkPath == pathAfter.networkPath;
+
+  String? get ineligibleReason {
+    if (!transfer.valid) return 'invalid byte accounting';
+    if (!pathBefore.ok || !pathAfter.ok) return 'path check failed';
+    if (pathBefore.networkPath == null || pathBefore.networkPath == 'unknown') {
+      return 'path was unknown';
+    }
+    if (pathBefore.networkPath != pathAfter.networkPath) {
+      return 'path changed during the run';
+    }
+    return null;
+  }
 }
 
 final class DemoCore {
@@ -92,6 +134,8 @@ final class DemoCore {
   StreamSubscription<TailscaleHttpRequest>? _httpRequests;
   TailscaleListener? _tcpListener;
   StreamSubscription<TailscaleConnection>? _tcpConnections;
+  TailscaleListener? _speedTestListener;
+  StreamSubscription<TailscaleConnection>? _speedTestConnections;
   TailscaleDatagramBinding? _udpBinding;
   StreamSubscription<TailscaleDatagram>? _udpDatagrams;
 
@@ -194,6 +238,12 @@ final class DemoCore {
     _tcpListener = tcpListener;
     _tcpConnections = tcpListener.connections.listen(_handleTcpConnection);
 
+    final speedTestListener = await _tsnet.tcp.bind(port: config.speedTestPort);
+    _speedTestListener = speedTestListener;
+    _speedTestConnections = speedTestListener.connections.listen(
+      _handleSpeedTestConnection,
+    );
+
     final udpBinding = await _tsnet.udp.bind(
       address: localIp,
       port: config.udpPort,
@@ -206,6 +256,7 @@ final class DemoCore {
       httpTailnetPort: config.httpTailnetPort,
       tcpPort: config.tcpPort,
       udpPort: config.udpPort,
+      speedTestPort: config.speedTestPort,
     );
   }
 
@@ -215,10 +266,16 @@ final class DemoCore {
     if (httpRequests != null) futures.add(httpRequests.cancel());
     final tcpConnections = _tcpConnections;
     if (tcpConnections != null) futures.add(tcpConnections.cancel());
+    final speedTestConnections = _speedTestConnections;
+    if (speedTestConnections != null) {
+      futures.add(speedTestConnections.cancel());
+    }
     final udpDatagrams = _udpDatagrams;
     if (udpDatagrams != null) futures.add(udpDatagrams.cancel());
     final tcpListener = _tcpListener;
     if (tcpListener != null) futures.add(tcpListener.close());
+    final speedTestListener = _speedTestListener;
+    if (speedTestListener != null) futures.add(speedTestListener.close());
     final udpBinding = _udpBinding;
     if (udpBinding != null) futures.add(udpBinding.close());
     final httpServer = _httpServer;
@@ -229,6 +286,8 @@ final class DemoCore {
     _httpRequests = null;
     _tcpListener = null;
     _tcpConnections = null;
+    _speedTestListener = null;
+    _speedTestConnections = null;
     _udpBinding = null;
     _udpDatagrams = null;
   }
@@ -243,20 +302,15 @@ final class DemoCore {
     DemoServiceConfig config = const DemoServiceConfig(),
     Duration timeout = const Duration(seconds: 15),
   }) async {
-    // Probes are sequential. Parallelizing all six fd-backed probes hit the
+    // Probes are sequential. Parallelizing the fd-backed probes hit the
     // per-fd-isolate scaling ceiling described in doc/rfc-shared-fd-reactor.md
     // — measured ~5.2s per probe vs ~50ms sequential. Revisit once the shared
     // POSIX fd reactor lands.
     final results = <DemoProbeResult>[];
-    results.add(
-      await _runProbe(DemoProbeKind.ping, () async {
-        final result = await _tsnet.diag.ping(nodeIp, timeout: timeout);
-        return 'latency ${result.latency.inMilliseconds}ms via ${result.path.name}';
-      }),
-    );
+    results.add(await _probePing(nodeIp, timeout));
     results.add(
       await _runProbe(DemoProbeKind.whois, () async {
-        final identity = await _tsnet.whois(nodeIp);
+        final identity = await _tsnet.whois(nodeIp).timeout(timeout);
         if (identity == null) throw StateError('node identity not found');
         return identity.hostName;
       }),
@@ -274,37 +328,13 @@ final class DemoCore {
     results.add(
       await _runProbe(DemoProbeKind.httpPost, () async {
         final payload = _payload('http');
-        final uri = Uri.parse('http://$nodeIp:${config.httpTailnetPort}/echo');
-        final response = await _tsnet.http.client
-            .post(uri, body: payload)
-            .timeout(timeout);
-        if (response.body != 'echo: $payload') {
-          throw StateError('unexpected body ${response.body}');
-        }
-        return 'echoed ${payload.length} bytes';
+        return _probeHttpEcho(nodeIp, config.httpTailnetPort, payload, timeout);
       }),
     );
     results.add(
       await _runProbe(DemoProbeKind.tcpEcho, () async {
         final payload = utf8.encode(_payload('tcp'));
-        final conn = await _tsnet.tcp
-            .dial(nodeIp, config.tcpPort, timeout: timeout)
-            .timeout(timeout);
-        try {
-          await conn.output.write(payload);
-          await conn.output.close();
-          final received = await _readBytes(
-            conn.input,
-            payload.length,
-            timeout,
-          );
-          if (!_listEquals(received, payload)) {
-            throw StateError('TCP echo mismatch');
-          }
-          return 'echoed ${payload.length} bytes';
-        } finally {
-          await conn.close();
-        }
+        return _probeTcpEcho(nodeIp, config.tcpPort, payload, timeout);
       }),
     );
     results.add(
@@ -342,6 +372,103 @@ final class DemoCore {
       nodeIp: nodeIp,
       results: List<DemoProbeResult>.unmodifiable(results),
     );
+  }
+
+  Future<DemoProbeResult> pingNode(
+    String nodeIp, {
+    Duration timeout = const Duration(seconds: 15),
+  }) => _probePing(nodeIp, timeout);
+
+  Future<DemoSpeedTestResult> profileNode(
+    String nodeIp, {
+    required SpeedTestDirection direction,
+    SpeedTestConfig config = canonicalSpeedTestConfig,
+    Duration timeout = const Duration(seconds: 45),
+  }) async {
+    final pathBefore = await pingNode(nodeIp, timeout: timeout);
+    final connection = await _tsnet.tcp
+        .dial(nodeIp, profileSpeedTestPort, timeout: timeout)
+        .timeout(timeout);
+    final transfer = await runSpeedTestClient(
+      SpeedTestConnection(
+        input: connection.input,
+        write: connection.output.write,
+        close: connection.close,
+      ),
+      direction: direction,
+      config: config,
+      timeout: timeout,
+    );
+    final pathAfter = await pingNode(nodeIp, timeout: timeout);
+    return DemoSpeedTestResult(
+      transfer: transfer,
+      pathBefore: pathBefore,
+      pathAfter: pathAfter,
+    );
+  }
+
+  Future<DemoProbeResult> _probePing(String nodeIp, Duration timeout) async {
+    final sw = Stopwatch()..start();
+    try {
+      final result = await _tsnet.diag.ping(nodeIp, timeout: timeout);
+      return DemoProbeResult(
+        kind: DemoProbeKind.ping,
+        ok: true,
+        duration: sw.elapsed,
+        message:
+            'latency ${result.latency.inMilliseconds}ms '
+            'via ${result.path.name}',
+        networkLatency: result.latency,
+        networkPath: result.path.name,
+      );
+    } catch (error) {
+      return DemoProbeResult(
+        kind: DemoProbeKind.ping,
+        ok: false,
+        duration: sw.elapsed,
+        message: error.toString(),
+      );
+    }
+  }
+
+  Future<String> _probeHttpEcho(
+    String nodeIp,
+    int port,
+    String payload,
+    Duration timeout,
+  ) async {
+    final uri = Uri.parse('http://$nodeIp:$port/echo');
+    final response = await _tsnet.http.client
+        .post(uri, body: payload)
+        .timeout(timeout);
+    if (response.body != 'echo: $payload') {
+      throw StateError(
+        'HTTP echo mismatch (received ${response.body.length} bytes)',
+      );
+    }
+    return 'echoed ${payload.length} bytes';
+  }
+
+  Future<String> _probeTcpEcho(
+    String nodeIp,
+    int port,
+    List<int> payload,
+    Duration timeout,
+  ) async {
+    final conn = await _tsnet.tcp
+        .dial(nodeIp, port, timeout: timeout)
+        .timeout(timeout);
+    try {
+      await conn.output.write(payload);
+      await conn.output.close();
+      final received = await _readBytes(conn.input, payload.length, timeout);
+      if (!_listEquals(received, payload)) {
+        throw StateError('TCP echo mismatch');
+      }
+      return 'echoed ${payload.length} bytes';
+    } finally {
+      await conn.close();
+    }
   }
 
   Future<DemoProbeResult> _runProbe(
@@ -387,6 +514,18 @@ final class DemoCore {
       conn.output
           .writeAll(conn.input, close: true)
           .catchError((_) => conn.abort()),
+    );
+  }
+
+  void _handleSpeedTestConnection(TailscaleConnection connection) {
+    unawaited(
+      serveSpeedTestConnection(
+        SpeedTestConnection(
+          input: connection.input,
+          write: connection.output.write,
+          close: connection.close,
+        ),
+      ).then<void>((_) {}, onError: (_) {}),
     );
   }
 

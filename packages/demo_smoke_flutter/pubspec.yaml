@@ -9,6 +9,7 @@ environment:
 dependencies:
   demo_core:
     path: ../demo_core
+  ffi: ^2.1.0
   flutter:
     sdk: flutter
   path: ^1.9.0
@@ -21,3 +22,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+hooks:
+  user_defines:
+    tailscale:
+      profile_diagnostic: true

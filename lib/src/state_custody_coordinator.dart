@@ -32,14 +32,11 @@ typedef NativeResponseFree = void Function(ffi.Pointer<Utf8> pointer);
 @internal
 final class StateCustodyCoordinator {
   StateCustodyCoordinator({
-    CustodyTokenCall markActive = markNativeCustodyActive,
-    CustodyTokenCall markWriteAttempted = markNativeCustodyWriteAttempted,
-    CustodyTokenCall complete = completeNativePersistentCustody,
-    FinishCustodyCall finish = finishNativeCustody,
-  }) : _markActive = markActive,
-       _markWriteAttempted = markWriteAttempted,
-       _complete = complete,
-       _finish = finish;
+    this._markActive = markNativeCustodyActive,
+    this._markWriteAttempted = markNativeCustodyWriteAttempted,
+    this._complete = completeNativePersistentCustody,
+    this._finish = finishNativeCustody,
+  });
 
   final CustodyTokenCall _markActive;
   final CustodyTokenCall _markWriteAttempted;
@@ -219,8 +216,8 @@ final class StateCustodySession {
   StateCustodySession._({
     required this.token,
     required this.binding,
-    required CustodyTokenCall markWriteAttempted,
-  }) : _markWriteAttempted = markWriteAttempted;
+    required this._markWriteAttempted,
+  });
 
   final int token;
   final KeybayStateCustodyBinding binding;

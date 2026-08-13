@@ -190,13 +190,11 @@ final class _Udp implements Udp {
 
 final class _FdTailscaleDatagramBinding implements TailscaleDatagramBinding {
   _FdTailscaleDatagramBinding({
-    required PosixFdTransport transport,
-    required int bindingId,
+    required this._transport,
+    required this._bindingId,
     required this.local,
-    UdpCloseFn? closeFn,
-  }) : _transport = transport,
-       _bindingId = bindingId,
-       _closeFn = closeFn {
+    this._closeFn,
+  }) {
     _datagrams = StreamController<TailscaleDatagram>(onCancel: close);
     _subscription = _transport.input.listen(
       _handleEnvelope,

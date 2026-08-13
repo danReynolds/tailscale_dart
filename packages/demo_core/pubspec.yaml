@@ -10,6 +10,8 @@ dependencies:
   http: ^1.2.0
   tailscale:
     path: ../..
+  tailscale_profile_harness:
+    path: ../../benchmark/profile_harness
 
 dev_dependencies:
   lints: ^5.0.0

@@ -2,6 +2,11 @@
 
 Canonical report: [`macos-arm64-vs-0.8.0.json`](macos-arm64-vs-0.8.0.json)
 
+Physical-device reports:
+
+- [`2026-08-13 Android arm64`](devices/2026-08-13-android-arm64.md) — Pixel 6a,
+  Android 16 (API 36), clean checkout, correctness and profile complete.
+
 - Measured source: `1bc8f511cd5e9a7cdbb090c61f1d05483543515f`
 - Published baseline: `tailscale 0.8.0`
 - Host: macOS arm64, Dart 3.12.2
@@ -31,3 +36,16 @@ small, repeatable upstream-conformance tradeoff rather than a data-plane issue.
 Process RSS was 6–7% higher at the recorded checkpoints, but remains advisory
 because the release baseline varied materially between runs. The raw report
 retains every RSS sample for future trend analysis.
+
+## Android physical-device profile
+
+All required join, discovery, WhoIs, HTTP, TCP, UDP, and restart checks passed.
+The initial diagnostic LocalAPI ping timed out while every required data path
+succeeded; the subsequent 20 sampled pings completed, so this remains a
+non-gating convergence observation.
+
+Median public-Dart throughput was 2.72 MiB/s upload and 2.57 MiB/s download.
+The one-run ordinary-LAN ceiling was only 3.52 MiB/s upload and 4.66 MiB/s
+download, while paired direct-tsnet results varied widely. That makes this a
+useful historical device/network baseline, not evidence that either bridge is
+intrinsically faster. The raw report retains the paired and interval samples.

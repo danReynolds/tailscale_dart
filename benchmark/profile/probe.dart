@@ -250,7 +250,15 @@ Future<void> _runPersistentEnroll(
     'value': status.ipv4,
   });
   _emitRss('rss.after_persistent_enroll');
-  await _measureRepeated('lifecycle.down.persistent', 1, tsnet.down);
+  // The hosted baseline and current checkout intentionally use different
+  // custody implementations. Keep custody-sensitive lifecycle timings as
+  // historical context, never as regression verdicts.
+  await _measureRepeated(
+    'lifecycle.down.persistent',
+    1,
+    tsnet.down,
+    advisoryOnly: true,
+  );
 }
 
 Future<void> _runPersistentRestart(
@@ -263,7 +271,7 @@ Future<void> _runPersistentRestart(
       () =>
           tsnet.up(hostname: options.hostname, controlUrl: options.controlUrl),
     );
-  });
+  }, advisoryOnly: true);
   final status = await tsnet.status();
   if (status.state != NodeState.running || status.ipv4 == null) {
     throw StateError('persistent restart did not reach running');
@@ -292,7 +300,12 @@ Future<void> _runPersistentRestart(
     },
   );
   _emitRss('rss.after_persistent_restart');
-  await _measureRepeated('lifecycle.logout.persistent', 1, tsnet.logout);
+  await _measureRepeated(
+    'lifecycle.logout.persistent',
+    1,
+    tsnet.logout,
+    advisoryOnly: true,
+  );
   _emitRss('rss.after_logout');
 }
 

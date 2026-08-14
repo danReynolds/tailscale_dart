@@ -18,9 +18,9 @@ const _danger = Color(0xffff4d6d);
 const _muted = Color(0xff7aa99b);
 
 const _defaultDemoHostname = String.fromEnvironment('DUNE_DEMO_HOSTNAME');
-const _defaultDemoAuthKey = String.fromEnvironment('DUNE_DEMO_AUTH_KEY');
 const _defaultDemoControlUrl = String.fromEnvironment('DUNE_DEMO_CONTROL_URL');
 const _defaultDemoNodeIp = String.fromEnvironment('DUNE_DEMO_NODE_IP');
+const demoTailscaleAppId = 'dev.tailscale.dart.demo.flutter';
 
 void main() {
   runApp(const DemoApp());
@@ -146,7 +146,9 @@ class _DemoHomePageState extends State<DemoHomePage> {
         ? 'demo-${Platform.operatingSystem}'
         : _defaultDemoHostname,
   );
-  final _authKey = TextEditingController(text: _defaultDemoAuthKey);
+  // Auth keys are runtime input. A dart-define would embed the credential in
+  // the application binary and is therefore deliberately unsupported.
+  final _authKey = TextEditingController();
   final _adminApiKey = TextEditingController();
   final _tailnetId = TextEditingController(text: '-');
   final _controlUrl = TextEditingController(text: _defaultDemoControlUrl);
@@ -236,7 +238,7 @@ class _DemoHomePageState extends State<DemoHomePage> {
     }
     final status = await _demo.up(
       stateDir: stateDir,
-      appId: 'dev.tailscale.dart.demo.flutter',
+      appId: demoTailscaleAppId,
       hostname: _hostname.text.trim(),
       authKey: authKey,
       controlUrl: controlUrl,
@@ -273,7 +275,7 @@ class _DemoHomePageState extends State<DemoHomePage> {
     setState(() => _services = null);
     final status = await _demo.upAsAdmin(
       stateDir: stateDir,
-      appId: 'dev.tailscale.dart.demo.flutter',
+      appId: demoTailscaleAppId,
       hostname: _hostname.text.trim(),
       apiKey: _adminApiKey.text.trim(),
       tailnetId: _tailnetId.text.trim(),

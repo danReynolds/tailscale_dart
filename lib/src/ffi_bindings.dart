@@ -38,15 +38,22 @@ external ffi.Pointer<Utf8> duneStart(
 @ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'DuneMarkUpSettled')
 external void duneMarkUpSettled(int runtimeToken);
 
-/// Freezes the process-wide state-root, Keybay namespace, and log level.
+/// Freezes the process-wide state-root, Keybay namespace, local log level, and
+/// upstream diagnostic-upload choice.
 /// Returns `{"stateDir": "<canonical-native-path>"}` on success.
 @ffi.Native<
-  ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, ffi.Int32)
+  ffi.Pointer<Utf8> Function(
+    ffi.Pointer<Utf8>,
+    ffi.Pointer<Utf8>,
+    ffi.Int32,
+    ffi.Int32,
+  )
 >(symbol: 'DuneConfigure')
 external ffi.Pointer<Utf8> duneConfigure(
   ffi.Pointer<Utf8> stateRoot,
   ffi.Pointer<Utf8> keybayNamespace,
   int logLevel,
+  int noLogsNoSupport,
 );
 
 /// Supplies the platform's writable temporary directory as the ephemeral

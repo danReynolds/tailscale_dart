@@ -858,13 +858,15 @@ Required receipts are:
   reverify after operations that recreate/move the directory because Apple
   documents that common file operations can reset the value. Apply the same
   rule to the chosen ephemeral scratch parent.
-- **Android:** place the root under `Context.noBackupFilesDir`, or add explicit
-  `dataExtractionRules` and legacy `fullBackupContent` exclusions for the exact
-  relative subtree across cloud backup and device-to-device/cross-platform
-  transfer sections that the app enables. The example instrumentation receipt
-  asserts the resolved directory choice or packaged manifest rules and
-  exercises configuration on API 31+ and the API 30-and-lower legacy family.
-  Ephemeral scratch uses a cache/no-backup location.
+- **Android:** place the state root under `Context.noBackupFilesDir`, or add
+  explicit `dataExtractionRules` and legacy `fullBackupContent` exclusions for
+  its exact relative subtree across cloud backup and device-to-device transfer.
+  The Keybay container at `files/<appId>.tailscale/` needs the same exclusions
+  unless its Android backend moves to `Context.noBackupFilesDir`; excluding the
+  state root alone is insufficient. The example instrumentation receipt asserts
+  both resolved storage domains or their packaged manifest rules and exercises
+  configuration on API 31+ and the API 30-and-lower legacy family. Ephemeral
+  scratch uses a cache/no-backup location.
 - **Linux/headless/custom hosts:** there is no universal API. The operator must
   document the exact exclusion in the real backup tool. CI can verify only
   resolved paths, modes, and the complete file inventory, so release docs retain

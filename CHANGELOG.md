@@ -18,6 +18,8 @@ credential custody, and Serve/Funnel use upstream's shared publication model.
   auto-update. Hostname remains an `up()` option; the other values are read-only.
 - Removed the unimplemented Taildrop and Profiles stubs until they can provide
   real upstream-compatible behavior.
+- Removed the ineffective `TailscaleLogLevel.error` value. Local native logging
+  is now either `silent` or `info`.
 - The minimum Dart SDK is now 3.12.
 
 **Security and lifecycle:**
@@ -33,6 +35,10 @@ credential custody, and Serve/Funnel use upstream's shared publication model.
 - Persistent Android nodes require API 31+, and persistent Linux nodes require
   an unlocked desktop Secret Service. Explicit ephemeral mode remains available
   where persistent custody is unavailable.
+- `TailscaleLogLevel.silent` now suppresses both upstream native log callbacks,
+  including authorization URLs. The new immutable `noLogsNoSupport` init option
+  disables upstream diagnostic uploads while leaving their conformant default
+  enabled.
 - Completes the encrypted StateStore work tracked by
   [#94](https://github.com/danReynolds/tailscale_dart/issues/94).
 

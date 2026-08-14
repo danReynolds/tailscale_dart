@@ -142,7 +142,13 @@ void _workerEntrypoint(SendPort sendPort) {
               );
             } finally {
               if (hostnamePtr != null) calloc.free(hostnamePtr);
-              if (authKeyPtr != null) calloc.free(authKeyPtr);
+              if (authKeyPtr != null) {
+                final bytes = authKeyPtr.cast<ffi.Uint8>().asTypedList(
+                  authKeyPtr.length + 1,
+                );
+                bytes.fillRange(0, bytes.length, 0);
+                calloc.free(authKeyPtr);
+              }
               if (controlUrlPtr != null) calloc.free(controlUrlPtr);
               if (hostNetworkSnapshotPtr != null) {
                 calloc.free(hostNetworkSnapshotPtr);

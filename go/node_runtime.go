@@ -16,6 +16,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/logtail"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/mak"
 )
@@ -311,6 +312,7 @@ type runtimeController struct {
 	stateRootInfo   os.FileInfo
 	keybayNamespace string
 	logLevel        int32
+	noLogsNoSupport bool
 	scratchParent   string
 }
 
@@ -392,7 +394,9 @@ func configuredEphemeralScratchParent() string {
 // native path/inode identity, so lexical and symlink aliases cannot create two
 // owners for the same state root. keybayNamespace is compared exactly so Dart
 // isolates cannot bind one native root to different secure-storage containers.
-func Configure(stateRoot, keybayNamespace string, logLevel int32) (string, error) {
+// The logging-upload choice is likewise process-wide because upstream's
+// no-logs switch is deliberately irreversible for the process lifetime.
+func Configure(stateRoot, keybayNamespace string, logLevel, noLogsNoSupport int32) (string, error) {
 	runtimes.configureMu.Lock()
 	defer runtimes.configureMu.Unlock()
 
@@ -402,9 +406,13 @@ func Configure(stateRoot, keybayNamespace string, logLevel int32) (string, error
 	if strings.TrimSpace(keybayNamespace) == "" {
 		return "", fmt.Errorf("Keybay namespace is empty")
 	}
-	if logLevel < 0 || logLevel > 2 {
+	if logLevel < 0 || logLevel > 1 {
 		return "", fmt.Errorf("invalid log level %d", logLevel)
 	}
+	if noLogsNoSupport != 0 && noLogsNoSupport != 1 {
+		return "", fmt.Errorf("invalid no-logs-no-support value %d", noLogsNoSupport)
+	}
+	disableLogUploads := noLogsNoSupport == 1 || envknob.NoLogsNoSupport()
 
 	abs, err := filepath.Abs(stateRoot)
 	if err != nil {
@@ -418,10 +426,11 @@ func Configure(stateRoot, keybayNamespace string, logLevel int32) (string, error
 	configuredRootInfo := runtimes.stateRootInfo
 	configuredKeybayNamespace := runtimes.keybayNamespace
 	configuredLogLevel := runtimes.logLevel
+	configuredNoLogsNoSupport := runtimes.noLogsNoSupport
 	runtimes.mu.Unlock()
 	if alreadyConfigured {
-		if configuredLogLevel != logLevel || configuredKeybayNamespace != keybayNamespace {
-			return "", fmt.Errorf("%w: Tailscale.init already owns a different state root, Keybay namespace, or log level", ErrConfigurationMismatch)
+		if configuredLogLevel != logLevel || configuredNoLogsNoSupport != disableLogUploads || configuredKeybayNamespace != keybayNamespace {
+			return "", fmt.Errorf("%w: Tailscale.init already owns a different state root, Keybay namespace, or logging policy", ErrConfigurationMismatch)
 		}
 		resolved, err := filepath.EvalSymlinks(abs)
 		if err != nil {
@@ -436,7 +445,7 @@ func Configure(stateRoot, keybayNamespace string, logLevel int32) (string, error
 			return "", fmt.Errorf("%w: configured state root does not match: %v", ErrConfigurationMismatch, err)
 		}
 		if configuredRootInfo == nil || !os.SameFile(configuredRootInfo, info) {
-			return "", fmt.Errorf("%w: Tailscale.init already owns a different state root, Keybay namespace, or log level", ErrConfigurationMismatch)
+			return "", fmt.Errorf("%w: Tailscale.init already owns a different state root, Keybay namespace, or logging policy", ErrConfigurationMismatch)
 		}
 		if err := ensurePrivateDirectory(resolved); err != nil {
 			return "", fmt.Errorf("secure state directory: %w", err)
@@ -472,11 +481,20 @@ func Configure(stateRoot, keybayNamespace string, logLevel int32) (string, error
 	runtimes.mu.Lock()
 	defer runtimes.mu.Unlock()
 	setRawDiscoCompatibility()
+	if disableLogUploads {
+		// Match upstream's own DisableLogTail handling: the environment knob
+		// advertises the support/telemetry choice to the control client, while
+		// the process kill switch prevents tsnet's logger from buffering or
+		// uploading entries. Both must happen before the first Server.Start.
+		logtail.Disable()
+		envknob.SetNoLogsNoSupport()
+	}
 	runtimes.configured = true
 	runtimes.stateRoot = resolved
 	runtimes.stateRootInfo = info
 	runtimes.keybayNamespace = keybayNamespace
 	runtimes.logLevel = logLevel
+	runtimes.noLogsNoSupport = disableLogUploads
 	atomic.StoreInt32(&LogLevel, logLevel)
 	return resolved, nil
 }

@@ -110,6 +110,13 @@ dedicated Keybay namespace; keep the same `appId` and `stateDir` for the life
 of the installation. `init` validates and freezes that binding but does not
 access secure storage until a persistent runtime needs custody.
 
+Embedded tsnet uploads diagnostic logs to Tailscale by default, including when
+the node uses Headscale. This matches upstream Tailscale behavior and is
+separate from local stderr verbosity. Pass `noLogsNoSupport: true` to `init`
+to disable those uploads before the first runtime starts; doing so also opts
+out of support that depends on the diagnostics. `TailscaleLogLevel.silent`
+controls only local native stderr output.
+
 Persistent `up()` may omit the auth key on a fresh installation; upstream then
 returns `needsLogin` with an authorization URL for interactive enrollment.
 Supplying a key is the non-interactive path. Subsequent launches can omit it
@@ -127,9 +134,12 @@ Only the logical Tailscale StateStore is encrypted by this mechanism. The
 package-owned `tailscale/` subtree can also contain upstream logs, log
 configuration, and TLS/certificate sidecars outside that encryption boundary.
 Keep those residuals owner-only and the entire `stateDir` private and excluded
-from backups. The persistent demo shows a fail-closed Apple resource-value
-readback and Android cloud/device-transfer exclusion rules for its exact state
-root; production embedders own the equivalent host policy.
+from backups. On Android, Keybay's separate `files/<appId>.tailscale/`
+directory must also be excluded from cloud backup and device transfer. A Dart
+package cannot rewrite its host application's backup manifest, so production
+embedders own both exclusions; the persistent demo provides the integration
+shape. Apple hosts use a fail-closed resource-value readback for the selected
+state root while device-bound Keychain custody does not migrate.
 
 Calling `logout()` is remote-first: confirmed control-plane success removes
 the current logical profile, but the StateStore container and DEK remain.

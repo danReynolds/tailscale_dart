@@ -264,7 +264,7 @@ Future<TailscaleStatus> _upAndWaitRunning(
     authKey: authKey,
     ephemeral: ephemeral,
     controlUrl: controlUrl,
-    logLevel: verbose ? TailscaleLogLevel.info : TailscaleLogLevel.error,
+    logLevel: verbose ? TailscaleLogLevel.info : TailscaleLogLevel.silent,
   );
   if (status.isRunning) return status;
   await running.timeout(_defaultReadyTimeout);

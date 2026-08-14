@@ -83,4 +83,39 @@ void main() {
       throwsStateError,
     );
   });
+
+  test('Android excludes runtime and Keybay state from every backup path', () {
+    const statePath = 'tailscale_demo/';
+    const keybayPath = '$demoTailscaleAppId.tailscale/';
+    final manifest = File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsStringSync();
+    final legacyRules = File(
+      'android/app/src/main/res/xml/backup_rules.xml',
+    ).readAsStringSync();
+    final modernRules = File(
+      'android/app/src/main/res/xml/data_extraction_rules.xml',
+    ).readAsStringSync();
+
+    expect(manifest, contains('android:allowBackup="false"'));
+    expect(
+      manifest,
+      contains('android:dataExtractionRules="@xml/data_extraction_rules"'),
+    );
+    expect(manifest, contains('android:fullBackupContent="@xml/backup_rules"'));
+    for (final path in [statePath, keybayPath]) {
+      final exclusion = '<exclude domain="file" path="$path" />';
+      expect(legacyRules, contains(exclusion));
+      for (final section in ['cloud-backup', 'device-transfer']) {
+        final sectionBody = RegExp(
+          '<$section>([\\s\\S]*?)</$section>',
+        ).firstMatch(modernRules)?.group(1);
+        expect(
+          sectionBody,
+          contains(exclusion),
+          reason: '$section must exclude $path',
+        );
+      }
+    }
+  });
 }

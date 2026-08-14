@@ -151,7 +151,7 @@ class _SmokeHomeState extends State<SmokeHome> {
         authKey: config.authKey,
         ephemeral: true,
         controlUrl: Uri.parse(config.controlUrl),
-        logLevel: TailscaleLogLevel.error,
+        logLevel: TailscaleLogLevel.silent,
       );
       if (!status.isRunning) {
         await running.timeout(_defaultTimeout);
@@ -275,7 +275,7 @@ class _SmokeHomeState extends State<SmokeHome> {
         authKey: config.authKey,
         ephemeral: true,
         controlUrl: Uri.parse(config.controlUrl),
-        logLevel: TailscaleLogLevel.error,
+        logLevel: TailscaleLogLevel.silent,
       );
       if (!restartStatus.isRunning) {
         await restartRunning.timeout(_defaultTimeout);
@@ -373,7 +373,7 @@ class _SmokeHomeState extends State<SmokeHome> {
       authKey: enrolling ? config.authKey : null,
       ephemeral: false,
       controlUrl: Uri.parse(config.controlUrl),
-      logLevel: TailscaleLogLevel.error,
+      logLevel: TailscaleLogLevel.silent,
     );
     if (!status.isRunning) await running.timeout(_defaultTimeout);
 

@@ -456,6 +456,10 @@ func startRuntimeWithDependenciesForTokenAndDeadline(requestToken uint64, hostna
 			return false, 0, fmt.Errorf("prepare runtime dir: %w", err)
 		}
 	}
+	candidate.runtimeDir = runtimeDir
+	if err := secureRuntimeSidecarTree(runtimeDir); err != nil {
+		return false, 0, fmt.Errorf("validate runtime sidecars before start: %w", err)
+	}
 	logDir := runtimeDir
 
 	if !ephemeral {
@@ -498,6 +502,9 @@ func startRuntimeWithDependenciesForTokenAndDeadline(requestToken uint64, hostna
 	newSrv.AuthKey = ""
 	if startErr != nil {
 		return false, 0, fmt.Errorf("failed to start tsnet: %w", startErr)
+	}
+	if err := secureRuntimeSidecarTree(runtimeDir); err != nil {
+		return false, 0, fmt.Errorf("validate runtime sidecars after start: %w", err)
 	}
 	if !ephemeral {
 		// Server.Start is the proof boundary for the immutable tuple used by

@@ -137,6 +137,26 @@ func TestInspectPersistentStateLayoutRejectsUnsafeRuntimeSidecar(t *testing.T) {
 	}
 }
 
+func TestInspectPersistentStateLayoutRejectsNestedRuntimeSymlink(t *testing.T) {
+	root := t.TempDir()
+	encryptedLayoutForTest(t, root)
+	runtimeDir := filepath.Join(root, ownedStateSubdirectory, "tsnet")
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(runtimeDir, "tailscaled.log.conf")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := inspectPersistentStateLayout(root); !errors.Is(err, ErrUnexpectedStateResidue) {
+		t.Fatalf("error = %v, want ErrUnexpectedStateResidue", err)
+	}
+}
+
 func TestInspectPersistentStateLayoutRejectsMalformedEnvelopeBeforeCustody(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, ownedStateSubdirectory)

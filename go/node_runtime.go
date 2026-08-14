@@ -77,6 +77,7 @@ type nodeRuntime struct {
 	storeCloser io.Closer
 	stateLease  *stateLease
 	scratch     *ephemeralStateScratch
+	runtimeDir  string
 	closeServer func(*tsnet.Server) error
 
 	preparationDone     chan struct{}

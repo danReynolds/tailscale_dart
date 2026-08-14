@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -140,11 +141,15 @@ func TlsListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*Tcp
 	if gate.runtime.localClient == nil {
 		return nil, errors.New("tls listen local client is unavailable")
 	}
+	getCertificate := secureRuntimeCertificateGetter(
+		gate.runtime.runtimeDir,
+		gate.runtime.localClient.GetCertificate,
+	)
 
 	addr := net.JoinHostPort(tailnetHost, strconv.Itoa(tailnetPort))
 	ln, err := listenTLSOnReadyServer(
 		gate.s,
-		gate.runtime.localClient.GetCertificate,
+		getCertificate,
 		"tcp",
 		addr,
 	)
@@ -153,6 +158,27 @@ func TlsListenFd(runtimeToken uint64, tailnetPort int, tailnetHost string) (*Tcp
 	}
 
 	return registerTcpFdListener(gate, ln, tailnetHost)
+}
+
+func secureRuntimeCertificateGetter(
+	runtimeDir string,
+	getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error),
+) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	var validationOnce sync.Once
+	var validationErr error
+	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		certificate, err := getCertificate(hello)
+		if err != nil {
+			return nil, err
+		}
+		validationOnce.Do(func() {
+			validationErr = secureRuntimeSidecarTree(runtimeDir)
+		})
+		if validationErr != nil {
+			return nil, fmt.Errorf("validate TLS sidecars after certificate retrieval: %w", validationErr)
+		}
+		return certificate, nil
+	}
 }
 
 func validateTLSListenPlatform(goos string) error {

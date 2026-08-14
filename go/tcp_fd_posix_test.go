@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -147,5 +149,103 @@ func TestListenTLSOnReadyServerWrapsRawListenerWithoutUp(t *testing.T) {
 	}
 	if got == raw {
 		t.Fatal("TLS listen returned the raw listener without a TLS wrapper")
+	}
+}
+
+func TestSecureRuntimeCertificateGetterValidatesCreatedSidecars(t *testing.T) {
+	runtimeDir := filepath.Join(t.TempDir(), "tsnet")
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	getter := secureRuntimeCertificateGetter(
+		runtimeDir,
+		func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			certDir := filepath.Join(runtimeDir, "certs")
+			if err := os.Mkdir(certDir, 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(certDir, "node.key"), []byte("secret"), 0o644); err != nil {
+				return nil, err
+			}
+			return &tls.Certificate{}, nil
+		},
+	)
+
+	if _, err := getter(nil); err != nil {
+		t.Fatalf("secure certificate getter: %v", err)
+	}
+	for _, path := range []string{filepath.Join(runtimeDir, "certs"), filepath.Join(runtimeDir, "certs", "node.key")} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := os.FileMode(0o600)
+		if info.IsDir() {
+			want = 0o700
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Fatalf("%q permissions = %04o, want %04o", path, got, want)
+		}
+	}
+}
+
+func TestSecureRuntimeCertificateGetterWaitsForSuccessfulRetrieval(t *testing.T) {
+	runtimeDir := filepath.Join(t.TempDir(), "tsnet")
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	retrievalErr := errors.New("certificate unavailable")
+	calls := 0
+	getter := secureRuntimeCertificateGetter(
+		runtimeDir,
+		func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			calls++
+			if calls == 1 {
+				return nil, retrievalErr
+			}
+			if err := os.WriteFile(filepath.Join(runtimeDir, "node.key"), []byte("secret"), 0o644); err != nil {
+				return nil, err
+			}
+			return &tls.Certificate{}, nil
+		},
+	)
+
+	if _, err := getter(nil); !errors.Is(err, retrievalErr) {
+		t.Fatalf("first retrieval error = %v, want %v", err, retrievalErr)
+	}
+	if _, err := getter(nil); err != nil {
+		t.Fatalf("second retrieval: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(runtimeDir, "node.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file permissions = %04o, want 0600", got)
+	}
+}
+
+func TestSecureRuntimeCertificateGetterRejectsCreatedSymlink(t *testing.T) {
+	runtimeDir := filepath.Join(t.TempDir(), "tsnet")
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	getter := secureRuntimeCertificateGetter(
+		runtimeDir,
+		func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if err := os.Symlink(target, filepath.Join(runtimeDir, "node.key")); err != nil {
+				return nil, err
+			}
+			return &tls.Certificate{}, nil
+		},
+	)
+
+	certificate, err := getter(nil)
+	if certificate != nil || !errors.Is(err, ErrUnexpectedStateResidue) {
+		t.Fatalf("certificate = %v, error = %v; want nil and ErrUnexpectedStateResidue", certificate, err)
 	}
 }

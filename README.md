@@ -133,8 +133,10 @@ closed; legacy identities are not migrated.
 Only the logical Tailscale StateStore is encrypted by this mechanism. The
 package-owned `tailscale/` subtree can also contain upstream logs, log
 configuration, and TLS/certificate sidecars outside that encryption boundary.
-Keep those residuals owner-only and the entire `stateDir` private and excluded
-from backups. On Android, Keybay's separate `files/<appId>.tailscale/`
+The native runtime rejects symlinks and unexpected file types in that tree and
+enforces current-user ownership with private directory/file modes before and
+after startup. Keep the entire `stateDir` private and excluded from backups. On
+Android, Keybay's separate `files/<appId>.tailscale/`
 directory must also be excluded from cloud backup and device transfer. A Dart
 package cannot rewrite its host application's backup manifest, so production
 embedders own both exclusions; the persistent demo provides the integration

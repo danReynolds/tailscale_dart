@@ -383,11 +383,16 @@ sensitive files must have no group/other bits (`0600` target), and package-owned
 directories must have no group/other access (`0700` target). Startup rejects
 symlinks, unexpected file types, ownership mismatches where the platform can
 inspect ownership, any existing broader mode that it cannot tighten and verify,
-and any chmod/stat failure that prevents verification. A TLS/publication path
-that creates a sensitive upstream sidecar performs the same post-create check
-and closes/fails if it cannot obtain owner-only permissions. A platform-specific
-exception requires an explicit threat-model amendment and device receipt; it is
-not silently downgraded to a log message.
+and any chmod/stat failure that prevents verification. It validates the complete
+runtime tree immediately before and after `Server.Start`; the package-controlled
+desktop TLS path repeats the check after the first successful certificate
+retrieval for each listener and fails that handshake if it cannot obtain
+owner-only permissions. Upstream's asynchronous Serve/Funnel certificate writer
+has no package interception hook; startup still rejects planted entries, and
+upstream uses atomic private-key writes beneath the already-validated directory.
+Active same-UID mutation after validation remains outside this ADR's threat model. A
+platform-specific exception requires an explicit threat-model amendment and
+device receipt; it is not silently downgraded to a log message.
 
 Legacy or conflicting artifacts include at least:
 

@@ -134,6 +134,76 @@ func TestRuntimeConstruction_StartFailureNeverClosesServer(t *testing.T) {
 	}
 }
 
+func TestRuntimeConstruction_RejectsSidecarsBeforeAndAfterStart(t *testing.T) {
+	t.Run("before start", func(t *testing.T) {
+		stateDir := configureFreshStateRootForTest(t)
+		runtimeDir := filepath.Join(stateDir, "tsnet")
+		if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(runtimeDir, "tailscaled.log.conf")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+
+		var startCalls atomic.Int32
+		deps := constructionDependencies(
+			new(recordingStateStore),
+			func(*tsnet.Server) error {
+				startCalls.Add(1)
+				return nil
+			},
+			func(*tsnet.Server) (*local.Client, error) {
+				t.Fatal("LocalClient called after sidecar rejection")
+				return nil, nil
+			},
+			func(*tsnet.Server) error { return nil },
+		)
+
+		_, err := startRuntimeWithDependencies("node", "", "https://control/", stateDir, false, "", deps)
+		if !errors.Is(err, ErrUnexpectedStateResidue) {
+			t.Fatalf("start error = %v, want ErrUnexpectedStateResidue", err)
+		}
+		if got := startCalls.Load(); got != 0 {
+			t.Fatalf("Server.Start calls = %d, want 0", got)
+		}
+	})
+
+	t.Run("after start", func(t *testing.T) {
+		stateDir := configureFreshStateRootForTest(t)
+		target := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var closeCalls atomic.Int32
+		deps := constructionDependencies(
+			new(recordingStateStore),
+			func(server *tsnet.Server) error {
+				return os.Symlink(target, filepath.Join(server.Dir, "tailscaled.log.conf"))
+			},
+			func(*tsnet.Server) (*local.Client, error) {
+				t.Fatal("LocalClient called after sidecar rejection")
+				return nil, nil
+			},
+			func(*tsnet.Server) error {
+				closeCalls.Add(1)
+				return nil
+			},
+		)
+
+		_, err := startRuntimeWithDependencies("node", "", "https://control/", stateDir, false, "", deps)
+		if !errors.Is(err, ErrUnexpectedStateResidue) {
+			t.Fatalf("start error = %v, want ErrUnexpectedStateResidue", err)
+		}
+		if got := closeCalls.Load(); got != 1 {
+			t.Fatalf("Server.Close calls = %d, want 1", got)
+		}
+	})
+}
+
 func TestRuntimeConstruction_MetadataRequiresSuccessfulServerStart(t *testing.T) {
 	stateDir := configureFreshStateRootForTest(t)
 	oldConfig := runtimeConfig{hostname: "old-node", controlURL: "https://old.example/"}

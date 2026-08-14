@@ -39,6 +39,10 @@ credential custody, and Serve/Funnel use upstream's shared publication model.
   including authorization URLs. The new immutable `noLogsNoSupport` init option
   disables upstream diagnostic uploads while leaving their conformant default
   enabled.
+- Runtime log/config/certificate trees now reject symlinks and unexpected file
+  types, verify current-user ownership, and enforce private modes before and
+  after tsnet startup. Each desktop TLS listener repeats the check after its
+  first successful upstream certificate retrieval.
 - Completes the encrypted StateStore work tracked by
   [#94](https://github.com/danReynolds/tailscale_dart/issues/94).
 

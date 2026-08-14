@@ -111,7 +111,7 @@ func inspectPersistentStateLayout(baseRoot string) (PersistentStateLayout, error
 	}
 	if hasDirectoryEntry(entries, "tsnet") {
 		tsnetDir := filepath.Join(stateDir, "tsnet")
-		if err := secureEncryptedStateDirectory(tsnetDir, false); err != nil {
+		if err := secureRuntimeSidecarTree(tsnetDir); err != nil {
 			return "", fmt.Errorf("%w: secure runtime sidecar directory: %v", ErrUnexpectedStateResidue, err)
 		}
 		if _, err := os.Lstat(filepath.Join(tsnetDir, legacyFileStoreFilename)); err == nil {

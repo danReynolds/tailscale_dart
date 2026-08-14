@@ -34,15 +34,14 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 | [`doc/`](https://github.com/danReynolds/tailscale_dart/tree/main/doc) | Status-labeled index of API docs, ADRs, RFCs, and current-architecture notes |
 | [`test/README.md`](https://github.com/danReynolds/tailscale_dart/blob/main/test/README.md) | Test tiers, Headscale E2E, and live Tailscale suites |
 
-> **Architecture work in progress.** The secure-state cutover, fail-safe
-> lifecycle, runtime-owned Serve/Funnel convergence, and R7 ownership moves are
-> implemented in the current source. The hosted Funnel-tailnet, replacement,
+> **Current qualification status.** The secure-state cutover, fail-safe
+> lifecycle, runtime-owned Serve/Funnel convergence, and R7-R9 ownership,
+> performance, and conformance work are complete. Hosted desktop Serve/Funnel
 > and macOS production-Keybay process-crash/restart receipts passed on
-> 2026-08-10. R8 retained the identity cache from measured evidence, R9's
-> conformance audit is complete, and non-device R6 inventory/backup integration
-> is present. Exact-main Android arm64 emulator and iOS simulator Headscale
-> smoke passed on 2026-08-11. Real-device custody, backup readback,
-> data-plane/publication, and final launch receipts remain.
+> 2026-08-10. Physical iOS and Android custody, process-death recovery, reset,
+> core data-plane, and profiling receipts passed on 2026-08-12/13. Mobile
+> `tls.bind` remains unsupported upstream, and mobile HTTPS Serve/Funnel support
+> remains explicitly qualified by the platform notes below.
 
 ## What you can build
 
@@ -196,8 +195,8 @@ Raw TCP | `tcp.dial`, `tcp.bind` | Supported | Explicit read/write halves and ha
 Raw UDP | `udp.bind` | Supported | Message-preserving datagrams with remote endpoint metadata.
 TLS listener | `tls.bind` | Desktop/server only | Requires MagicDNS and HTTPS. Upstream's certificate endpoint is disabled on iOS/Android, so mobile termination is explicitly unsupported; the package does not add a parallel certificate path.
 TLS discovery | `tls.domains` | Supported read-only API | Reads the runtime's advertised certificate domains directly; this does not provision a certificate or imply that `tls.bind` works on mobile.
-Serve | `serve.forward`, `serve.clear` | Desktop/server qualified | Tailnet publication through the runtime-owned ServeConfig manager. The R5 replacement/exact-handle and macOS persisted process-crash/restart receipts passed 2026-08-10; mobile HTTPS qualification remains pending.
-Funnel | `funnel.forward`, `funnel.clear` | Desktop/server qualified | The public-visibility mode of the same ServeConfig mapping used by Serve. Public ingress, tailnet reach, and the R5 swap receipt have passed hosted Tailscale; all mobile receipts remain pending.
+Serve | `serve.forward`, `serve.clear` | Desktop/server qualified | Tailnet publication through the runtime-owned ServeConfig manager. The R5 replacement/exact-handle and macOS persisted process-crash/restart receipts passed 2026-08-10. The iOS receipt proved replacement boundaries but not a complete HTTPS lifecycle; Android hosted publication was not run.
+Funnel | `funnel.forward`, `funnel.clear` | Desktop/server qualified | The public-visibility mode of the same ServeConfig mapping used by Serve. Public ingress, tailnet reach, and the R5 swap receipt passed on desktop/server. Physical iOS proved public Funnel ingress and Serve-to-Funnel replacement; Android hosted publication was not run.
 Tailscale Services | N/A | Planned | Upstream `tsnet.Server.ListenService` is available in the current pin; no Dart wrapper yet.
 Routing controls | `prefs`, `exitNode` | Supported | Subnet routes, Shields Up, tags, and exit nodes. Hostname is configured through `up()` so lifecycle state stays coherent.
 Diagnostics | `diag` | Supported | Ping, metrics, DERP map, and advisory native-version checks. Embedded Tailscale is upgraded with the package or host application, not in place.
@@ -314,8 +313,8 @@ port or authenticate all handlers that share it.
 
 Platform | Status | Notes
 --- | --- | ---
-iOS | Core supported | Userspace tsnet, no VPN entitlement. Core lifecycle and private data-plane smoke validated; `tls.bind` is unsupported by the upstream mobile build, while HTTPS Serve and ServeConfig Funnel remain unqualified pending real-device receipts.
-Android | Core supported | Userspace tsnet, no root. Persistent nodes require Android 12 / API 31+; older versions can run explicitly ephemeral nodes. Core smoke is validated; `tls.bind` is unsupported by the upstream mobile build, while HTTPS Serve and ServeConfig Funnel remain unqualified pending real-device receipts.
+iOS | Core supported | Userspace tsnet, no VPN entitlement. Physical lifecycle, persistent custody/reconnect, reset, and private data-plane receipts passed. `tls.bind` is unsupported by the upstream mobile build; the hosted Serve/Funnel receipt is partial, so complete mobile HTTPS publication remains unqualified.
+Android | Core supported | Userspace tsnet, no root. Persistent nodes require Android 12 / API 31+; older versions can run explicitly ephemeral nodes. Physical lifecycle, persistent custody/reconnect, reset, and private data-plane receipts passed. `tls.bind` is unsupported by the upstream mobile build; hosted Serve/Funnel was not run.
 macOS | Supported | Native asset and kqueue reactor path validated locally.
 Linux | Supported with storage qualification | Native asset and epoll reactor path validated in Headscale E2E. Persistent nodes require a desktop session with `secret-tool` and an available, unlocked Secret Service; headless Linux supports ephemeral nodes only.
 Windows | Unsupported | Excluded from the package platform list until a Windows-native backend is designed.

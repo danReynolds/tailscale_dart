@@ -35,6 +35,12 @@ credential custody, and Serve/Funnel use upstream's shared publication model.
 - Persistent Android nodes require API 31+, and persistent Linux nodes require
   an unlocked desktop Secret Service. Explicit ephemeral mode remains available
   where persistent custody is unavailable.
+- Added first-party backup-exclusion integration: Apple hosts set and verify
+  exclusion on the state root, while the Android demo disables backup and
+  excludes both the runtime and Keybay custody directories from cloud backup
+  and device transfer. Embedding applications must apply equivalent host policy;
+  [Keybay #30](https://github.com/danReynolds/keybay/issues/30) tracks making
+  Android custody intrinsically no-backup.
 - `TailscaleLogLevel.silent` now suppresses both upstream native log callbacks,
   including authorization URLs. The new immutable `noLogsNoSupport` init option
   disables upstream diagnostic uploads while leaving their conformant default
@@ -75,7 +81,8 @@ credential custody, and Serve/Funnel use upstream's shared publication model.
   incoming Funnel regression fix.
 - Added repeatable release-versus-pub.dev and physical-device profiles. The
   recorded macOS data plane remained at 0.8.0 parity, while physical iOS and
-  Android passed join, discovery, WhoIs, HTTP, TCP, UDP, and restart coverage.
+  Android passed join, discovery, WhoIs, HTTP, TCP, UDP, production-Keybay
+  process-death recovery, and local-reset coverage.
 
 ## 0.8.0
 

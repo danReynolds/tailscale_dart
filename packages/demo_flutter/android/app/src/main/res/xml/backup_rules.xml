@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
     <exclude domain="file" path="tailscale_demo/" />
+    <exclude domain="file" path="dev.tailscale.dart.demo.flutter.tailscale/" />
 </full-backup-content>

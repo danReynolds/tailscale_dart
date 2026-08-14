@@ -17,7 +17,7 @@ import (
 	"tailscale.com/tsnet"
 )
 
-// LogLevel controls logging verbosity. 0=silent, 1=error, 2=info.
+// LogLevel controls local stderr logging verbosity. 0=silent, 1=info.
 // Accessed atomically — safe to change at any time from any goroutine.
 var LogLevel int32 // default 0 (silent)
 
@@ -471,6 +471,9 @@ func startRuntimeWithDependenciesForTokenAndDeadline(requestToken uint64, hostna
 		return false, 0, fmt.Errorf("%w: preparation token %d", ErrStartupAbandoned, candidate.token)
 	}
 
+	nativeLogf := func(format string, args ...any) {
+		logInfo(format, args...)
+	}
 	newSrv := &tsnet.Server{
 		Hostname:   hostname,
 		AuthKey:    authKey,
@@ -478,11 +481,8 @@ func startRuntimeWithDependenciesForTokenAndDeadline(requestToken uint64, hostna
 		Dir:        runtimeDir,
 		Store:      candidate.store,
 		Ephemeral:  ephemeral,
-		Logf: func(format string, args ...any) {
-			if atomic.LoadInt32(&LogLevel) >= 2 {
-				log.Printf("TSNET: "+format, args...)
-			}
-		},
+		Logf:       nativeLogf,
+		UserLogf:   nativeLogf,
 	}
 	candidate.server = newSrv
 
@@ -493,6 +493,9 @@ func startRuntimeWithDependenciesForTokenAndDeadline(requestToken uint64, hostna
 		logDir,
 		func() error { return dependencies.startServer(newSrv) },
 	)
+	// Upstream consumes AuthKey during Start. Do not retain that credential on
+	// the long-lived Server after either a successful or failed start.
+	newSrv.AuthKey = ""
 	if startErr != nil {
 		return false, 0, fmt.Errorf("failed to start tsnet: %w", startErr)
 	}
@@ -687,7 +690,7 @@ func jsonError(err error) string {
 }
 
 func logInfo(format string, args ...any) {
-	if atomic.LoadInt32(&LogLevel) >= 2 {
+	if atomic.LoadInt32(&LogLevel) >= 1 {
 		log.Printf("TSNET: "+format, args...)
 	}
 }

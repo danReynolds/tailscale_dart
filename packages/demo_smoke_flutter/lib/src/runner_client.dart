@@ -12,6 +12,10 @@ final class SmokeRunnerConfig {
     required this.targetIp,
     required this.hostname,
     required this.stateSuffix,
+    this.mode = 'ephemeral',
+    this.phase = 'single',
+    this.expectedStableNodeId,
+    this.expectedIpv4,
     this.profileSamples = 0,
     this.profileContext = 'primary',
     this.lanProfileHost,
@@ -19,10 +23,14 @@ final class SmokeRunnerConfig {
   });
 
   final String controlUrl;
-  final String authKey;
+  final String? authKey;
   final String targetIp;
   final String hostname;
   final String stateSuffix;
+  final String mode;
+  final String phase;
+  final String? expectedStableNodeId;
+  final String? expectedIpv4;
   final int profileSamples;
   final String profileContext;
   final String? lanProfileHost;
@@ -46,12 +54,38 @@ Future<SmokeRunnerConfig> fetchSmokeConfig({
     }
     final body = await response.transform(utf8.decoder).join().timeout(timeout);
     final data = jsonDecode(body) as Map<String, dynamic>;
+    final mode = data['mode'] as String? ?? 'ephemeral';
+    if (mode != 'ephemeral' && mode != 'persistentCustody') {
+      throw StateError('runner /config field mode is unsupported: $mode');
+    }
+    final phase = data['phase'] as String? ?? 'single';
+    if (phase != 'single' && phase != 'enroll' && phase != 'reconnect') {
+      throw StateError('runner /config field phase is unsupported: $phase');
+    }
+    if ((mode == 'ephemeral' && phase != 'single') ||
+        (mode == 'persistentCustody' && phase == 'single')) {
+      throw StateError(
+        'runner /config mode $mode is incompatible with phase $phase',
+      );
+    }
+    final authKey = data['authKey'];
+    if (authKey != null && authKey is! String) {
+      throw StateError('runner /config field authKey must be a string');
+    }
+    if ((mode == 'ephemeral' || phase == 'enroll') &&
+        (authKey is! String || authKey.isEmpty)) {
+      throw StateError('runner /config missing required field authKey');
+    }
     return SmokeRunnerConfig(
       controlUrl: _requiredField(data, 'controlUrl'),
-      authKey: _requiredField(data, 'authKey'),
+      authKey: authKey as String?,
       targetIp: _requiredField(data, 'targetIp'),
       hostname: data['hostname'] as String? ?? 'dune-smoke-$session',
       stateSuffix: data['stateSuffix'] as String? ?? session,
+      mode: mode,
+      phase: phase,
+      expectedStableNodeId: data['expectedStableNodeId'] as String?,
+      expectedIpv4: data['expectedIpv4'] as String?,
       profileSamples: _nonNegativeInt(data, 'profileSamples'),
       profileContext: data['profileContext'] as String? ?? 'primary',
       lanProfileHost: data['lanProfileHost'] as String?,

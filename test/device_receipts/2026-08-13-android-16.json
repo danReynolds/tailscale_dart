@@ -1,0 +1,173 @@
+{
+  "schema": 3,
+  "kind": "tailscale-dart-device-smoke",
+  "generatedAt": "2026-08-13T20:24:22.225164Z",
+  "source": {
+    "package": "tailscale",
+    "version": "0.9.0",
+    "commit": "a77fd58ba06e54cc561df446cdbfdfd9a78c6610",
+    "dirty": false
+  },
+  "environment": {
+    "flutter": "3.44.4",
+    "dart": "3.12.2",
+    "hostOperatingSystem": "macos",
+    "hostOperatingSystemVersion": "Version 26.2 (Build 25C56)",
+    "flutterRunMode": "profile",
+    "flutterLaunchMode": "detached"
+  },
+  "configuration": {
+    "controlPlane": "local-headscale",
+    "profileSamples": 0,
+    "profileContext": "primary",
+    "speedRunsPerDirection": 3,
+    "speedTest": {
+      "workloadId": "tcp-sustained-v2",
+      "measuredDurationUs": 5000000,
+      "warmupBytes": 1048576,
+      "chunkBytes": 65536,
+      "maxInFlightBytes": 524288,
+      "intervalUs": 1000000,
+      "streamCount": 1
+    },
+    "nativeTsnetRunsPerDirection": 3,
+    "lanRunsPerDirection": 1,
+    "lanSpeedTest": {
+      "workloadId": "tcp-lan-control-v1",
+      "measuredDurationUs": 1000000,
+      "warmupBytes": 1048576,
+      "chunkBytes": 65536,
+      "maxInFlightBytes": 524288,
+      "intervalUs": 1000000,
+      "streamCount": 1
+    }
+  },
+  "targets": [
+    {
+      "target": "android",
+      "status": "pass",
+      "device": {
+        "targetPlatform": "android-arm64",
+        "platformType": "",
+        "emulator": false,
+        "sdk": "Android 16 (API 36)",
+        "deviceClass": "physical"
+      },
+      "durationMs": 42618,
+      "capabilities": [
+        {
+          "id": "overall",
+          "label": "Overall",
+          "required": true,
+          "status": "pass"
+        },
+        {
+          "id": "join",
+          "label": "Join",
+          "required": true,
+          "status": "pass"
+        },
+        {
+          "id": "discovery",
+          "label": "Nodes",
+          "required": true,
+          "status": "pass"
+        },
+        {
+          "id": "ping",
+          "label": "Ping*",
+          "required": false,
+          "status": "warn",
+          "durationUs": 20007726
+        },
+        {
+          "id": "whois",
+          "label": "WhoIs",
+          "required": true,
+          "status": "pass",
+          "durationUs": 12850
+        },
+        {
+          "id": "httpGet",
+          "label": "HTTP GET",
+          "required": true,
+          "status": "pass",
+          "durationUs": 61671
+        },
+        {
+          "id": "httpPost",
+          "label": "HTTP POST",
+          "required": true,
+          "status": "pass",
+          "durationUs": 19199
+        },
+        {
+          "id": "tcpEcho",
+          "label": "TCP",
+          "required": true,
+          "status": "pass",
+          "durationUs": 26911
+        },
+        {
+          "id": "udpEcho",
+          "label": "UDP",
+          "required": true,
+          "status": "pass",
+          "durationUs": 17082
+        },
+        {
+          "id": "profile",
+          "label": "Profile",
+          "required": false,
+          "status": "notRun"
+        },
+        {
+          "id": "restart",
+          "label": "Restart",
+          "required": true,
+          "status": "pass"
+        }
+      ],
+      "qualification": [
+        {
+          "id": "ephemeralDataPlane",
+          "label": "Ephemeral data plane",
+          "status": "notRun"
+        },
+        {
+          "id": "persistentCustody",
+          "label": "Persistent custody",
+          "status": "pass"
+        },
+        {
+          "id": "processDeathReconnect",
+          "label": "Process-death reconnect",
+          "status": "pass"
+        },
+        {
+          "id": "localReset",
+          "label": "Local reset",
+          "status": "pass"
+        },
+        {
+          "id": "profiling",
+          "label": "Profiling",
+          "status": "notRun"
+        }
+      ],
+      "custody": {
+        "persistentCustody": "pass",
+        "processDeathReconnect": "pass",
+        "localReset": "pass",
+        "scheme": "encryptedFile",
+        "securityLevel": "hardwareBacked",
+        "backendPersistent": true,
+        "dekBeforeReconnect": true,
+        "identityPreserved": true,
+        "dataPlaneAfterReconnect": true,
+        "dekAbsentAfterReset": true,
+        "stateSubtreeRemoved": true
+      }
+    }
+  ]
+}

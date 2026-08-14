@@ -543,9 +543,9 @@ func TestLogLevel_AtomicSetGet(t *testing.T) {
 	orig := atomic.LoadInt32(&LogLevel)
 	defer atomic.StoreInt32(&LogLevel, orig)
 
-	atomic.StoreInt32(&LogLevel, 2)
-	if got := atomic.LoadInt32(&LogLevel); got != 2 {
-		t.Errorf("LogLevel after set to 2 = %d", got)
+	atomic.StoreInt32(&LogLevel, 1)
+	if got := atomic.LoadInt32(&LogLevel); got != 1 {
+		t.Errorf("LogLevel after set to 1 = %d", got)
 	}
 
 	atomic.StoreInt32(&LogLevel, 0)

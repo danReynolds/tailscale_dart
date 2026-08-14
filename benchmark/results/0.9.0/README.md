@@ -1,13 +1,22 @@
-# tailscale 0.8.1 performance
+# tailscale 0.9.0 performance
+
+These reports were captured immediately before the metadata-only `0.9.0`
+version bump. Their raw source version remains `0.8.1` so the recorded commit
+provenance stays exact; `releaseVersion: 0.9.0` associates the runtime-identical
+candidate with this release.
 
 Canonical report: [`macos-arm64-vs-0.8.0.json`](macos-arm64-vs-0.8.0.json)
 
-Physical-device reports:
+Canonical consolidated physical-device reports:
 
-- [`2026-08-13 Android arm64`](devices/2026-08-13-android-arm64.md) — Pixel 6a,
-  Android 16 (API 36), clean checkout, correctness and profile complete.
-- [`2026-08-13 iOS arm64`](devices/2026-08-13-ios-arm64.md) — iPhone 16,
-  iOS 18.7.3, clean checkout, correctness and profile complete.
+- [Android](devices/android.md) — Pixel 6a, Android 16 (API 36): correctness,
+  profiling, production custody, process-death reconnect, and reset.
+- [iOS](devices/ios.md) — iPhone 16, iOS 18.7.3: correctness, profiling,
+  production custody, process-death reconnect, reset, and hosted boundaries.
+
+Each consolidated report is the one human-readable release view for that
+device. It links the separately generated JSON/Markdown receipts so narrower
+runs retain exact provenance and never imply that an unexecuted lane passed.
 
 ## Host release comparison
 
@@ -19,7 +28,7 @@ Physical-device reports:
 
 ## Material results
 
-| Scenario | 0.8.0 p50 | 0.8.1 p50 | Delta | Verdict |
+| Scenario | 0.8.0 p50 | 0.9.0 candidate p50 | Delta | Verdict |
 | --- | ---: | ---: | ---: | --- |
 | Sustained download | 31.695 MiB/s | 31.934 MiB/s | +0.8% | parity |
 | Sustained upload | 33.434 MiB/s | 33.504 MiB/s | +0.2% | parity |
@@ -27,7 +36,7 @@ Physical-device reports:
 | Ephemeral down | 9.089 ms | 11.475 ms | +26.3% | regression |
 | First UDP round trip | 3.096 ms | 2.306 ms | -25.5% | improvement |
 
-The public data plane is at parity with 0.8.0, including the new five-second
+The `0.9.0` public data plane is at parity with 0.8.0, including the new five-second
 directional workload. The HTTP admission regression found during development
 remains removed. Persistent custody lifecycle timings are retained as advisory
 context because the hosted baseline and current checkout intentionally use

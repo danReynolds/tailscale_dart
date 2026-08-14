@@ -15,7 +15,7 @@ Build Dart and Flutter apps that talk to each other directly — no public serve
 
 `package:tailscale` embeds upstream Go [`tsnet`](https://pkg.go.dev/tailscale.com/tsnet) and exposes typed Dart APIs for lifecycle, node identity, HTTP, TCP, UDP, TLS, Serve, Funnel, prefs, exit nodes, and diagnostics. Your app authenticates as its own node on the tailnet — users never install or configure a Tailscale client.
 
-> **Status:** `0.8.1`, pre-1.0. The core API is stable enough to build on, but minor versions may include breaking changes until 1.0. Production users are welcome — please [open an issue](https://github.com/danReynolds/tailscale_dart/issues) or [start a discussion](https://github.com/danReynolds/tailscale_dart/discussions) if something blocks you.
+> **Status:** `0.9.0`, pre-1.0. The core API is stable enough to build on, but minor versions may include breaking changes until 1.0. Production users are welcome — please [open an issue](https://github.com/danReynolds/tailscale_dart/issues) or [start a discussion](https://github.com/danReynolds/tailscale_dart/discussions) if something blocks you.
 
 ## Documentation
 
@@ -68,7 +68,7 @@ The [**developer site**](https://danreynolds.github.io/tailscale_dart/) is the c
 
 ```yaml
 dependencies:
-  tailscale: ^0.8.1
+  tailscale: ^0.9.0
 ```
 
 The first `dart run`, `dart test`, or `flutter build` triggers a native build hook that compiles the Go runtime for the target platform. Subsequent builds are cached and only recompile when Go source changes.
@@ -110,6 +110,13 @@ dedicated Keybay namespace; keep the same `appId` and `stateDir` for the life
 of the installation. `init` validates and freezes that binding but does not
 access secure storage until a persistent runtime needs custody.
 
+Embedded tsnet uploads diagnostic logs to Tailscale by default, including when
+the node uses Headscale. This matches upstream Tailscale behavior and is
+separate from local stderr verbosity. Pass `noLogsNoSupport: true` to `init`
+to disable those uploads before the first runtime starts; doing so also opts
+out of support that depends on the diagnostics. `TailscaleLogLevel.silent`
+controls only local native stderr output.
+
 Persistent `up()` may omit the auth key on a fresh installation; upstream then
 returns `needsLogin` with an authorization URL for interactive enrollment.
 Supplying a key is the non-interactive path. Subsequent launches can omit it
@@ -127,9 +134,12 @@ Only the logical Tailscale StateStore is encrypted by this mechanism. The
 package-owned `tailscale/` subtree can also contain upstream logs, log
 configuration, and TLS/certificate sidecars outside that encryption boundary.
 Keep those residuals owner-only and the entire `stateDir` private and excluded
-from backups. The persistent demo shows a fail-closed Apple resource-value
-readback and Android cloud/device-transfer exclusion rules for its exact state
-root; production embedders own the equivalent host policy.
+from backups. On Android, Keybay's separate `files/<appId>.tailscale/`
+directory must also be excluded from cloud backup and device transfer. A Dart
+package cannot rewrite its host application's backup manifest, so production
+embedders own both exclusions; the persistent demo provides the integration
+shape. Apple hosts use a fail-closed resource-value readback for the selected
+state root while device-bound Keychain custody does not migrate.
 
 Calling `logout()` is remote-first: confirmed control-plane success removes
 the current logical profile, but the StateStore container and DEK remain.

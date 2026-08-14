@@ -300,10 +300,39 @@ dart-define. Binding to `0.0.0.0` should be limited to physical-device smoke
 runs on trusted networks because `/config` carries a short-lived Headscale auth
 key.
 
-Every run ends with a compact capability matrix derived from the same
-machine-readable results that determine the smoke verdict. To collect
-historical performance samples without replacing or weakening those assertions,
-add profile mode and an explicit output path:
+Every run ends with two compact matrices derived from the same machine-readable
+result: API correctness and platform qualification. The latter reports
+ephemeral data plane, persistent custody, process-death reconnect, local reset,
+and profiling separately. `NOT RUN` is never displayed as `PASS`, so a broad
+ephemeral smoke run cannot be mistaken for persistent lifecycle evidence.
+
+For release evidence, keep those executions and machine-readable receipts
+separate, then consolidate their outcomes into one human-readable report per
+physical device under `benchmark/results/<version>/devices/`. The consolidated
+report links every source receipt; it does not replace or broaden them.
+
+The canonical Android persistent-custody receipt is deliberately a separate
+run from profiling:
+
+```bash
+DUNE_SMOKE_CONTROL_URL_ANDROID=http://<host-lan-ip>:18080 \
+DUNE_SMOKE_RUNNER_URL_ANDROID=http://<host-lan-ip>:18099 \
+  tool/smoke/run_matrix.sh --targets android \
+  --android-device <physical-device-id> \
+  --runner-bind-address 0.0.0.0 --strict --timeout-seconds 900 \
+  --persistent-custody \
+  --output test/device_receipts/<date>-android.json
+```
+
+This uninstalls only the smoke app to begin fresh, enrolls a non-ephemeral node
+using the production Android Keybay/Keystore backend, force-stops the OS app
+process, relaunches without an auth key, and verifies stable identity plus the
+required data plane. It finishes by calling `forgetLocalIdentity()` and checking
+that both the Keybay DEK and owned state subtree are gone. An explicit physical
+device is required; the command cannot be combined with profiling.
+
+To collect historical performance samples without replacing or weakening those
+assertions, add profile mode and an explicit output path:
 
 ```bash
 DUNE_SMOKE_CONTROL_URL_IOS=http://<host-lan-ip>:18080 \

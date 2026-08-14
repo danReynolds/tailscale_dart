@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -115,7 +114,7 @@ func defaultEncryptedStateStoreOptions() encryptedStateStoreOptions {
 		syncDirectory:       syncStateDirectory,
 		recordInitialCommit: func() {},
 		reportDurabilityLoss: func(err error) {
-			log.Printf("TSNET: encrypted StateStore durability diagnostic: %v", err)
+			logInfo("encrypted StateStore durability diagnostic: %v", err)
 		},
 	}
 }

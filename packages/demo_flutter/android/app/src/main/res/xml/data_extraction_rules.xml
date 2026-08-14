@@ -2,8 +2,10 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="tailscale_demo/" />
+        <exclude domain="file" path="dev.tailscale.dart.demo.flutter.tailscale/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="tailscale_demo/" />
+        <exclude domain="file" path="dev.tailscale.dart.demo.flutter.tailscale/" />
     </device-transfer>
 </data-extraction-rules>

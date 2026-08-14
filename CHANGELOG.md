@@ -1,187 +1,77 @@
-## Unreleased — rearchitecture in progress
+## 0.9.0
 
-The R4d secure-state cutover, lifecycle foundations, R5 runtime-owned
-publication convergence, and R7 transport/registry/watcher ownership moves are
-implemented in the current source. Hosted R5 tailnet/swap receipts and the
-macOS production-Keybay process-crash/restart receipt passed on 2026-08-10;
-R8's cache-retention decision, R9's conformance audit, and the non-device R6
-inventory/backup integration completed on 2026-08-11. Real-device Keybay,
-backup readback, private-data-plane/publication, and the R10 physical launch
-gate remain before release.
+A major runtime, security, and Tailscale-conformance release. The node now has
+one explicit lifecycle owner, persistent state is encrypted under platform
+credential custody, and Serve/Funnel use upstream's shared publication model.
 
-**Conformance and performance closeout:**
+**Breaking changes:**
 
-- Removed unsupported auto-update mutation and lifecycle-breaking
-  `PrefsUpdate.wantRunning` / `PrefsUpdate.hostname` controls. Hostname remains
-  an `up()` configuration, while current hostname and running intent remain
-  available in the read-only preferences snapshot.
-- Removed the exported Taildrop and Profiles stubs, their placeholder value
-  types, and unused exceptions. These features remain roadmap-only until an
-  implementation can satisfy their upstream semantics.
-- Unknown upstream backend states now parse as `NodeState.unknown` instead of
-  being misreported as unauthenticated `noState`.
-- Corrected the embedded-runtime update, default-hostname, ephemeral-logout,
-  and exit-node stream documentation. Linked the hosted Serve/Funnel swap
-  receipt directly to issue #87.
-- Fixed the raw-disco compatibility pin to use upstream `envknob.Setenv`;
-  `os.Setenv` did not update magicsock's already-registered knob. A pinned
-  v1.102.2 source contract now proves raw-socket creation remains opt-in. The
-  pin stays in place until the physical Android launch receipt passes.
-- Raised the minimum SDK to Dart 3.12 and removed the obsolete Linux
-  native-asset detach/warmup workaround now that the supported toolchain
-  includes the delete-before-copy dylib fix.
-- Widened the Keybay constraint to the semver-compatible `^0.1.0` range so the
-  package passes dependency-constraint publication validation.
-- Default `udp.bind()` now asks the initialized upstream server for
-  `TailscaleIPs()` directly instead of materializing the public full-status
-  model in Dart solely to recover the node's IPv4 address.
-- `tls.bind()` rejects iOS and Android immediately at the native boundary,
-  matching upstream's compiled-out LocalAPI certificate endpoint instead of
-  implying that a package-specific certificate workaround is planned.
-- Retained the runtime-owned accept-identity cache from measured evidence. At
-  32 callers on the final integrated macOS run, cached lookup measured about
-  5.14M/s and 945 ns CPU/lookup versus 18,446/s and 236.664 µs direct;
-  cached/direct TCP and HTTP accepts plus a real netmap-replacement load receipt
-  passed. The retained cache now lives on `nodeRuntime`, removing the last unsanctioned
-  identity process-global.
-- The R9 audit now records the narrow direct APIs, justified status calls,
-  typed error authorities, OmitAuth/private-Dial trust boundary, and the two
-  unavoidable prose backstops.
+- `Tailscale.init()` now requires a stable application `appId`. Persistent
+  identities use a Keybay-custodied encryption key and an authenticated
+  encrypted StateStore; plaintext state from earlier releases is not migrated.
+- `logout()` now follows upstream's remote-first semantics and retains the local
+  encrypted container. Use the new `forgetLocalIdentity()` for an explicit,
+  local-only destructive reset.
+- Ephemeral startup requires an auth key, uses only memory plus an owner-only
+  temporary runtime directory, and refuses to reuse persistent package state.
+- Removed unsupported preference mutations for hostname, running intent, and
+  auto-update. Hostname remains an `up()` option; the other values are read-only.
+- Removed the unimplemented Taildrop and Profiles stubs until they can provide
+  real upstream-compatible behavior.
+- Removed the ineffective `TailscaleLogLevel.error` value. Local native logging
+  is now either `silent` or `info`.
+- The minimum Dart SDK is now 3.12.
 
-**R6 non-device evidence:**
+**Security and lifecycle:**
 
-- Headscale E2E now emits a content-free persistent-tree receipt after
-  HTTP/TCP/UDP use and rejects unknown artifacts, symlinks, or unsafe modes.
-  Explicit categories cover the encrypted envelope, log credential/logs,
-  ACME certificate material, and upstream profile netmap cache.
-- The persistent Flutter demo now sets and reads back Apple backup exclusion
-  before enabling its state root, and packages Android API-31+ plus legacy
-  cloud/device-transfer exclusion rules for the exact state directory. macOS,
-  iOS-simulator, and Android APK builds passed.
+- Persistent state is stored as one authenticated encrypted envelope. The
+  32-byte data-encryption key lives in the dedicated `<appId>.tailscale` Keybay
+  namespace, and startup fails closed on missing custody, tampering, unsafe
+  permissions, conflicting layouts, or an interrupted reset.
+- Reworked runtime ownership around generation-scoped tokens and a replaceable
+  worker supervisor. Startup timeouts, worker loss, cleanup failures, late
+  native completions, logout uncertainty, and stale peer snapshots now fail
+  closed instead of leaving hidden or partially owned runtimes.
+- Persistent Android nodes require API 31+, and persistent Linux nodes require
+  an unlocked desktop Secret Service. Explicit ephemeral mode remains available
+  where persistent custody is unavailable.
+- `TailscaleLogLevel.silent` now suppresses both upstream native log callbacks,
+  including authorization URLs. The new immutable `noLogsNoSupport` init option
+  disables upstream diagnostic uploads while leaving their conformant default
+  enabled.
+- Completes the encrypted StateStore work tracked by
+  [#94](https://github.com/danReynolds/tailscale_dart/issues/94).
 
-**Android:**
+**Serve, Funnel, and upstream conformance:**
 
-- Fixed ephemeral startup on Android app processes: the ephemeral scratch
-  parent is now the Dart-supplied platform temporary directory instead of Go's
-  `os.TempDir()` fallback, which resolves to the shell-only `/data/local/tmp`
-  inside an app sandbox and made every ephemeral `up()` fail with permission
-  denied. Found by the first arm64 emulator runtime receipt, which now passes:
-  two full lifecycle generations in one app process reach upstream NeedsLogin
-  with no seccomp SIGSYS.
+- Serve and Funnel now update one runtime-owned upstream `ServeConfig`.
+  Funnel is the public visibility mode of the same port/path mapping, matching
+  Tailscale CLI behavior. Serialized ETag updates and generation-scoped handles
+  prevent stale handles or uncertain commits from clearing replacement mappings.
+- Added a bounded first-Running upstream reset so stale ServeConfig cannot be
+  exposed before package data-plane readiness.
+- `tls.bind()` now rejects iOS and Android immediately because upstream compiles
+  out the LocalAPI certificate endpoint on those platforms.
+- Unknown upstream backend states are preserved as `NodeState.unknown` rather
+  than being reported as unauthenticated.
+- Resolves Funnel behavior issue
+  [#87](https://github.com/danReynolds/tailscale_dart/issues/87).
 
-**Secure-state foundation:**
+**Networking, platforms, and performance:**
 
-- Persistent nodes now use a concurrency-safe Go StateStore persisted as one
-  authenticated encrypted envelope. One random 32-byte DEK lives in the
-  dedicated `<appId>.tailscale` Keybay namespace and is retained in memory for
-  the runtime lifetime; routine StateStore mutations do not call Keybay.
-- Persistent startup and idle status fail closed on missing or unavailable
-  custody, key/file or format conflicts, failed permission verification,
-  tampering, and incomplete reset. There is no plaintext fallback and no
-  migration from pre-launch SQLite or plaintext FileStore state.
-- Ephemeral startup now requires an auth key, uses an in-memory StateStore and
-  an owner-only temporary tsnet directory, and never accesses Keybay. It
-  rejects a configured root with filesystem-visible persistent package state.
-- Added `forgetLocalIdentity()`, the explicit local-only destructive reset. It
-  durably records intent, deletes the exact Keybay DEK, and removes only the
-  package-owned Tailscale subtree; interrupted reset remains fail closed and is
-  resumed by calling the method again.
-- Persistent custody follows Keybay's platform contract: Android requires API
-  31+, and Linux requires desktop `secret-tool` plus an available, unlocked
-  Secret Service. Older Android and headless Linux remain available only in
-  explicit ephemeral mode.
-- Only logical StateStore data is encrypted. Upstream log configuration, logs,
-  and TLS/certificate sidecars in the package subtree remain outside that
-  encryption boundary and still require owner-only enforcement, backup
-  exclusion, and the R6 inventory receipts.
-
-**Lifecycle hardening:**
-
-- A caller-isolate supervisor now owns replaceable worker instances and exact
-  native runtime tokens. Unexpected worker exit quarantines the matching
-  generation, joins its watcher/background publishers, emits one structured
-  incident, and permits a later clean worker binding.
-- Completed `down()`/`logout()` results remain token-retained until the caller
-  isolate acknowledges them, so worker death between native completion and
-  Dart delivery cannot swallow cleanup errors or falsify logout disposition.
-- Failed Server/Store cleanup, startup unwind, or final logout disposition now
-  returns `runtimeCleanupFailed` and keeps lifecycle admission closed until
-  process restart. Teardown also publishes an empty peer snapshot so existing
-  subscribers cannot retain a stale tailnet inventory.
-- `up(timeout:)` quarantines its generation before reporting
-  `startupTimeout`; a non-cancellable late `Server.Start` can no longer leave
-  an active node behind the failed Future. Pre-dispatch abandonment tombstones
-  are retired only after the originating Future settles or its worker exits,
-  keeping that race closed without unbounded bookkeeping growth.
-- `logout()` is remote-first. Failed or timed-out revocation closes the
-  possibly-mutated runtime, preserves local state, and reports
-  `logoutIndeterminate`. Confirmed success lets upstream remove the logical
-  profile but still preserves the lower-level StateStore container; physical
-  deletion is reserved for `forgetLocalIdentity()`. A
-  temporary runtime reconstructed after `down()` remains hidden from public
-  state streams, so successful idle logout emits `noState` without a phantom
-  second `stopped` transition.
-- Idle logout reconstruction uses only the exact configuration proven applied
-  by a successful `Server.Start`; a fresh failed attempt invalidates any older
-  cached tuple instead of risking the wrong control plane.
-
-**Serve/Funnel convergence:**
-
-- Serve and Funnel now mutate one runtime-owned upstream `ServeConfig`
-  authority. Funnel is the public-visibility mode of the same handler used by
-  Serve; the package-owned `ListenFunnel` listener/reverse-proxy path and its
-  separate registries are removed.
-- Every runtime performs one bounded automatic first-`Up` reset when upstream
-  first reaches Running. Package Running and all identity-bound HTTP/TCP/UDP/
-  TLS/Serve/Funnel operations remain gated until it succeeds; failure
-  quarantines and drains the exact generation.
-- ServeConfig writes use one serialized get/copy/apply/ETag transaction with at
-  most three total attempts. Only typed precondition conflicts retry. A result
-  that may have committed without a response closes the generation before the
-  typed `publicationCommitIndeterminate` error is returned.
-- Publication handles carry the exact runtime generation and a unique mapping
-  token. Closing or finalizing a replaced/old-generation handle is an
-  idempotent stale no-op and cannot clear its successor; explicit `clear()`
-  remains a coordinate operation.
-- A confirmed publication remains in native pending-delivery custody until Dart
-  validates and acknowledges its exact handle. Malformed or lost delivery
-  quarantines that runtime, with a bounded native timer covering helper/caller
-  isolate loss so committed ingress cannot silently lose its owner.
-- Each HTTP client's first admission, `tcp.dial`, `diag.ping`, Serve, and
-  Funnel share a 32-call caller-isolate helper cap. Successful HTTP admission
-  proves that exact runtime ready, so later requests avoid helper-isolate churn.
-  Every path retains an exact runtime token, so stale work cannot execute as a
-  replacement.
-- Added opt-in hosted-Tailscale tests for Funnel's tailnet reachability and
-  Serve -> Funnel -> Serve replacement/exact-handle behavior. Both passed
-  serially against hosted Tailscale on 2026-08-10; they also compile and skip
-  without credentials.
-- Added a macOS production-Keybay receipt that enrolls a persistent publisher,
-  leaves Serve active, kills the process with SIGKILL, reopens the same DEK-
-  backed node without an auth key, and continuously probes startup. It passed
-  against hosted Tailscale on 2026-08-10 with the same IP/stable node ID, no
-  stale backend hit before or after package Running, and verified DEK/state-
-  subtree cleanup.
-
-## 0.8.1
-
-Critical Android fix. Anyone running 0.8.0 on Android should upgrade.
-
-**Bug fixes:**
-
-- Android x86_64 apps could crash with `SIGSYS` on the reactor's first poll,
-  before Flutter rendered a frame. Android's app-process seccomp policy denies
-  the legacy `epoll_wait` syscall. `golang.org/x/sys` v0.47.0 now maps
-  `unix.EpollWait` to the permitted `epoll_pwait` syscall on Linux and Android.
-  Reported and diagnosed by @philipreese in #81.
-- Updated `tailscale.com` from v1.100.0 to v1.102.2, including the upstream
-  incoming Funnel regression fix from v1.102.2.
-
-**Internal:**
-
-- CI now cross-builds every shipped Android ABI and gates on a Linux seccomp
-  regression test. A workflow triggered for relevant PRs (and manually for
-  releases) boots a real Android x86_64 app process.
+- Moved public HTTP, TCP, UDP, identity, and watcher ownership onto the runtime
+  generation, with bounded helper-isolate admission and a direct FFI fast path
+  for steady HTTP traffic.
+- Fixed Android ephemeral startup to use the app's writable temporary directory.
+- Fixed Android x86_64 startup crashes caused by seccomp rejecting
+  `epoll_wait`; CI now cross-builds every shipped Android ABI and exercises an
+  x86_64 app process. Resolves
+  [#81](https://github.com/danReynolds/tailscale_dart/issues/81).
+- Updated `tailscale.com` from v1.100.0 to v1.102.2, including upstream's
+  incoming Funnel regression fix.
+- Added repeatable release-versus-pub.dev and physical-device profiles. The
+  recorded macOS data plane remained at 0.8.0 parity, while physical iOS and
+  Android passed join, discovery, WhoIs, HTTP, TCP, UDP, and restart coverage.
 
 ## 0.8.0
 

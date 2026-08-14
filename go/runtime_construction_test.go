@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -512,6 +513,79 @@ func TestRuntimeConstruction_CachesPrivateDialClientBeforeCommit(t *testing.T) {
 	defer closeMu.Unlock()
 	if len(closeEvents) != 2 || closeEvents[0] != "server" || closeEvents[1] != "store" {
 		t.Fatalf("normal close order = %v, want [server store]", closeEvents)
+	}
+}
+
+func TestRuntimeConstruction_LoggingPolicyAndAuthKeyLifetime(t *testing.T) {
+	stateDir := configureFreshStateRootForTest(t)
+	store := new(recordingStateStore)
+	var started *tsnet.Server
+	const authKey = "test-auth-key-that-must-not-be-retained"
+	deps := constructionDependencies(
+		store,
+		func(server *tsnet.Server) error {
+			started = server
+			if server.AuthKey != authKey {
+				t.Fatalf("AuthKey during Start = %q, want supplied key", server.AuthKey)
+			}
+			return nil
+		},
+		func(*tsnet.Server) (*local.Client, error) { return &local.Client{}, nil },
+		func(*tsnet.Server) error { return nil },
+	)
+
+	if _, err := startRuntimeWithDependencies("node", authKey, "https://control/", stateDir, false, "", deps); err != nil {
+		t.Fatalf("startRuntimeWithDependencies: %v", err)
+	}
+	if started == nil || started.Logf == nil || started.UserLogf == nil {
+		t.Fatal("runtime did not install both controlled native log callbacks")
+	}
+	if started.AuthKey != "" {
+		t.Fatal("runtime retained AuthKey after Server.Start returned")
+	}
+
+	previousOutput := log.Writer()
+	previousFlags := log.Flags()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(previousOutput)
+		log.SetFlags(previousFlags)
+	})
+
+	started.Logf("backend secret")
+	started.UserLogf("user secret")
+	if output.Len() != 0 {
+		t.Fatalf("silent native logging wrote %q", output.String())
+	}
+
+	atomic.StoreInt32(&LogLevel, 1)
+	started.Logf("backend visible")
+	started.UserLogf("user visible")
+	if got := output.String(); !bytes.Contains([]byte(got), []byte("TSNET: backend visible")) || !bytes.Contains([]byte(got), []byte("TSNET: user visible")) {
+		t.Fatalf("info native logging output = %q, want both callbacks", got)
+	}
+
+	if _, err := closeCurrentRuntime(); err != nil {
+		t.Fatalf("closeCurrentRuntime: %v", err)
+	}
+
+	var failed *tsnet.Server
+	failureDeps := constructionDependencies(
+		new(recordingStateStore),
+		func(server *tsnet.Server) error {
+			failed = server
+			return errors.New("injected start failure")
+		},
+		func(*tsnet.Server) (*local.Client, error) { return &local.Client{}, nil },
+		func(*tsnet.Server) error { return nil },
+	)
+	if _, err := startRuntimeWithDependencies("failed-node", authKey, "https://control/", stateDir, false, "", failureDeps); err == nil {
+		t.Fatal("failed Server.Start unexpectedly succeeded")
+	}
+	if failed == nil || failed.AuthKey != "" {
+		t.Fatal("runtime retained AuthKey after failed Server.Start")
 	}
 }
 

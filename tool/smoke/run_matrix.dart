@@ -13,6 +13,7 @@ const _knownTargets = ['macos', 'ios', 'android', 'linux'];
 const _defaultTargets = ['macos', 'ios', 'android'];
 const _resultPrefix = 'DUNE_SMOKE_RESULT ';
 const _runnerTokenHeader = 'x-dune-smoke-token';
+const _androidSmokePackage = 'com.dune.dune_smoke_flutter';
 
 Future<void> main(List<String> args) async {
   final config = _Config.parse(args);
@@ -41,7 +42,10 @@ final class _SmokeMatrixRunner {
   ServerSocket? _lanProfileServer;
   StreamSubscription<Socket>? _lanProfileConnections;
   String? _currentAuthKey;
+  String? _currentPersistentAuthKey;
   String? _currentTargetIp;
+  final Map<String, String> _persistentPhases = {};
+  final Map<String, Map<String, Object?>> _persistentBaselines = {};
   final Map<String, Completer<Map<String, Object?>>> _resultCompleters = {};
 
   Future<bool> run() async {
@@ -65,6 +69,9 @@ final class _SmokeMatrixRunner {
       await _startHeadscale();
       headscaleStarted = true;
       _currentAuthKey = await _createAuthKey();
+      if (config.persistentCustody) {
+        _currentPersistentAuthKey = await _createAuthKey(ephemeral: false);
+      }
       peer = await _ManagedPeer.spawn(
         dart: config.dart,
         packageRoot: demoCoreDir,
@@ -123,6 +130,9 @@ final class _SmokeMatrixRunner {
       _log('');
       _log('Capability matrix:');
       stdout.writeln(renderSmokeCapabilityMatrix(_reportRuns(results)));
+      _log('');
+      _log('Platform qualification:');
+      stdout.writeln(renderSmokeQualificationMatrix(_reportRuns(results)));
       await _writeResultReport(results);
 
       if (config.strict && skipped.isNotEmpty) return false;
@@ -177,10 +187,14 @@ final class _SmokeMatrixRunner {
   ];
 
   Future<void> _writeResultReport(List<_TargetRun> results) async {
-    if (config.outputPath == null && config.profileSamples == 0) return;
+    if (config.outputPath == null &&
+        config.profileSamples == 0 &&
+        !config.persistentCustody) {
+      return;
+    }
     final requestedPath = config.outputPath;
     final defaultName =
-        'tailscale-device-profile-'
+        '${config.persistentCustody ? 'tailscale-device-custody' : 'tailscale-device-profile'}-'
         '${DateTime.now().toUtc().toIso8601String().replaceAll(':', '-')}.json';
     final rawPath = requestedPath == null
         ? '${Directory.systemTemp.path}/$defaultName'
@@ -254,8 +268,10 @@ final class _SmokeMatrixRunner {
       'hostOperatingSystemVersion': Platform.operatingSystemVersion,
       'flutterRunMode': config.profileSamples > 0
           ? config.profileRunMode
+          : config.persistentCustody
+          ? config.androidRunMode
           : 'smoke-default',
-      'flutterLaunchMode': config.profileDetached ? 'detached' : 'attached',
+      'flutterLaunchMode': config.launchDetached ? 'detached' : 'attached',
     };
   }
 
@@ -429,12 +445,25 @@ final class _SmokeMatrixRunner {
     }
     if (request.method == 'GET' && path == '/config') {
       final lanServer = _lanProfileServer;
+      final persistent = config.persistentCustody && session == 'android';
+      final phase = persistent
+          ? _persistentPhases[session] ?? 'enroll'
+          : 'single';
+      final baseline = _persistentBaselines[session];
       final body = <String, Object?>{
-        'authKey': _currentAuthKey ?? '',
+        if (!persistent || phase == 'enroll')
+          'authKey': persistent
+              ? _currentPersistentAuthKey ?? ''
+              : _currentAuthKey ?? '',
         'controlUrl': _controlUrlFor(session),
         'targetIp': _currentTargetIp ?? '',
         'hostname': 'dune-smoke-$session',
         'stateSuffix': '$session-$_runStartMillis',
+        'mode': persistent ? 'persistentCustody' : 'ephemeral',
+        'phase': phase,
+        if (baseline?['stableNodeId'] case final String stableNodeId)
+          'expectedStableNodeId': stableNodeId,
+        if (baseline?['ipv4'] case final String ipv4) 'expectedIpv4': ipv4,
         'profileSamples': config.profileSamples,
         'profileContext': config.profileContext,
         if (lanServer != null) ...{
@@ -571,7 +600,7 @@ final class _SmokeMatrixRunner {
     }
   }
 
-  Future<String> _createAuthKey() async {
+  Future<String> _createAuthKey({bool ephemeral = true}) async {
     await _run(
       config.docker,
       [
@@ -604,7 +633,7 @@ final class _SmokeMatrixRunner {
         '--user',
         'dune-smoke',
         '--reusable',
-        '--ephemeral',
+        if (ephemeral) '--ephemeral',
         '--expiration',
         '30m',
       ],
@@ -774,7 +803,7 @@ final class _SmokeMatrixRunner {
       '-d',
       deviceId,
       '--$runMode',
-      if (config.profileDetached) ...[
+      if (config.launchDetached) ...[
         '--no-resident',
         '--no-enable-dart-profiling',
         '--no-dds',
@@ -848,7 +877,7 @@ final class _SmokeMatrixRunner {
 
     unawaited(
       process.exitCode.then((code) {
-        if (!result.isCompleted && (!config.profileDetached || code != 0)) {
+        if (!result.isCompleted && (!config.launchDetached || code != 0)) {
           result.complete(
             _TargetRun(
               target: target,
@@ -941,6 +970,174 @@ final class _SmokeMatrixRunner {
     return result['error'] as String? ?? 'probe failed';
   }
 
+  Future<_TargetRun> _runPersistentAndroidTarget({
+    required String deviceId,
+    required Map<String, Object?>? device,
+    Future<String>? preBuildFuture,
+  }) async {
+    const target = 'android';
+    if (device?['deviceClass'] != 'physical') {
+      return _TargetRun(
+        target: target,
+        ok: false,
+        skipped: false,
+        message:
+            'persistent Android custody requires a recognized physical device',
+        device: device,
+      );
+    }
+    _persistentPhases[target] = 'enroll';
+    _persistentBaselines.remove(target);
+    await _run(config.adb, [
+      '-s',
+      deviceId,
+      'uninstall',
+      _androidSmokePackage,
+    ], allowFailure: true);
+
+    try {
+      final enrollment = await _runFlutterTarget(
+        target: target,
+        deviceId: deviceId,
+        device: device,
+        preBuildFuture: preBuildFuture,
+      );
+      final enrolled = enrollment.result;
+      if (!enrollment.ok || enrolled == null) return enrollment;
+
+      final stableNodeId = enrolled['stableNodeId'] as String?;
+      final ipv4 = enrolled['localIp'] as String?;
+      final initialPid = enrolled['processId'] as num?;
+      if (stableNodeId == null ||
+          stableNodeId.isEmpty ||
+          ipv4 == null ||
+          ipv4.isEmpty ||
+          initialPid == null) {
+        return _TargetRun(
+          target: target,
+          ok: false,
+          skipped: false,
+          message: 'persistent enrollment omitted identity or process proof',
+          result: enrolled,
+          device: device,
+        );
+      }
+      _persistentBaselines[target] = <String, Object?>{
+        'stableNodeId': stableNodeId,
+        'ipv4': ipv4,
+      };
+
+      _log('force-stopping Android app process ${initialPid.toInt()}');
+      await _adbShell(deviceId, ['am', 'force-stop', _androidSmokePackage]);
+      final stopped = await _waitForAndroidPackageStopped(deviceId);
+      _persistentPhases[target] = 'reconnect';
+
+      final reconnectResult = Completer<Map<String, Object?>>();
+      _resultCompleters[target] = reconnectResult;
+      _log('relaunching Android app for auth-key-free reconnect');
+      final launch = await _adbShell(deviceId, [
+        'monkey',
+        '-p',
+        _androidSmokePackage,
+        '-c',
+        'android.intent.category.LAUNCHER',
+        '1',
+      ]);
+      if (launch.exitCode != 0) {
+        throw StateError('Android relaunch failed: ${launch.stderr}');
+      }
+      final reconnected = await reconnectResult.future.timeout(config.timeout);
+      final replacementPid = reconnected['processId'] as num?;
+      final replacedProcess =
+          stopped &&
+          replacementPid != null &&
+          replacementPid.toInt() != initialPid.toInt();
+
+      final enrollmentCustody =
+          enrolled['custody'] as Map<String, Object?>? ?? const {};
+      final reconnectCustody =
+          reconnected['custody'] as Map<String, Object?>? ?? const {};
+      final persistentCustodyOk =
+          enrollmentCustody['persistentCustody'] == 'pass' &&
+          reconnectCustody['persistentCustody'] == 'pass';
+      final reconnectOk =
+          reconnectCustody['processDeathReconnect'] == 'pass' &&
+          replacedProcess;
+      final resetOk = reconnectCustody['localReset'] == 'pass';
+      final ok =
+          enrolled['ok'] == true &&
+          reconnected['ok'] == true &&
+          persistentCustodyOk &&
+          reconnectOk &&
+          resetOk;
+      final startedAt = DateTime.parse(enrolled['startedAt']! as String);
+      final finishedAt = DateTime.parse(reconnected['finishedAt']! as String);
+      final custody = <String, Object?>{
+        ...enrollmentCustody,
+        ...reconnectCustody,
+        'persistentCustody': persistentCustodyOk ? 'pass' : 'fail',
+        'processDeathReconnect': reconnectOk ? 'pass' : 'fail',
+        'localReset': resetOk ? 'pass' : 'fail',
+        'processStopped': stopped,
+        'replacementProcess': replacedProcess,
+      };
+      final combined = <String, Object?>{
+        'ok': ok,
+        'startedAt': startedAt.toIso8601String(),
+        'finishedAt': finishedAt.toIso8601String(),
+        'durationMs': finishedAt.difference(startedAt).inMilliseconds,
+        'hostname': reconnected['hostname'],
+        'platform': reconnected['platform'],
+        'mode': 'persistentCustody',
+        'phase': 'complete',
+        'localIp': reconnected['localIp'],
+        'stableNodeId': reconnected['stableNodeId'],
+        'targetIp': reconnected['targetIp'],
+        'services': reconnected['services'],
+        'nodesSeen': reconnected['nodesSeen'],
+        'report': reconnected['report'],
+        'profile': null,
+        'restart': <String, Object?>{
+          'ok': reconnectOk,
+          'report': reconnected['report'],
+        },
+        'custody': custody,
+        if (!ok)
+          'error': 'persistent Android custody qualification did not pass',
+      };
+      var run = _TargetRun(
+        target: target,
+        ok: ok,
+        skipped: false,
+        message: _resultMessage(
+          combined,
+          ok: ok,
+          duration: combined['durationMs'],
+        ),
+        result: combined,
+        device: device,
+      );
+      run = await _applyAndroidSigsysCheck(run, deviceId);
+      return run;
+    } finally {
+      _resultCompleters.remove(target);
+      _persistentPhases.remove(target);
+      _persistentBaselines.remove(target);
+      try {
+        await _adbShell(deviceId, ['am', 'force-stop', _androidSmokePackage]);
+      } catch (_) {}
+    }
+  }
+
+  Future<bool> _waitForAndroidPackageStopped(String deviceId) async {
+    for (var attempt = 0; attempt < 20; attempt++) {
+      final result = await _adbShell(deviceId, ['pidof', _androidSmokePackage]);
+      if (result.stdout.toString().trim().isEmpty) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return false;
+  }
+
   Future<_TargetRun> _runOrSkipTarget(
     _TargetLaunch run,
     Map<String, Future<String>> preBuildFutures,
@@ -956,6 +1153,13 @@ final class _SmokeMatrixRunner {
       return skipped;
     }
     try {
+      if (config.persistentCustody && run.target == 'android') {
+        return await _runPersistentAndroidTarget(
+          deviceId: deviceId,
+          device: run.device,
+          preBuildFuture: preBuildFutures[run.target],
+        );
+      }
       return await _runFlutterTarget(
         target: run.target,
         deviceId: deviceId,
@@ -1067,25 +1271,24 @@ final class _SmokeMatrixRunner {
   /// cycle) must finish without the app-process seccomp policy killing a
   /// thread. Zygote-spawned app processes carry the real policy — a binary
   /// run from adb shell would not — so probe success plus a clean crash scan
-  /// here IS the Server.Start/reconnect/stop receipt. The full dump is saved
-  /// beside the system temp directory as the receipt artifact.
+  /// here IS the Server.Start/reconnect/stop receipt. The device log is held
+  /// only in memory long enough to scan crash signatures; it may contain
+  /// unrelated private device data and must never be printed or retained.
   Future<_TargetRun> _applyAndroidSigsysCheck(
     _TargetRun run,
     String deviceId,
   ) async {
     try {
-      final dump = await _run(config.adb, [
+      final dump = await Process.run(config.adb, [
         '-s',
         deviceId,
         'logcat',
         '-d',
-      ], allowFailure: true);
+      ]);
+      if (dump.exitCode != 0) {
+        throw StateError('adb logcat exited with ${dump.exitCode}');
+      }
       final text = dump.stdout as String? ?? '';
-      final artifact = File(
-        '${Directory.systemTemp.path}/dune_smoke_android_logcat_$_runStartMillis.txt',
-      );
-      artifact.writeAsStringSync(text);
-      _log('android logcat receipt saved to ${artifact.path}');
       // Match crash-specific signatures only; benign boot chatter can mention
       // seccomp policy installation without any violation.
       final violations = text
@@ -1095,18 +1298,17 @@ final class _SmokeMatrixRunner {
           )
           .toList(growable: false);
       if (violations.isNotEmpty) {
-        _log('android SIGSYS lines:\n${violations.join('\n')}');
+        _log('android SIGSYS scan found ${violations.length} violation(s)');
         return _TargetRun(
           target: run.target,
           ok: false,
           skipped: false,
-          message:
-              'seccomp SIGSYS in logcat (${violations.length} lines; '
-              'see ${artifact.path})',
+          message: 'seccomp SIGSYS in logcat (${violations.length} lines)',
           result: run.result,
           device: run.device,
         );
       }
+      _log('android SIGSYS scan passed');
     } catch (error) {
       _log('android logcat scan failed (receipt not collected): $error');
     }
@@ -1394,6 +1596,7 @@ final class _Config {
     required this.profileSamples,
     required this.profileContext,
     required this.profileRunMode,
+    required this.persistentCustody,
     required this.outputPath,
     required this.jobs,
     required this.keepHeadscale,
@@ -1420,6 +1623,7 @@ final class _Config {
   final int profileSamples;
   final String profileContext;
   final String profileRunMode;
+  final bool persistentCustody;
   final String? outputPath;
   final int jobs;
   final bool keepHeadscale;
@@ -1429,6 +1633,8 @@ final class _Config {
   final bool help;
 
   bool get profileDetached => profileSamples > 0;
+
+  bool get launchDetached => profileDetached || persistentCustody;
 
   static _Config parse(List<String> args) {
     final options = <String, String>{};
@@ -1549,6 +1755,32 @@ final class _Config {
         );
       }
     }
+    final persistentCustody =
+        flags.contains('persistent-custody') ||
+        Platform.environment['DUNE_SMOKE_PERSISTENT_CUSTODY'] == '1';
+    if (persistentCustody) {
+      if (profileSamples > 0) {
+        throw ArgumentError(
+          'persistent custody qualification and profiling are separate runs',
+        );
+      }
+      if (targets.length != 1 || targets.single != 'android') {
+        throw ArgumentError(
+          'persistent custody qualification currently requires --targets android',
+        );
+      }
+      if (!deviceOverrides.containsKey('android')) {
+        throw ArgumentError(
+          'persistent Android custody requires --android-device so an '
+          'emulator is not selected accidentally',
+        );
+      }
+      if (jobs != 1) {
+        throw ArgumentError(
+          'persistent custody qualification requires --jobs 1',
+        );
+      }
+    }
 
     final runnerPort =
         int.tryParse(
@@ -1590,6 +1822,7 @@ final class _Config {
       profileSamples: profileSamples,
       profileContext: profileContext,
       profileRunMode: profileRunMode,
+      persistentCustody: persistentCustody,
       outputPath:
           options['output'] ?? Platform.environment['DUNE_SMOKE_OUTPUT'],
       jobs: jobs,
@@ -1713,6 +1946,13 @@ Options:
                                       primarily for iOS Simulator controls.
   --profile-context LABEL             Short environment label stored with the
                                       profile. Default: primary.
+  --persistent-custody                Android-only physical qualification:
+                                      fresh persistent enrollment, hard OS
+                                      process death, auth-key-free reconnect,
+                                      identity/data-plane verification, and
+                                      local identity reset. Cannot be combined
+                                      with profiling and requires an explicit
+                                      --android-device.
   --output PATH                       Write privacy-safe JSON samples plus a
                                       generated Markdown matrix. Profile runs
                                       without this flag write under the system
@@ -1744,6 +1984,7 @@ Environment:
   DUNE_SMOKE_PROFILE_SAMPLES          Same as --profile-samples.
   DUNE_SMOKE_PROFILE_CONTEXT          Same as --profile-context.
   DUNE_SMOKE_PROFILE_RUN_MODE         Same as --profile-run-mode.
+  DUNE_SMOKE_PERSISTENT_CUSTODY       Set to 1 for --persistent-custody.
   DUNE_SMOKE_OUTPUT                   Same as --output.
   DUNE_SMOKE_IOS_SIMULATOR            Same as --ios-simulator.
   ADB                                 adb executable. Default: adb.

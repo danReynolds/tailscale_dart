@@ -66,24 +66,19 @@ export 'src/worker/worker.dart' show DebugTerminatePoint;
 
 /// Native log verbosity for the embedded Tailscale runtime — controls
 /// what the Go side writes to stderr. Dart-side logging (e.g.
-/// [TailscaleRuntimeError]) is unaffected.
+/// [TailscaleRuntimeError]) and upstream diagnostic uploads are unaffected.
 enum TailscaleLogLevel {
-  /// No native logs at all.
+  /// No native stderr logs.
   silent,
 
-  /// Only error-level log lines.
-  error,
-
-  /// Informational + error logs. Useful during development; noisy in
-  /// production.
+  /// Native runtime logs. Useful during development; noisy in production.
   info,
 }
 
 extension on TailscaleLogLevel {
   int get nativeValue => switch (this) {
     TailscaleLogLevel.silent => 0,
-    TailscaleLogLevel.error => 1,
-    TailscaleLogLevel.info => 2,
+    TailscaleLogLevel.info => 1,
   };
 }
 
@@ -96,16 +91,19 @@ final class _TailscaleInitialization {
   const _TailscaleInitialization({
     required this.canonicalStateBaseDir,
     required this.logLevel,
+    required this.noLogsNoSupport,
     required this.keybay,
   });
 
   final String canonicalStateBaseDir;
   final TailscaleLogLevel logLevel;
+  final bool noLogsNoSupport;
   final KeybayStateCustodyBinding keybay;
 
   bool hasSameIdentity(_TailscaleInitialization other) =>
       canonicalStateBaseDir == other.canonicalStateBaseDir &&
       logLevel == other.logLevel &&
+      noLogsNoSupport == other.noLogsNoSupport &&
       keybay.hostAppId == other.keybay.hostAppId &&
       keybay.keybayNamespace == other.keybay.keybayNamespace;
 }
@@ -1089,10 +1087,18 @@ class Tailscale implements TailscaleClient {
   /// unlocked Secret Service. Older Android and headless Linux can use explicit
   /// ephemeral mode, which uses an in-memory StateStore and never accesses
   /// Keybay.
+  ///
+  /// Upstream tsnet uploads diagnostic logs to Tailscale by default,
+  /// independently of [logLevel] and even when using a Headscale control
+  /// server. Set [noLogsNoSupport] to opt this process out before its first
+  /// runtime starts. This also opts out of support that depends on those logs.
+  /// The choice is immutable for the process, matching the other initialization
+  /// settings. Local owner-only log/config sidecars may still be created.
   static void init({
     required String stateDir,
     required String appId,
     TailscaleLogLevel logLevel = TailscaleLogLevel.silent,
+    bool noLogsNoSupport = false,
   }) {
     if (stateDir.trim().isEmpty) {
       throw const TailscaleUsageException('stateDir must not be empty.');
@@ -1113,6 +1119,7 @@ class Tailscale implements TailscaleClient {
       stateDirPtr,
       keybayNamespacePtr,
       logLevel.nativeValue,
+      noLogsNoSupport ? 1 : 0,
     );
     // Ephemeral scratch must live in a platform-writable temporary location.
     // Dart resolves the app's real one (Go's os.TempDir() fallback is not
@@ -1143,6 +1150,7 @@ class Tailscale implements TailscaleClient {
       final candidate = _TailscaleInitialization(
         canonicalStateBaseDir: canonicalStateDir,
         logLevel: logLevel,
+        noLogsNoSupport: noLogsNoSupport,
         keybay: custody,
       );
       final configured = _initialization;

@@ -60,11 +60,12 @@ func DuneMarkUpSettled(runtimeToken C.ulonglong) {
 }
 
 //export DuneConfigure
-func DuneConfigure(stateRoot *C.char, keybayNamespace *C.char, logLevel C.int) *C.char {
+func DuneConfigure(stateRoot *C.char, keybayNamespace *C.char, logLevel C.int, noLogsNoSupport C.int) *C.char {
 	resolved, err := tailscale.Configure(
 		C.GoString(stateRoot),
 		C.GoString(keybayNamespace),
 		int32(logLevel),
+		int32(noLogsNoSupport),
 	)
 	if err != nil {
 		return lifecycleError(err)

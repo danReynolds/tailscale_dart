@@ -269,7 +269,6 @@ void main() {
     test('values remain stable', () {
       expect(TailscaleLogLevel.values, [
         TailscaleLogLevel.silent,
-        TailscaleLogLevel.error,
         TailscaleLogLevel.info,
       ]);
     });
@@ -368,7 +367,15 @@ void main() {
         () => Tailscale.init(
           stateDir: configuredStateBaseDir.path,
           appId: processIntegrationAppId,
-          logLevel: TailscaleLogLevel.error,
+          logLevel: TailscaleLogLevel.info,
+        ),
+        throwsA(isA<TailscaleConfigurationException>()),
+      );
+      expect(
+        () => Tailscale.init(
+          stateDir: configuredStateBaseDir.path,
+          appId: processIntegrationAppId,
+          noLogsNoSupport: true,
         ),
         throwsA(isA<TailscaleConfigurationException>()),
       );

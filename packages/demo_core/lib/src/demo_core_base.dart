@@ -297,6 +297,11 @@ final class DemoCore {
     await _tsnet.down();
   }
 
+  Future<void> forgetLocalIdentity() async {
+    await stopServices();
+    await _tsnet.forgetLocalIdentity();
+  }
+
   Future<DemoProbeReport> probeNode(
     String nodeIp, {
     DemoServiceConfig config = const DemoServiceConfig(),

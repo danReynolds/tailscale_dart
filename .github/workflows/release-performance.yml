@@ -47,7 +47,7 @@ jobs:
           --output=release-performance.json
       - name: Upload raw samples and aggregate
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-performance-${{ github.run_id }}
           path: release-performance.json

@@ -1,12 +1,12 @@
 module github.com/dan/tailscale
 
-go 1.26.5
+go 1.26.6
 
 require (
 	golang.org/x/crypto v0.54.0
 	golang.org/x/mobile v0.0.0-20251209145715-2553ed8ce294
 	golang.org/x/sys v0.47.0
-	tailscale.com v1.102.2
+	tailscale.com v1.102.3
 )
 
 require (

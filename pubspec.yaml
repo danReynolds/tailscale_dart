@@ -22,7 +22,7 @@ environment:
   sdk: ^3.12.0
 
 dependencies:
-  code_assets: ^1.0.0
+  code_assets: ">=1.0.0 <3.0.0"
   ffi: ^2.1.0
   hooks: ">=1.0.0 <3.0.0"
   http: ^1.2.0
